@@ -13,6 +13,10 @@ const core = createServer(async (req, res) => {
   let body = "";
   for await (const chunk of req) body += String(chunk);
   seen.push({ path: req.url, authorization: req.headers.authorization, cookie: req.headers.cookie, body });
+  if (req.url?.startsWith("/v1/slack/oauth/callback")) {
+    res.writeHead(302, { location: "http://portal.test/personas/p-1?slack=connected" });
+    return void res.end();
+  }
   res.writeHead(202, { "content-type": "application/json" });
   res.end('{"ready":false}');
 });
@@ -64,4 +68,22 @@ test("managed Slack forwards exact methods and paths with service auth but no br
     assert.equal((await fetch(`${base}/v1/slack/managed/${path}`, { method })).status, 404);
   }
   assert.equal(seen.length, count);
+});
+
+test("per-app Slack events and OAuth callback forward without a portal session", async () => {
+  const ev = await fetch(`${base}/slack/events/app/p-1`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: "portal_session=forged" },
+    body: "{}",
+  });
+  assert.deepEqual([ev.status, seen.at(-1)?.path, seen.at(-1)?.cookie], [202, "/slack/events/app/p-1", undefined]);
+  assert.equal((await fetch(`${base}/slack/events/app/p-1/extra`, { method: "POST" })).status, 401);
+  const cb = await fetch(`${base}/v1/slack/oauth/callback?code=c&state=p-1.s`, {
+    headers: { cookie: "portal_session=forged" },
+    redirect: "manual",
+  });
+  assert.deepEqual(
+    [cb.status, cb.headers.get("location"), seen.at(-1)?.path, seen.at(-1)?.cookie],
+    [302, "http://portal.test/personas/p-1?slack=connected", "/v1/slack/oauth/callback?code=c&state=p-1.s", undefined],
+  );
 });

@@ -67,11 +67,7 @@ async function authorizeBlob(ctx: BaseCtx, dir: BlobDir, blobId: string | null):
 }
 
 async function putBlob(ctx: BaseCtx): Promise<void> {
-  const { req, res, deps } = ctx;
-  if (!deps.blobTransfer) {
-    req.resume();
-    return sendJson(res, 501, { error: "not_configured", message: "no blob transfer store wired" });
-  }
+  const { req, res } = ctx;
   const declaredSha = headerValue(req, "x-content-sha256") ?? "";
   if (ctx.secret && !headerValue(req, CAPABILITY_HEADER) && !SHA256_HEX.test(declaredSha)) {
     req.resume();
@@ -94,7 +90,7 @@ async function stageRequestBlob(ctx: BaseCtx, maxBytes: number, sha256: string):
   finished(req, (error) => error && body.destroy(error));
   relayStream(req, body);
   try {
-    return await deps.blobTransfer!.put(body, { maxBytes, ...(sha256 ? { expectedSha256: sha256 } : {}) });
+    return await deps.blobTransfer.put(body, { maxBytes, ...(sha256 ? { expectedSha256: sha256 } : {}) });
   } catch (e) {
     req.unpipe(body);
     req.resume();
@@ -114,7 +110,7 @@ export function browserUploadFields(ctx: ApiCtx): { name: string; mimetype: stri
 }
 
 export async function stageBrowserUpload(ctx: ApiCtx): Promise<BlobInfo | null> {
-  const { req, res, deps, url } = ctx;
+  const { req, res, url } = ctx;
   if (!usesBrowserSession(req, { browser: true })) {
     sendJson(res, 401, { error: "unauthorized", message: "a sign-in session for this organization is required" });
     return null;
@@ -123,11 +119,6 @@ export async function stageBrowserUpload(ctx: ApiCtx): Promise<BlobInfo | null> 
   if (!SHA256_HEX.test(sha256)) {
     req.resume();
     sendJson(res, 400, { error: "bad_request", message: "sha (hex sha-256) required" });
-    return null;
-  }
-  if (!deps.blobTransfer) {
-    req.resume();
-    sendJson(res, 501, { error: "not_configured", message: "no blob transfer store wired" });
     return null;
   }
   return stageRequestBlob(ctx, MAX_BLOB_BYTES, sha256);
@@ -139,11 +130,7 @@ async function putBrowserBlob(ctx: ApiCtx): Promise<void> {
 }
 
 async function getBlob(ctx: BaseCtx): Promise<void> {
-  const { req, res, deps, params } = ctx;
-  if (!deps.blobTransfer) {
-    req.resume();
-    return sendJson(res, 501, { error: "not_configured", message: "no blob transfer store wired" });
-  }
+  const { res, deps, params } = ctx;
   const id = params.id!;
   if (!(await authorizeBlob(ctx, "read", id))) return;
   const blob = await deps.blobTransfer.open(id);
@@ -161,7 +148,7 @@ async function uploadFile(ctx: ApiCtx): Promise<void> {
   const principalId = ctx.actor!.p;
   const { name, mimetype } = browserUploadFields(ctx);
   const scopeId = (url.searchParams.get("scope") || undefined) as ScopeId | undefined;
-  const opened = await deps.blobTransfer!.open(blobId);
+  const opened = await deps.blobTransfer.open(blobId);
   if (!opened) return sendJson(res, 404, { error: "not_found", message: "staged blob not found" });
   try {
     const file = await app.uploadFileForViewer(tenantOf(ctx), principalId, {
@@ -180,7 +167,7 @@ async function uploadFile(ctx: ApiCtx): Promise<void> {
       return sendJson(res, 413, { error: "payload_too_large", message: e.message });
     throw e;
   } finally {
-    await deps.blobTransfer!.delete(blobId);
+    await deps.blobTransfer.delete(blobId);
   }
 }
 

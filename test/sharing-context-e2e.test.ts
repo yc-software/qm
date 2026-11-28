@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
-import { serverDeps } from "../src/wiring.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
 import { sessionVisibleTo } from "../src/sessions/session-rows.ts";
 import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
@@ -17,13 +16,14 @@ import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { sleep } from "../src/util/async.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { parseScopeId, personalScope, scopeLabel, type ScopeId } from "../src/types.ts";
 
 async function fixture(t: TestContext, config: Partial<Config> = {}) {
   const cfg = testConfig({ memoryCapture: "off", ...config });
   const built = buildApp(cfg);
   await built.config.hydrate?.();
   await built.identity.refresh();
-  await built.deploymentLayerReady;
+  await built.deploymentLayerReady();
   t.after(async () => {
     built.scheduler.stop();
     await built.runtime.stop();
@@ -37,9 +37,9 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
   };
   await roster();
   for (const [actor, scope] of [
-    ["U1", "personal:U1"],
-    ["U2", "personal:U2"],
-    ["U3", "personal:U3"],
+    ["U1", personalScope("U1")],
+    ["U2", personalScope("U2")],
+    ["U3", personalScope("U3")],
     ["U1", "channel:C1"],
   ] as const) {
     const computer = await built.sandboxResources.create(actor, scope, "sprites", "default");
@@ -97,7 +97,7 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
     await built.files.put({
       id,
       ownerScopeId,
-      createdBy: ownerScopeId === "channel:C1" ? "U1" : ownerScopeId.slice("personal:".length),
+      createdBy: ownerScopeId === "channel:C1" ? "U1" : parseScopeId(ownerScopeId as ScopeId).ref,
       name,
       path: name,
       mimetype: "application/octet-stream",
@@ -107,7 +107,7 @@ async function fixture(t: TestContext, config: Partial<Config> = {}) {
     return id;
   };
   const filePath = (ownerScopeId: string, name: string) =>
-    `shared/open-${ownerScopeId.replace(":", "-")}/${fileIds.get(`${ownerScopeId}/${name}`)}/${name}`;
+    `shared/open-${scopeLabel(ownerScopeId as ScopeId).replace(":", "-")}/${fileIds.get(`${ownerScopeId}/${name}`)}/${name}`;
   return { ...built, cfg, turn, failure, skill, remove, file, filePath };
 }
 
@@ -117,51 +117,53 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
     ["U1", "ALICE_PAYLOAD"],
     ["U2", "BOB_PAYLOAD"],
   ]) {
-    await b.file(`personal:${id}`, "notes.txt", marker!);
-    await b.memory.capture(`personal:${id}`, [`OWN_MEMORY_${id}`], Date.now(), {
+    await b.file(personalScope(id!), "notes.txt", marker!);
+    await b.memory.capture(personalScope(id!), [`OWN_MEMORY_${id}`], Date.now(), {
       actorId: id!,
       context: "conversation",
     });
   }
-  assert.equal(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true), "ALICE_PAYLOAD");
+  assert.equal(await b.turn(`!read ${b.filePath(personalScope("U1"), "notes.txt")}`, true), "ALICE_PAYLOAD");
   assert.doesNotMatch(await b.turn("!memorysearch OWN_MEMORY", true), /OWN_MEMORY_U1/);
   assert.doesNotMatch(await b.turn("!sysprompt", true), /OWN_MEMORY_U2|open-personal-U2/);
-  assert.match(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true, "U2"), /no file/);
-  assert.equal(await b.turn(`!read ${b.filePath("personal:U2", "notes.txt")}`, true, "U2"), "BOB_PAYLOAD");
+  assert.match(await b.turn(`!read ${b.filePath(personalScope("U1"), "notes.txt")}`, true, "U2"), /no file/);
+  assert.equal(await b.turn(`!read ${b.filePath(personalScope("U2"), "notes.txt")}`, true, "U2"), "BOB_PAYLOAD");
   assert.equal(
-    await b.turn(`!read ${b.filePath("personal:U2", "notes.txt")}`, true, "U2", {
+    await b.turn(`!read ${b.filePath(personalScope("U2"), "notes.txt")}`, true, "U2", {
       origin: { kind: "ambient", live: true },
     }),
     "BOB_PAYLOAD",
   );
-  await b.config.setSharingPosture("personal:U1", "isolated");
-  await b.file("personal:U1", "notes.txt", "NEW_PRIVATE_PAYLOAD");
-  assert.match(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true), /no file/);
+  await b.config.setSharingPosture(personalScope("U1"), "isolated");
+  await b.file(personalScope("U1"), "notes.txt", "NEW_PRIVATE_PAYLOAD");
+  assert.match(await b.turn(`!read ${b.filePath(personalScope("U1"), "notes.txt")}`, true), /no file/);
   assert.doesNotMatch(await b.turn("!memorysearch OWN_MEMORY", true), /OWN_MEMORY_U1/);
-  await b.config.clearSharingPosture("personal:U1");
-  assert.equal(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true), "NEW_PRIVATE_PAYLOAD");
+  await b.config.clearSharingPosture(personalScope("U1"));
+  assert.equal(await b.turn(`!read ${b.filePath(personalScope("U1"), "notes.txt")}`, true), "NEW_PRIVATE_PAYLOAD");
   assert.equal(
-    await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true, "U1", { origin: { kind: "automation" } }),
+    await b.turn(`!read ${b.filePath(personalScope("U1"), "notes.txt")}`, true, "U1", {
+      origin: { kind: "automation" },
+    }),
     "NEW_PRIVATE_PAYLOAD",
   );
   assert.match(
-    await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true, "U1", { botActor: true }),
+    await b.turn(`!read ${b.filePath(personalScope("U1"), "notes.txt")}`, true, "U1", { botActor: true }),
     /no file/,
   );
-  await b.config.setSoul("personal:U1", "OWN_SOUL_U1");
-  await b.skill("personal:U1", "own-helper", "OWN_SKILL");
+  await b.config.setSoul(personalScope("U1"), "OWN_SOUL_U1");
+  await b.skill(personalScope("U1"), "own-helper", "OWN_SKILL");
   for (const [name, granteeScopeId] of [
-    ["granted.txt", "personal:U1"],
+    ["granted.txt", personalScope("U1")],
     ["org.txt", "org:default-org"],
   ] as const) {
-    const ref = await b.file("personal:U2", name, `GRANTED_${name}`);
+    const ref = await b.file(personalScope("U2"), name, `GRANTED_${name}`);
     await b.acl.grant(
       tenant,
-      { ownerScopeId: "personal:U2", ref, granteeScopeId, permission: "read", grantedBy: "U2" },
+      { ownerScopeId: personalScope("U2"), ref, granteeScopeId, permission: "read", grantedBy: "U2" },
       "U2",
     );
   }
-  const ownFile = await b.file("personal:U1", "own.txt", "OWN_FILE_U1");
+  const ownFile = await b.file(personalScope("U1"), "own.txt", "OWN_FILE_U1");
   assert.equal(await b.turn(`!attach file_id:${ownFile}`, false, "U1"), "");
   assert.match(
     await b.turn("!sysprompt", false, "U1", { origin: { kind: "automation" } }),
@@ -179,7 +181,7 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
     assert.equal(await b.turn("!read shared/org.txt", false, "U1", bot), "GRANTED_org.txt");
     assert.match(await b.turn("!skill own-helper", false, "U1", bot), /no skill file/);
     assert.match(await b.turn(`!attach file_id:${ownFile}`, false, "U1", bot), /not found/);
-    await b.config.setSoul("personal:U1", `OWN_SOUL_U1\nEDIT_${origin.kind}`);
+    await b.config.setSoul(personalScope("U1"), `OWN_SOUL_U1\nEDIT_${origin.kind}`);
     assert.doesNotMatch(await b.turn("!sysprompt", false, "U1", bot), /EDIT_/);
   }
   await b.directory.replace(
@@ -188,20 +190,20 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
   await b.memory.capture("channel:C1", ["ROOM_FROM_U1"], Date.now(), undefined, {
     mode: "automatic",
     sensitivities: ["ordinary"],
-    conversationScopeId: "personal:U1",
+    conversationScopeId: personalScope("U1"),
   });
   assert.match(await b.turn("!memorysearch ROOM_FROM_U1", true), /ROOM_FROM_U1/);
   assert.doesNotMatch(await b.turn("!memorysearch ROOM_FROM_U1", true, "U1", { botActor: true }), /ROOM_FROM_U1/);
-  const own = `!execute ${JSON.stringify({ command: "true", sandboxId: (await b.sandboxResources.resolve("personal:U1"))!.id })}`;
+  const own = `!execute ${JSON.stringify({ command: "true", sandboxId: (await b.sandboxResources.resolve(personalScope("U1")))!.id })}`;
   assert.equal(await b.turn(own, true), "(exit 0)");
   await b.turn(own, true, "U1", { botActor: true });
   assert.ok((await b.errors.list(testTenant)).some((e) => /sandbox access is no longer authorized/.test(e.message)));
   await b.remove("U3");
-  const roomFile = await b.file("personal:U1", "room.txt", "ROOM_FILE");
+  const roomFile = await b.file(personalScope("U1"), "room.txt", "ROOM_FILE");
   const roomGrant = {
-    ownerScopeId: "personal:U1",
+    ownerScopeId: personalScope("U1"),
     ref: roomFile,
-    granteeScopeId: "personal:U2",
+    granteeScopeId: personalScope("U2"),
     permission: "read",
   } as const;
   await b.acl.grant(tenant, { ...roomGrant, grantedBy: "U1" }, "U1");
@@ -211,7 +213,7 @@ test("sharing e2e: personal files and memories follow the speaker, opt-out, and 
 
 test("sharing e2e: a delegated turn shares its parent's access under current sharing permission", async (t) => {
   const b = await fixture(t, { apiBaseUrl: "https://core.example.com", signingSecret: "i".repeat(32) });
-  await b.file("personal:U1", "notes.txt", "DELEGATED_PERSONAL_FILE");
+  await b.file(personalScope("U1"), "notes.txt", "DELEGATED_PERSONAL_FILE");
   await b.turn("inspect my personal notes", true);
   const parent = await b.runs.list({ threadRef: "C1:shared-test", limit: 1 }).then(([run]) => run);
   assert.ok(parent);
@@ -269,13 +271,13 @@ test("sharing e2e: a delegated turn shares its parent's access under current sha
       await sleep(25);
     }
   };
-  const read = `!read ${b.filePath("personal:U1", "notes.txt")}`;
+  const read = `!read ${b.filePath(personalScope("U1"), "notes.txt")}`;
   assert.equal(await childTurn(read), "DELEGATED_PERSONAL_FILE");
   assert.equal(await childTurn("!run echo delegated"), "delegated");
   assert.ok(token);
   const delegatedClaims = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
   assert.equal(delegatedClaims?.personAuthority, true);
-  const server = createServer(b.app, serverDeps(b.cfg, b));
+  const server = createServer(b.app, b);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/memory/brain`;
@@ -296,7 +298,7 @@ test("sharing e2e: a delegated turn shares its parent's access under current sha
   });
   const cred = `!execute ${JSON.stringify({ command: 'test -n "$DELEGATED_TEST_TOKEN" && printf available', credentials: [credentialHandle(credential)] })}`;
   assert.equal(await childTurn(cred), "available");
-  const own = `!execute ${JSON.stringify({ command: "true", sandboxId: (await b.sandboxResources.resolve("personal:U1"))!.id })}`;
+  const own = `!execute ${JSON.stringify({ command: "true", sandboxId: (await b.sandboxResources.resolve(personalScope("U1")))!.id })}`;
   assert.equal(await childTurn(own), "(exit 0)");
   const delegation = (await b.sessions.get(child.id))!.spawnMeta!;
   const setDelegation = (meta: typeof delegation) =>
@@ -319,9 +321,9 @@ test("sharing e2e: a delegated turn shares its parent's access under current sha
   );
   await setDelegation(delegation);
   assert.deepEqual(await b.keychain!.grantsForScope("channel:C1", { includePersonGrants: true }), []);
-  await b.config.setSharingPosture("personal:U1", "isolated");
+  await b.config.setSharingPosture(personalScope("U1"), "isolated");
   assert.match(await childTurn(read), /no file/);
-  await b.config.clearSharingPosture("personal:U1");
+  await b.config.clearSharingPosture(personalScope("U1"));
   await b.remove("U1");
   assert.match(await childTurn(read, "refused"), /access is no longer current/);
 });
@@ -346,7 +348,7 @@ test("sharing e2e: room file and memory access is revoked on the next DM turn", 
 
 test("sharing e2e: skill lazy assets execute, update, and disappear from the same computer after opt-out", async (t) => {
   const b = await fixture(t);
-  const s = await b.skill("personal:U1", "carried-helper", "VERSION_ONE");
+  const s = await b.skill(personalScope("U1"), "carried-helper", "VERSION_ONE");
   assert.doesNotMatch(await b.turn("!sysprompt", true), /carried-helper/);
   assert.equal(await b.turn("!skill-run carried-helper python3 {dir}/scripts/value.py", true), "VERSION_ONE");
   await b.skills.update(s.id, {
@@ -356,11 +358,11 @@ test("sharing e2e: skill lazy assets execute, update, and disappear from the sam
   await b.skills.review(s.id, "U1", []);
   await b.skills.publish(s.id);
   await assert.equal(await b.turn("!skill-run carried-helper python3 {dir}/scripts/value.py", true), "VERSION_TWO");
-  await b.config.setSharingPosture("personal:U1", "isolated");
+  await b.config.setSharingPosture(personalScope("U1"), "isolated");
   assert.doesNotMatch(await b.turn("!sysprompt", true), /carried-helper/);
   assert.match(await b.turn("!skill carried-helper", true), /no skill file/);
   assert.equal(await b.turn("!run sh -c \"find . -name value.py | wc -l | tr -d ' '\"", true), "0");
-  await b.config.clearSharingPosture("personal:U1");
+  await b.config.clearSharingPosture(personalScope("U1"));
   await assert.equal(await b.turn("!skill-run carried-helper python3 {dir}/scripts/value.py", true), "VERSION_TWO");
   await b.skills.archive(s.id);
   assert.match(await b.turn("!skill carried-helper", true), /no skill file/);
@@ -380,15 +382,15 @@ test("sharing e2e: room skills are removed from an existing DM computer after me
 
 test("sharing e2e: Isolated preserves local skills and explicit grants without implicit carry", async (t) => {
   const b = await fixture(t);
-  await b.skill("personal:U1", "personal-helper", "PERSONAL");
-  const s = await b.skill("personal:U2", "explicit-helper", "EXPLICIT");
+  await b.skill(personalScope("U1"), "personal-helper", "PERSONAL");
+  const s = await b.skill(personalScope("U2"), "explicit-helper", "EXPLICIT");
   await b.config.setSharingPosture("org:default-org", "isolated");
   await b.acl.grant(
     tenant,
     {
-      ownerScopeId: "personal:U2",
+      ownerScopeId: personalScope("U2"),
       ref: `skill:${s.id}`,
-      granteeScopeId: "personal:U1",
+      granteeScopeId: personalScope("U1"),
       permission: "read",
       grantedBy: "U2",
     },
@@ -397,14 +399,14 @@ test("sharing e2e: Isolated preserves local skills and explicit grants without i
   assert.match(await b.turn("!sysprompt"), /personal-helper/);
   await assert.equal(await b.turn("!skill-run explicit-helper python3 {dir}/scripts/value.py"), "EXPLICIT");
   assert.doesNotMatch(await b.turn("!sysprompt", true), /personal-helper|explicit-helper/);
-  await b.acl.revoke(tenant, "personal:U2", `skill:${s.id}`, "personal:U1", "U2", "U2");
+  await b.acl.revoke(tenant, personalScope("U2"), `skill:${s.id}`, personalScope("U1"), "U2", "U2");
   assert.match(await b.turn("!skill explicit-helper"), /no skill file/);
   assert.equal(await b.turn("!run sh -c \"find . -name value.py | wc -l | tr -d ' '\""), "0");
 });
 
 test("sharing e2e: local skill name wins, then exposes the carried fallback when archived", async (t) => {
   const b = await fixture(t);
-  await b.skill("personal:U1", "duplicate-helper", "CARRIED");
+  await b.skill(personalScope("U1"), "duplicate-helper", "CARRIED");
   const local = await b.skill("channel:C1", "duplicate-helper", "LOCAL");
   await assert.equal(await b.turn("!skill-run duplicate-helper python3 {dir}/scripts/value.py", true), "LOCAL");
   await b.skills.archive(local.id);
@@ -413,20 +415,20 @@ test("sharing e2e: local skill name wins, then exposes the carried fallback when
 
 test("sharing e2e: writes and memory capture remain local while reading carried context", async (t) => {
   const b = await fixture(t, { memoryCapture: "writable" });
-  await b.file("personal:U1", "notes.txt", "SOURCE_UNCHANGED");
-  await b.memory.capture("personal:U1", ["PERSONAL_SOURCE_MEMORY"], Date.now(), {
+  await b.file(personalScope("U1"), "notes.txt", "SOURCE_UNCHANGED");
+  await b.memory.capture(personalScope("U1"), ["PERSONAL_SOURCE_MEMORY"], Date.now(), {
     actorId: "U1",
     context: "conversation",
   });
-  assert.equal(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true), "SOURCE_UNCHANGED");
+  assert.equal(await b.turn(`!read ${b.filePath(personalScope("U1"), "notes.txt")}`, true), "SOURCE_UNCHANGED");
   assert.match(await b.turn("!write notes.txt ROOM_WRITE", true), /wrote/);
   assert.match(await b.turn("!memoryremember ROOM_CAPTURE_ONLY", true), /remembered 1/);
-  assert.equal(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true), "SOURCE_UNCHANGED");
+  assert.equal(await b.turn(`!read ${b.filePath(personalScope("U1"), "notes.txt")}`, true), "SOURCE_UNCHANGED");
   assert.equal(await b.turn("!read notes.txt", true), "ROOM_WRITE");
   assert.match(await b.memory.read("channel:C1"), /ROOM_CAPTURE_ONLY/);
-  assert.doesNotMatch(await b.memory.read("personal:U1"), /ROOM_CAPTURE_ONLY/);
+  assert.doesNotMatch(await b.memory.read(personalScope("U1")), /ROOM_CAPTURE_ONLY/);
   assert.match(await b.turn("!memoryremember PERSONAL_CAPTURE_ONLY"), /remembered 1/);
-  assert.match(await b.memory.read("personal:U1"), /PERSONAL_CAPTURE_ONLY/);
+  assert.match(await b.memory.read(personalScope("U1")), /PERSONAL_CAPTURE_ONLY/);
   assert.doesNotMatch(await b.memory.read("channel:C1"), /PERSONAL_CAPTURE_ONLY/);
 });
 
@@ -436,7 +438,7 @@ test("sharing e2e: binary carry never materializes bytes and text artifacts use 
   const path = `artifacts/${id}/report.txt`;
   await b.files.put({
     id,
-    ownerScopeId: "personal:U1",
+    ownerScopeId: personalScope("U1"),
     createdBy: "U1",
     name: "report.txt",
     path,
@@ -445,19 +447,19 @@ test("sharing e2e: binary carry never materializes bytes and text artifacts use 
     direction: "out",
   });
   assert.equal(await b.turn(`!read shared/open-personal-U1/${id}/report.txt`, true), "CURRENT_ARTIFACT");
-  await b.file("personal:U1", "binary.dat", Buffer.from([0xff, 0xfe, 0, 1]));
+  await b.file(personalScope("U1"), "binary.dat", Buffer.from([0xff, 0xfe, 0, 1]));
   assert.match(
-    await b.turn(`!read ${b.filePath("personal:U1", "binary.dat")}`, true),
+    await b.turn(`!read ${b.filePath(personalScope("U1"), "binary.dat")}`, true),
     /binary file binary.dat, Files ID .+; send it by ID/,
   );
   assert.equal(
     await b.turn(
-      `!run python3 -c "import os; print(os.path.exists('${b.filePath("personal:U1", "binary.dat")}'))"`,
+      `!run python3 -c "import os; print(os.path.exists('${b.filePath(personalScope("U1"), "binary.dat")}'))"`,
       true,
     ),
     "False",
   );
-  await b.config.setSharingPosture("personal:U1", "isolated");
+  await b.config.setSharingPosture(personalScope("U1"), "isolated");
   assert.match(await b.turn(`!read shared/open-personal-U1/${id}/report.txt`, true), /no file/);
 });
 
@@ -465,7 +467,7 @@ test("sharing e2e: explicit text-file grants survive Isolated and revoke without
   const b = await fixture(t);
   await b.files.put({
     id: "shared-note",
-    ownerScopeId: "personal:U2",
+    ownerScopeId: personalScope("U2"),
     createdBy: "U2",
     name: "shared-note.txt",
     path: "shared-note.txt",
@@ -476,9 +478,9 @@ test("sharing e2e: explicit text-file grants survive Isolated and revoke without
   await b.acl.grant(
     tenant,
     {
-      ownerScopeId: "personal:U2",
+      ownerScopeId: personalScope("U2"),
       ref: "shared-note",
-      granteeScopeId: "personal:U1",
+      granteeScopeId: personalScope("U1"),
       permission: "read",
       grantedBy: "U2",
     },
@@ -487,13 +489,13 @@ test("sharing e2e: explicit text-file grants survive Isolated and revoke without
   await b.config.setSharingPosture("org:default-org", "isolated");
   assert.equal(await b.turn("!read shared/shared-note.txt"), "EXPLICIT_TEXT");
   assert.match(await b.turn("!read shared/shared-note.txt", true), /no file/);
-  await b.acl.revoke(tenant, "personal:U2", "shared-note", "personal:U1", "U2", "U2");
+  await b.acl.revoke(tenant, personalScope("U2"), "shared-note", personalScope("U1"), "U2", "U2");
   assert.match(await b.turn("!read shared/shared-note.txt"), /no file/);
 });
 
 test("sharing e2e: unavailable connector skills cannot be read or executed", async (t) => {
   const b = await fixture(t);
-  await b.skill("personal:U1", "google-workspace", "UNCONFIGURED_CONNECTOR");
+  await b.skill(personalScope("U1"), "google-workspace", "UNCONFIGURED_CONNECTOR");
   assert.doesNotMatch(await b.turn("!sysprompt", true), /^- google-workspace — /m);
   assert.match(await b.turn("!skill google-workspace", true), /no skill file/);
   assert.equal(await b.turn("!run sh -c \"find . -name value.py | wc -l | tr -d ' '\"", true), "0");
@@ -502,15 +504,18 @@ test("sharing e2e: unavailable connector skills cannot be read or executed", asy
 for (const memoryRecall of ["off", "writable"] as const) {
   test(`sharing e2e: memory ${memoryRecall} does not disable carried files or skills`, async (t) => {
     const b = await fixture(t, { memoryRecall });
-    await b.file("personal:U1", "notes.txt", "FILE_WITH_MEMORY_RESTRICTED");
-    await b.memory.capture("personal:U1", ["NO_CARRIED_MEMORY"], Date.now(), {
+    await b.file(personalScope("U1"), "notes.txt", "FILE_WITH_MEMORY_RESTRICTED");
+    await b.memory.capture(personalScope("U1"), ["NO_CARRIED_MEMORY"], Date.now(), {
       actorId: "U1",
       context: "conversation",
     });
-    await b.skill("personal:U1", "independent-helper", "SKILL_WITH_MEMORY_RESTRICTED");
+    await b.skill(personalScope("U1"), "independent-helper", "SKILL_WITH_MEMORY_RESTRICTED");
     assert.doesNotMatch(await b.turn("!sysprompt", true), /NO_CARRIED_MEMORY/);
     assert.doesNotMatch(await b.turn("!memorysearch NO_CARRIED_MEMORY", true), /NO_CARRIED_MEMORY/);
-    assert.equal(await b.turn(`!read ${b.filePath("personal:U1", "notes.txt")}`, true), "FILE_WITH_MEMORY_RESTRICTED");
+    assert.equal(
+      await b.turn(`!read ${b.filePath(personalScope("U1"), "notes.txt")}`, true),
+      "FILE_WITH_MEMORY_RESTRICTED",
+    );
     assert.equal(
       await b.turn("!skill-run independent-helper python3 {dir}/scripts/value.py", true),
       "SKILL_WITH_MEMORY_RESTRICTED",
@@ -520,7 +525,7 @@ for (const memoryRecall of ["off", "writable"] as const) {
 
 test("sharing e2e: switching the speaker removes the previous speaker's skill before execute", async (t) => {
   const b = await fixture(t);
-  await b.skill("personal:U1", "speaker-helper", "SPEAKER_ONE");
+  await b.skill(personalScope("U1"), "speaker-helper", "SPEAKER_ONE");
   await assert.equal(await b.turn("!skill-run speaker-helper python3 {dir}/scripts/value.py", true), "SPEAKER_ONE");
   assert.equal(await b.turn("!run sh -c \"find . -name value.py | wc -l | tr -d ' '\"", true, "U2"), "0");
   await assert.equal(await b.turn("!skill-run speaker-helper python3 {dir}/scripts/value.py", true), "SPEAKER_ONE");
@@ -528,7 +533,7 @@ test("sharing e2e: switching the speaker removes the previous speaker's skill be
 
 test("sharing e2e: a newly blocked skill asset removes previously materialized content", async (t) => {
   const b = await fixture(t);
-  const s = await b.skill("personal:U1", "screened-helper", "OLD_SAFE_ASSET");
+  const s = await b.skill(personalScope("U1"), "screened-helper", "OLD_SAFE_ASSET");
   await assert.equal(await b.turn("!skill-run screened-helper python3 {dir}/scripts/value.py", true), "OLD_SAFE_ASSET");
   await b.skills.update(s.id, {
     ...s.manifest,
@@ -554,19 +559,19 @@ test("sharing e2e: the execution capability excludes carried memories in both di
   const roomClaims = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
   assert.ok(roomClaims?.memory);
   assert.ok(roomClaims.memory.read.includes("channel:C1"));
-  assert.equal(roomClaims.memory.read.includes("personal:U1"), false);
+  assert.equal(roomClaims.memory.read.includes(personalScope("U1")), false);
   assert.equal(await b.turn("!run echo DM"), "DM");
   assert.ok(token);
   const dmClaims = await verifyCapabilityToken(token, TEST_CAPABILITY_SECRET);
   assert.ok(dmClaims?.memory);
-  assert.ok(dmClaims.memory.read.includes("personal:U1"));
+  assert.ok(dmClaims.memory.read.includes(personalScope("U1")));
   assert.equal(dmClaims.memory.read.includes("channel:C1"), false);
 });
 
 test("sharing e2e: local notebooks retain late facts while unclassified carried memory stays private", async (t) => {
   const b = await fixture(t);
   await b.memory.capture(
-    "personal:U1",
+    personalScope("U1"),
     Array.from({ length: 120 }, (_, i) => `PERSONAL_FACT_${i} ${"context ".repeat(12)}`),
     Date.now(),
     { actorId: "U1", context: "conversation" },
@@ -581,7 +586,7 @@ test("sharing e2e: local notebooks retain late facts while unclassified carried 
 
 test("sharing e2e: screening off preserves carried skills without model calls", async (t) => {
   const b = await fixture(t, { securityScreen: "off" });
-  await b.skill("personal:U1", "unscreened-helper", "SHARED_SKILL_OK");
+  await b.skill(personalScope("U1"), "unscreened-helper", "SHARED_SKILL_OK");
   await assert.equal(
     await b.turn("!skill-run unscreened-helper python3 {dir}/scripts/value.py", true),
     "SHARED_SKILL_OK",
@@ -675,10 +680,10 @@ test("Open speaker keychain uses a disposable computer, follows the speaker, and
         publishMembers: [{ externalId: "U1" }, { externalId: "U2" }],
       },
     });
-  await b.config.setSharingPosture("personal:U1", "isolated");
+  await b.config.setSharingPosture(personalScope("U1"), "isolated");
   assert.match(await denied(), /credential handle is not available on this turn/);
   assert.match(await denied({ kind: "ambient", live: true }), /credential handle is not available on this turn/);
-  await b.config.setSharingPosture("personal:U1", "open");
+  await b.config.setSharingPosture(personalScope("U1"), "open");
   await b.config.setSharingPosture("channel:C1", "isolated");
   assert.match(await denied(), /credential handle is not available on this turn/);
   assert.match(await denied({ kind: "ambient", live: true }), /credential handle is not available on this turn/);
@@ -846,8 +851,8 @@ test("shared conversations run named credentials on the turn's scratch computer 
     "True True",
   );
   assert.ok(provisions.slice(before).every((key) => !key.startsWith("turn:")));
-  await b.environments.create({ id: "personal:U1", ownerActorId: "U1" });
-  await b.environments.attach("channel:C1", "personal:U1", "U1");
+  await b.environments.create({ id: personalScope("U1"), ownerActorId: "U1" });
+  await b.environments.attach("channel:C1", personalScope("U1"), "U1");
   const attached = provisions.length;
   assert.equal(
     await execute(
@@ -879,7 +884,7 @@ for (const [where, room, actor] of [
     await b.keychain.createGrant({
       credentialId: login.id,
       ownerId: "U1",
-      audienceScopeId: room ? "channel:C1" : "personal:U1",
+      audienceScopeId: room ? "channel:C1" : personalScope("U1"),
       mode: "standing",
       purpose: "earlier job",
     });
@@ -892,7 +897,7 @@ for (const [where, room, actor] of [
       actor,
     );
     assert.equal(out, "(exit 0)");
-    const saved = await b.keychain.materializeOwnById("U1", login.id, "personal:U1");
+    const saved = await b.keychain.materializeOwnById("U1", login.id, personalScope("U1"));
     assert.equal(saved.kind, "file");
     if (saved.kind === "file")
       assert.equal(

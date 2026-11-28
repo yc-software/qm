@@ -12,14 +12,17 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { mintPortalIdentity } from "../src/auth/portal-identity.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { createPostgresUserStore } from "../src/identity/user-store.ts";
+import type { AclStore } from "../src/acl/acl-store.ts";
 import type { DirectoryStore } from "../src/directory/directory-store.ts";
 import type { IdentityService } from "../src/identity/identity-service.ts";
 import { createPgPool } from "../src/persistence/pg-pool.ts";
 import { boundTenant, withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { bindBootTenant } from "../src/tenants/boot.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
-import { testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { testAdvisoryLock, testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { installPrincipalLinks } from "../src/directory/person.ts";
+import { createPrincipalLinkService } from "../src/identity/principal-links.ts";
 import { appUrl, ownerUrl } from "./support/test-tenant.ts";
 
 const IDENTITY_SECRET = "tenant-sign-in-identity-secret".repeat(2);
@@ -105,6 +108,8 @@ function start(
     testConfig({ databaseUrl, dataDir: mkdtempSync(join(tmpdir(), "tenant-sign-in-")), orgId: "acme" }),
   );
   const server = createInsecureTestServer(built.app, {
+    ...testCore(built),
+    acl: { find: async () => [] } as unknown as AclStore,
     portalIdentitySecret: IDENTITY_SECRET,
     identity,
     users,
@@ -151,7 +156,10 @@ test("a company admin or user is found by email or sign-in principal, directly o
     await signIn(beta, "oidc:issuer:user", "user@copied.test");
     await signIn(alpha, "oidc:issuer:leaver", "leaver@copied.test");
     await withTenant(alpha, () => users.markOffboarded("leaver@copied.test", "linked@copied.test"));
+    await withTenant(alpha, () => users.ensure("grantee@copied.test"));
     try {
+      assert.deepEqual(await directory.tenantsForEmail!("grantee@copied.test"), []);
+      assert.deepEqual(await directory.tenantsForPrincipal!("grantee@copied.test"), []);
       assert.deepEqual(await directory.tenantsForEmail!("founder@copied.test"), [{ id: alpha, brandName: "Alpha" }]);
       assert.deepEqual(await directory.tenantsForEmail!("User@Copied.test"), [{ id: beta }]);
       assert.deepEqual(await directory.tenantsForEmail!("leaver@copied.test"), []);
@@ -255,7 +263,7 @@ test("a single-company install keeps admitting by the install list", (t) =>
     const allowed = async (email: string) =>
       (await srv.get(`/v1/auth/broker/email-allowed?email=${encodeURIComponent(email)}`)).body.allowed;
     assert.equal(await allowed("outsider@shared.test"), true);
-    assert.equal(await allowed("stranger@elsewhere.test"), false);
+    assert.equal(await allowed("loner@elsewhere.test"), false);
   }));
 
 test("a trusted principal maps to the tenants whose sign-in links name it, through the broker route", (t) =>
@@ -282,6 +290,12 @@ test("on a shared host the directory, not the install allowlist, permits email s
       (await srv.get(`/v1/auth/broker/email-allowed?email=${encodeURIComponent(email)}`)).body.allowed;
     assert.equal(await allowed("carol@elsewhere.test"), true);
     assert.equal(await allowed("dan@elsewhere.test"), true);
+    installPrincipalLinks(createPrincipalLinkService(users, testAdvisoryLock()));
+    t.after(() => installPrincipalLinks(null));
+    const probe = { p: "stranger@elsewhere.test", t: alpha, exp: Date.now() + 60_000 };
+    const underAlpha = { "x-portal-identity": await mintPortalIdentity(probe, IDENTITY_SECRET) };
+    assert.equal((await srv.get(`/v1/auth/broker/email-allowed?email=${probe.p}`, underAlpha)).body.allowed, false);
+    await new Promise((resolve) => setTimeout(resolve, 300));
     assert.equal(await allowed("stranger@elsewhere.test"), false);
     const canonical = "/v1/principals/carol%40elsewhere.test/canonical";
     assert.equal((await srv.get(canonical)).status, 401);

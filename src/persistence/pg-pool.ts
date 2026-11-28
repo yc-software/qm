@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import type { EventEmitter } from "node:events";
 import type { Socket } from "node:net";
 import type { ClientConfig, Pool, PoolClient, QueryResult } from "pg";
@@ -115,16 +115,11 @@ function pooledDatabaseUrl(connectionString: string): string {
 
 export const PG_MIGRATIONS_TABLE = "qm_schema_migrations";
 
-export interface PgMigrationDefinition {
+export interface PgMigration {
   id: string;
   statements: readonly string[];
-  expectedChecksum?: string;
-  legacyId?: string;
-  autocommit?: true;
-}
-
-export interface PgMigration extends PgMigrationDefinition {
   checksum: string;
+  replaces?: readonly string[];
 }
 
 export interface PgQueryOptions {
@@ -144,8 +139,6 @@ export interface PgPool {
   q(text: string, params?: unknown[], options?: PgQueryOptions): Promise<Rows>;
   query(text: string, params?: unknown[], options?: PgQueryOptions): Promise<{ rows: Rows; rowCount: number }>;
   forTenant(tenant: Tenant): TenantDb;
-  registerMigration(migration: PgMigrationDefinition): void;
-  migrate(migration: PgMigrationDefinition | readonly PgMigrationDefinition[]): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -249,17 +242,6 @@ async function runPgTransaction<T>(
   }
 }
 
-export function assertOneStatement(stmt: string): void {
-  const bare = stmt
-    .replace(/--[^\n]*/g, "")
-    .replace(/\$([A-Za-z0-9_]*)\$[\s\S]*?\$\1\$/g, "")
-    .replace(/'(?:[^']|'')*'/g, "")
-    .replace(/;\s*$/, "");
-  if (bare.includes(";")) {
-    throw new Error(`pg-pool: each schema element must be a single statement (found ';' in: ${stmt.slice(0, 80)}…)`);
-  }
-}
-
 export function concurrentIndexName(stmt: string): string | undefined {
   return /^\s*CREATE\s+(?:UNIQUE\s+)?INDEX\s+CONCURRENTLY\s+IF\s+NOT\s+EXISTS\s+([a-z_][a-z0-9_$]*)\s+ON\s/i.exec(
     stmt,
@@ -270,34 +252,6 @@ export function pgMigrationChecksum(statements: readonly string[]): string {
   return createHash("sha256")
     .update(JSON.stringify(statements.map((statement) => statement.trim())))
     .digest("hex");
-}
-
-export function definePgMigration({
-  id,
-  statements,
-  expectedChecksum,
-  legacyId,
-  autocommit,
-}: PgMigrationDefinition): PgMigration {
-  if (!/^[a-z0-9][a-z0-9._/-]*$/i.test(id) || id.includes("..")) {
-    throw new Error(`pg-pool: invalid migration id ${JSON.stringify(id)}`);
-  }
-  if (autocommit && legacyId) throw new Error(`pg-pool: autocommit migration ${id} cannot adopt a legacy id`);
-  const normalized = statements.map((statement) => statement.trim()).filter((statement) => statement.length > 0);
-  for (const statement of normalized) assertOneStatement(statement);
-  const checksum = pgMigrationChecksum(normalized);
-  if (expectedChecksum !== undefined && checksum !== expectedChecksum) {
-    throw new Error(
-      `pg-pool: migration ${id} source checksum mismatch (expected=${expectedChecksum}, actual=${checksum})`,
-    );
-  }
-  return {
-    id,
-    statements: normalized,
-    checksum,
-    ...(legacyId ? { legacyId } : {}),
-    ...(autocommit ? { autocommit } : {}),
-  };
 }
 
 const SCHEMA_LOCK_POLL_MS = 50;
@@ -391,8 +345,23 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
         continue;
       }
       await mayMigrate(migration);
-      if (migration.autocommit) {
-        for (const statement of migration.statements) await client.query(statement);
+      const present = migration.replaces
+        ? new Set(
+            (
+              await client.query<{ id: string }>(`SELECT id FROM ${PG_MIGRATIONS_TABLE} WHERE id = ANY($1)`, [
+                migration.replaces,
+              ])
+            ).rows.map((row) => row.id),
+          )
+        : new Set<string>();
+      const replaced = present.size;
+      if (replaced && replaced < migration.replaces!.length) {
+        const missing = migration.replaces!.filter((id) => !present.has(id));
+        throw new Error(
+          `pg-pool: ${migration.id} replaces ${migration.replaces!.length} earlier migrations, but this database is missing ${missing.length} of them (${missing.join(", ")}); upgrade it with the last QM release that still shipped them first`,
+        );
+      }
+      if (replaced) {
         await client.query(`INSERT INTO ${PG_MIGRATIONS_TABLE}(id, checksum) VALUES ($1, $2)`, [
           migration.id,
           migration.checksum,
@@ -400,7 +369,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
         continue;
       }
       if (migration.statements.some((statement) => concurrentIndexName(statement))) {
-        if (migration.legacyId || !migration.statements.every((statement) => concurrentIndexName(statement))) {
+        if (!migration.statements.every((statement) => concurrentIndexName(statement))) {
           throw new Error(`pg-pool: concurrent index migration ${migration.id} must contain only concurrent indexes`);
         }
         for (const statement of migration.statements) {
@@ -437,17 +406,7 @@ export async function applyPgMigrations(pool: Pool, migrations: readonly PgMigra
       }
       await untraced(() => client.query("BEGIN"));
       try {
-        let adopted = false;
-        if (migration.legacyId) {
-          const legacyTable = await client.query<{ present: boolean }>(
-            "SELECT to_regclass('schema_migrations') IS NOT NULL AS present",
-          );
-          if (legacyTable.rows[0]?.present) {
-            const legacy = await client.query("SELECT id FROM schema_migrations WHERE id = $1", [migration.legacyId]);
-            adopted = legacy.rows.length > 0;
-          }
-        }
-        if (!adopted) for (const statement of migration.statements) await client.query(statement);
+        for (const statement of migration.statements) await client.query(statement);
         await client.query(`INSERT INTO ${PG_MIGRATIONS_TABLE}(id, checksum) VALUES ($1, $2)`, [
           migration.id,
           migration.checksum,
@@ -497,82 +456,68 @@ export function pgConnectionOptions(connectionString: string, ca = installedCaTr
   return { ...config, ssl: { ...(typeof config.ssl === "object" ? config.ssl : {}), ca } };
 }
 
-const registeredMigrations = new Map<string, Map<string, PgMigration>>();
+const DB_DIR = new URL("../../db/", import.meta.url);
 
-function registerPgMigration(connectionString: string, migration: PgMigration): void {
-  let database = registeredMigrations.get(connectionString);
-  if (!database) {
-    database = new Map();
-    registeredMigrations.set(connectionString, database);
-  }
-  const existing = database.get(migration.id);
-  if (existing && existing.checksum !== migration.checksum) {
-    throw new Error(`pg-pool: migration ${migration.id} was registered twice with different checksums`);
-  }
-  database.set(migration.id, migration);
+export function definePgMigration({ id, statements, replaces }: Omit<PgMigration, "checksum">): PgMigration {
+  const normalized = statements.map((statement) => statement.trim()).filter(Boolean);
+  return { id, statements: normalized, checksum: pgMigrationChecksum(normalized), ...(replaces ? { replaces } : {}) };
 }
 
-export function registeredPgMigrations(connectionString: string): readonly PgMigration[] {
-  return [...(registeredMigrations.get(connectionString)?.values() ?? [])].sort((a, b) => a.id.localeCompare(b.id));
+function sqlMigration(id: string, file: string, replaces?: string): PgMigration {
+  return definePgMigration({
+    id,
+    statements: [readFileSync(new URL(file, DB_DIR), "utf8")],
+    ...(replaces ? { replaces: readFileSync(new URL(replaces, DB_DIR), "utf8").split("\n").filter(Boolean) } : {}),
+  });
 }
 
-export async function migrateRegisteredPgSchemas(connectionString?: string): Promise<void> {
-  const databases = connectionString
-    ? [[connectionString, registeredMigrations.get(connectionString)] as const]
-    : [...registeredMigrations.entries()];
-  for (const [databaseUrl, registered] of databases) {
-    if (!registered?.size) continue;
-    await migrationQueue(databaseUrl, async () => {
-      const pool = await retainPool(databaseUrl, "migration");
-      try {
-        await applyPgMigrations(
-          pool,
-          [...registered.values()].sort((a, b) => a.id.localeCompare(b.id)),
-        );
-      } finally {
-        await releasePool(databaseUrl, pool, "migration");
-      }
-    });
+export function dbMigrations({ vector = false } = {}): PgMigration[] {
+  const files = readdirSync(new URL("migrations/", DB_DIR))
+    .filter((name) => name.endsWith(".sql"))
+    .sort();
+  return [
+    { ...sqlMigration("schema", "schema.sql", "schema-replaces.txt"), checksum: "current" },
+    ...files.map((name) => sqlMigration(`migrations/${name.slice(0, -4)}`, `migrations/${name}`)),
+    ...(vector ? [sqlMigration("vector", "vector.sql", "vector-replaces.txt")] : []),
+  ];
+}
+
+export async function pgvectorAvailable(connectionString: string): Promise<boolean> {
+  const pool = await retainPool(connectionString, "migration");
+  try {
+    return (await pool.query("SELECT 1 FROM pg_available_extensions WHERE name = 'vector'")).rowCount === 1;
+  } finally {
+    await releasePool(connectionString, pool, "migration");
   }
 }
 
-export function createPgPool(connectionString: string, definitions: readonly PgMigrationDefinition[] = []): PgPool {
-  const migrations = definitions.map(definePgMigration);
-  for (const migration of migrations) registerPgMigration(connectionString, migration);
-  let readyP: Promise<void> | null = null;
+export function migrateDatabase(connectionString: string, { vector = false } = {}): Promise<void> {
+  return migrationQueue(connectionString, async () => {
+    const pool = await retainPool(connectionString, "migration");
+    try {
+      await applyPgMigrations(pool, dbMigrations({ vector }));
+    } finally {
+      await releasePool(connectionString, pool, "migration");
+    }
+  });
+}
+
+export function createPgPool(connectionString: string): PgPool {
   let sessionPoolP: Promise<Pool> | null = null;
   let queryPoolP: Promise<Pool> | null = null;
   let closed = false;
   const queryUrl = pooledDatabaseUrl(connectionString);
-  async function withMigrationPool<T>(fn: (pool: Pool) => Promise<T>): Promise<T> {
-    return migrationQueue(connectionString, async () => {
-      const instance = await retainPool(connectionString, "migration");
-      try {
-        return await fn(instance);
-      } finally {
-        await releasePool(connectionString, instance, "migration");
-      }
-    });
-  }
-  async function ready(): Promise<void> {
-    if (closed) throw new Error("Postgres store is closed");
-    await (readyP ??= withMigrationPool(async (instance) => {
-      await applyPgMigrations(instance, migrations);
-    }).catch((error) => {
-      readyP = null;
-      throw error;
-    }));
-    if (closed) throw new Error("Postgres store is closed");
-  }
   async function pool(): Promise<Pool> {
-    await ready();
     if (closed) throw new Error("Postgres store is closed");
-    return (queryPoolP ??= retainPool(queryUrl, "query"));
+    const instance = await (queryPoolP ??= retainPool(queryUrl, "query"));
+    if (closed) throw new Error("Postgres store is closed");
+    return instance;
   }
   async function sessionPool(): Promise<Pool> {
-    await ready();
     if (closed) throw new Error("Postgres store is closed");
-    return (sessionPoolP ??= retainPool(connectionString, "session"));
+    const instance = await (sessionPoolP ??= retainPool(connectionString, "session"));
+    if (closed) throw new Error("Postgres store is closed");
+    return instance;
   }
   async function run(
     tenant: string | undefined,
@@ -635,21 +580,10 @@ export function createPgPool(connectionString: string, definitions: readonly PgM
   async function close(): Promise<void> {
     if (closed) return;
     closed = true;
-    await readyP?.catch(() => {});
     await Promise.all([
       queryPoolP?.then((instance) => releasePool(queryUrl, instance, "query")),
       sessionPoolP?.then((instance) => releasePool(connectionString, instance, "session")),
     ]);
   }
-  async function migrate(definition: PgMigrationDefinition | readonly PgMigrationDefinition[]): Promise<void> {
-    const batch = (Array.isArray(definition) ? definition : [definition]).map(definePgMigration);
-    for (const migration of batch) registerPgMigration(connectionString, migration);
-    if (closed) throw new Error("Postgres store is closed");
-    await ready();
-    await withMigrationPool((instance) => applyPgMigrations(instance, batch));
-  }
-  function registerMigration(definition: PgMigrationDefinition): void {
-    registerPgMigration(connectionString, definePgMigration(definition));
-  }
-  return { pool, sessionPool, q, query, forTenant, registerMigration, migrate, close };
+  return { pool, sessionPool, q, query, forTenant, close };
 }

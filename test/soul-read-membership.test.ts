@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { scopeId } from "../src/types.ts";
 
@@ -21,8 +21,7 @@ test("source-authenticated SOUL reads require the portal-verified principal to b
   await built.config.setSoul(scopeId("personal", "bob"), "Bob's private instruction.");
   await built.config.setSoul(scopeId("channel", "C"), "Channel C instruction.");
   const server = createInsecureTestServer(built.app, {
-    config: built.config,
-    identity: built.identity,
+    ...testCore(built),
     portalIdentitySecret: PID,
     requireSignedPortalIdentity: true,
   });

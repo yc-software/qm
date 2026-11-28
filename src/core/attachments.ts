@@ -237,6 +237,7 @@ export async function materializeInbound(
     content: string;
     name: string;
     mimetype: string;
+    bytes: Buffer;
   }) => Promise<SecurityScreenVerdict | undefined>,
 ): Promise<{
   metas: AttachmentMeta[];
@@ -275,7 +276,7 @@ export async function materializeInbound(
     const mimetype = baseMime(a.mimetype || mimeFromName(name));
     const textContent = screenText ? decodeText(bytes, name, mimetype) : null;
     if (screenText && textContent !== null) {
-      const verdict = await screenText({ content: textContent, name, mimetype });
+      const verdict = await screenText({ content: textContent, name, mimetype, bytes });
       if (verdict?.decision === "strict") {
         blocked.push(withheldName(name, verdict));
         continue;

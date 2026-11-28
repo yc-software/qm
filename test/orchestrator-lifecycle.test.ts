@@ -5,7 +5,7 @@ import { modelBudgetMessage } from "../src/core/turn-error.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { scopeId, type TurnRequest } from "../src/types.ts";
+import { scopeId, type TurnRequest, personalScope } from "../src/types.ts";
 import {
   noDefaultSandbox,
   selectComputer,
@@ -369,13 +369,13 @@ test("activated resource defaults preserve an existing computer and stop eager p
   const built = freshApp();
   noDefaultSandbox.add(built);
   await selectComputer(built, "U1", scopeId("personal", "U1"));
-  await built.sessions.getOrCreateByThread("dm:U1:t1", "dm", "personal:U1");
+  await built.sessions.getOrCreateByThread("dm:U1:t1", "dm", personalScope("U1"));
   await built.sandboxResources.initialize();
   const boxes = spyProvisioning(built.sandbox);
   const warm = await built.app.turn(dm("!run echo warm"));
   assert.equal(warm.status, "ok", warm.reason);
   assert.equal(boxes.provisioned, 1);
-  await built.sandboxResources.setDefault("U1", "personal:U1", null);
+  await built.sandboxResources.setDefault("U1", personalScope("U1"), null);
   const next = await built.app.turn(dm("hello after unset"));
   assert.equal(next.status, "ok", next.reason);
   assert.equal(boxes.provisioned, 1);
@@ -384,7 +384,7 @@ test("activated resource defaults preserve an existing computer and stop eager p
     dm("hello", { actor: { externalId: "new-user" }, conversation: { kind: "dm", threadRef: "dm:new:t1" } }),
   );
   assert.equal(newSession.status, "ok", newSession.reason);
-  assert.equal(await built.sandboxResources.resolve("personal:new-user"), null);
+  assert.equal(await built.sandboxResources.resolve(personalScope("new-user")), null);
   assert.equal(boxes.provisioned, 1);
 });
 
@@ -489,7 +489,7 @@ test("an isolated channel environment does not disclose the actor's private sand
     ],
   );
   const privateName = "PRIVATE-ACQUISITION-REVIEW";
-  const personal = await built.sandboxResources.create("U1", "personal:U1", "sprites", privateName);
+  const personal = await built.sandboxResources.create("U1", personalScope("U1"), "sprites", privateName);
   await selectComputer(built, "U1", "channel:C1");
   const inventory = await built.sandboxResources.list("U1", "channel:C1");
   assert.ok(inventory.sandboxes.some((sandbox) => sandbox.id === personal.id));

@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { sendJson } from "../http.ts";
+import { fileWebUrl } from "../../util/conversation-links.ts";
 import { scopeId, type ScopeId } from "../../types.ts";
 import { FileUploadError } from "../../files/file-upload-store.ts";
 import { isObj, audit } from "./shared.ts";
@@ -108,7 +109,8 @@ const completeUpload = ownedUpload(async ({ res, deps, tenant }, uploads, upload
     { deps, tenant },
     { principalId: actorId, action: "file.upload", resource: file.path, scopeLabel: upload.scopeId },
   );
-  return sendJson(res, 200, { file, contentUrl: `/v1/files/${file.id}/content` });
+  const url = fileWebUrl(deps.portalUrl ?? deps.publicUrl, file.id);
+  return sendJson(res, 200, { file, contentUrl: `/v1/files/${file.id}/content`, ...(url ? { url } : {}) });
 });
 
 const abortUpload = ownedUpload(async ({ res, deps, tenant }, uploads, upload, actorId) => {

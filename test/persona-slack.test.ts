@@ -138,6 +138,11 @@ describe("unified slackInstallationStore provisioning", () => {
             team: { id: "T0TEAM", name: "Acme" },
           });
         }
+        if (url.endsWith("/apps.icon.set")) {
+          const parsed = JSON.parse(bodyStr ?? "{}") as { url?: string };
+          if (parsed.url?.includes("too-small")) return Response.json({ ok: false, error: "invalid_icon_size" });
+          return Response.json({ ok: true });
+        }
         if (url.endsWith("/apps.manifest.delete")) {
           return Response.json({ ok: true });
         }
@@ -165,8 +170,37 @@ describe("unified slackInstallationStore provisioning", () => {
       const personaCreated = await store.createApp({
         personaId: "p-1",
         name: "Bosun",
+        iconUrl: "https://cdn.example.com/bosun.png",
         updatedBy: "owner-1",
       });
+      assert.deepEqual(JSON.parse(calls.find((c) => c.url.endsWith("/apps.icon.set"))?.body ?? "{}"), {
+        app_id: "A0APP2",
+        url: "https://cdn.example.com/bosun.png",
+      });
+      assert.deepEqual(
+        await store.setAppIcon({
+          personaId: "p-1",
+          iconUrl: "https://cdn.example.com/bosun-v2.png",
+          updatedBy: "owner-1",
+        }),
+        { ok: true },
+      );
+      assert.deepEqual(
+        await store.setAppIcon({
+          personaId: "p-1",
+          iconUrl: "https://cdn.example.com/too-small.png",
+          updatedBy: "owner-1",
+        }),
+        { ok: false, error: "apps.icon.set: invalid_icon_size" },
+      );
+      assert.equal(
+        await store.setAppIcon({
+          personaId: "missing",
+          iconUrl: "https://cdn.example.com/bosun.png",
+          updatedBy: "owner-1",
+        }),
+        null,
+      );
       assert.equal(personaCreated.appId, "A0APP2");
       const personaState = new URL(personaCreated.oauthAuthorizeUrl).searchParams.get("state")!;
       const personaDone = await store.completeOAuth({ code: "code-p1", state: personaState });

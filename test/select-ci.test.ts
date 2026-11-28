@@ -52,7 +52,7 @@ test("dependencies, CI, runners, runtime files under src and startup skills run 
     "tsconfig.json",
     ".github/workflows/cicd.yml",
     "scripts/run-pg-tests.mjs",
-    "test/support/test-template.ts",
+    "db/schema.sql",
     "src/prompt.md",
     "src/tenants/context.ts",
     "skills-seed/brief/SKILL.md",

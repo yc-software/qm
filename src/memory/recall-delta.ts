@@ -4,6 +4,7 @@ import { recallLabel, renderCards, renderRecall, type BrainCard, type RecalledFa
 import { factHash, renderFacts, type MemoryFact } from "./facts.ts";
 import type { MemoryProviderOutcome } from "./memory-service.ts";
 import { DENIED_CODES } from "./provider-outcome.ts";
+import { scopeLabel } from "../types.ts";
 
 interface Shown {
   scope: string;
@@ -119,7 +120,7 @@ export function memoryRecallDelta(
       [...withdrawn]
         .map(
           ([scope, n]) =>
-            `${recallLabel(labels.get(scope) ?? scope)}: ${n} earlier ${n === 1 ? "fact was" : "facts were"} consolidated or removed; rely only on the current list.`,
+            `${recallLabel(labels.get(scope) ?? scopeLabel(scope))}: ${n} earlier ${n === 1 ? "fact was" : "facts were"} consolidated or removed; rely only on the current list.`,
         )
         .join("\n"),
       unauthorized

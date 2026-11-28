@@ -10,15 +10,17 @@ import { createServer } from "../src/api/server.ts";
 import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 test("a surface can open an empty web conversation for the signed-in person, only where they may chat", async () => {
   const { app } = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "ap-spawn-")) }));
   const sourceSecret = "spawn-source-secret-for-http-tests";
   const identitySecret = "spawn-identity-secret-for-http-tests";
   const server = createServer(app, {
+    ...testCore(),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: sourceSecret,
     capabilitySecret: "spawn-capability-secret-for-http-tests",
@@ -41,15 +43,15 @@ test("a surface can open an empty web conversation for the signed-in person, onl
     });
   };
   try {
-    const created = await spawn({ principalId: "U1", scopeId: "personal:U1" });
+    const created = await spawn({ principalId: "U1", scopeId: personalScope("U1") });
     assert.equal(created.status, 201);
     const { session } = (await created.json()) as { session: { id: string; threadRef: string; scopeId: string } };
     assert.ok(session.threadRef.startsWith("web:U1:"));
-    assert.equal(session.scopeId, "personal:U1");
+    assert.equal(session.scopeId, personalScope("U1"));
     const viewed = await app.getSessionForViewer(session.id, { actorId: "U1" }, { tailTurns: 1 });
     assert.equal(viewed?.items.length, 0);
 
-    assert.equal((await spawn({ principalId: "U1", scopeId: "personal:U2" })).status, 403);
+    assert.equal((await spawn({ principalId: "U1", scopeId: personalScope("U2") })).status, 403);
     assert.equal((await spawn({ principalId: "U1" })).status, 400);
   } finally {
     server.closeAllConnections();

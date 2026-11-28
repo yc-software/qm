@@ -39,7 +39,8 @@ export function cronScriptFrom(
 ): CronScript | string {
   const action = patch.action ?? cron.action;
   const text = patch.text ?? cron.text;
-  if (action === undefined || cron.message !== undefined || text !== undefined || cron.loopId)
+  const message = patch.action !== undefined ? undefined : cron.message;
+  if (action === undefined || message !== undefined || text !== undefined || cron.loopId)
     return "script needs a cron with a task for the agent";
   if (typeof req.command !== "string" || !req.command.trim()) return "script.command must be a command";
   if (

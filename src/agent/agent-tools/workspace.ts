@@ -5,6 +5,7 @@ import { errMessage } from "../../util/errors.ts";
 import { LIVE_EDIT_PUBLISH_DELAY_MS, type LiveEditSaved } from "../../deploy/live-edits.ts";
 import { isObj } from "../../util/objects.ts";
 import { text, outsideWorkspace, sandboxSelector, type ToolKit } from "./kit.ts";
+import { canonicalScopeId } from "../../types.ts";
 
 function describePublishAudience(a: PublishAudienceDescriptor | undefined): string {
   if (!a) return "Owned by you.";
@@ -71,7 +72,12 @@ export function workspaceTools(kit: ToolKit) {
         const p = params as { query?: string; offset?: number; limit?: number; source?: string };
         const action = search ? "search" : "list";
         await recordCall(callId, { tool: "skills", action, ...p });
-        const { sourceScopeId, ...result } = await ref.current.listSkills(p.query, p.offset, p.limit, p.source);
+        const { sourceScopeId, ...result } = await ref.current.listSkills(
+          p.query,
+          p.offset,
+          p.limit,
+          p.source && canonicalScopeId(p.source),
+        );
         return recordResult(
           callId,
           { tool: "skills", action, count: result.skills.length },
@@ -106,13 +112,13 @@ export function workspaceTools(kit: ToolKit) {
         action: "read",
         name: p.name,
         ...(p.path ? { path: p.path } : {}),
-        ...(p.source ? { source: p.source } : {}),
+        ...(p.source ? { source: canonicalScopeId(p.source) } : {}),
       });
       const signal = ref.abortSignal;
       signal?.throwIfAborted();
       const { content, sourceScopeId, dir, packDir } = await tc.skill(p.name, {
         ...(p.path ? { path: p.path } : {}),
-        ...(p.source ? { source: p.source } : {}),
+        ...(p.source ? { source: canonicalScopeId(p.source) } : {}),
         ...(p.sandbox_id !== undefined ? { sandboxId: p.sandbox_id } : {}),
         ...(signal ? { signal } : {}),
       });

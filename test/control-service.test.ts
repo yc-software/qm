@@ -5,10 +5,10 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type BuiltApp } from "../src/wiring.ts";
+import { type Core } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createControlService, type ControlService } from "../src/api/control-service.ts";
-import { scopeId, type ScopeId } from "../src/types.ts";
+import { scopeId, type ScopeId, personalScope } from "../src/types.ts";
 import { CAPABILITY_TTL_MS, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testTenant } from "./support/test-tenant.ts";
@@ -51,7 +51,7 @@ function claims(
   };
 }
 
-function setup(): { built: BuiltApp; control: ControlService } {
+function setup(): { built: Core; control: ControlService } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "control-svc-")), signingSecret: SECRET }));
   const control = createControlService(built.app, built.scheduler);
   return { built, control };
@@ -81,7 +81,7 @@ test("a write grantee who rewrites a shared cron's task becomes its owner, and t
   assert.ok(made.ok, JSON.stringify(made));
   const id = made.cron.id;
   const shared = await control.shareArtifact(
-    { type: "cron", id, scope: "personal:U2", permission: "write" },
+    { type: "cron", id, scope: personalScope("U2"), permission: "write" },
     chanClaims("U1"),
   );
   assert.ok(shared.ok, JSON.stringify(shared));
@@ -102,6 +102,16 @@ test("a write grantee who rewrites a shared cron's task becomes its owner, and t
   assert.ok(asText.ok, JSON.stringify(asText));
   assert.equal(asText.cron.owner, "U1", "a `text` rewrite by someone else hands ownership back the same way");
   assert.equal(asText.cron.message, "digest is done");
+  assert.equal(asText.cron.action, undefined);
+  const backToTask = await control.patchCron(id, { action: "digest again" }, chanClaims("U1"));
+  assert.ok(backToTask.ok);
+  assert.equal(backToTask.cron.action, "digest again");
+  assert.equal(backToTask.cron.message, undefined);
+  assert.equal(
+    (await control.createCron({ schedule: { everyMs: 60_000 }, action: "a", text: "b" }, chanClaims("U1"))).ok,
+    false,
+  );
+  assert.equal((await control.patchCron(id, { action: "a", text: "b" }, chanClaims("U1"))).ok, false);
 });
 
 test("the owner rewriting their own shared cron's task keeps ownership and gets no notice", async () => {
@@ -488,14 +498,14 @@ test("a channel cron belongs to its creator: members see it, only the owner or a
   assert.equal(outsider.ok, false);
 
   const shared = await control.shareArtifact(
-    { type: "cron", id: made.cron.id, scope: "personal:U2", permission: "write" },
+    { type: "cron", id: made.cron.id, scope: personalScope("U2"), permission: "write" },
     chanClaims("U1"),
   );
   assert.ok(shared.ok, JSON.stringify(shared));
   const granted = await control.patchCron(made.cron.id, { title: "weekly digest" }, chanClaims("U2"));
   assert.ok(granted.ok, JSON.stringify(granted));
   const reshared = await control.shareArtifact(
-    { type: "cron", id: made.cron.id, scope: "personal:U9", permission: "write" },
+    { type: "cron", id: made.cron.id, scope: personalScope("U9"), permission: "write" },
     chanClaims("U2"),
   );
   assert.equal(reshared.ok ? "" : reshared.code, "forbidden", "a grantee can't pass write access on");
@@ -532,7 +542,7 @@ test("a channel cron belongs to its creator: members see it, only the owner or a
   );
   assert.ok(personal.ok);
   const personalShare = await control.shareArtifact(
-    { type: "cron", id: personal.cron.id, scope: "personal:U2", permission: "write" },
+    { type: "cron", id: personal.cron.id, scope: personalScope("U2"), permission: "write" },
     claims("U1"),
   );
   assert.equal(
@@ -924,7 +934,7 @@ test("cron runtime create and patch retain ownership gates and refuse unavailabl
   const cleared = await control.patchCron(created.cron.id, { runtime: null }, claims("U1"));
   assert.ok(cleared.ok, JSON.stringify(cleared));
   assert.equal(cleared.cron.runtime, null);
-  assert.equal(built.config.getBaseModel("personal:U1"), null);
+  assert.equal(built.config.getBaseModel(personalScope("U1")), null);
 });
 
 test("scheduled runtime is refused before execution when its model is no longer enabled, including credential resumes", async () => {
@@ -1057,7 +1067,7 @@ test("a Slack bot's turn can't change a channel cron or webhook it doesn't own, 
 test("a persona's owner gives it a cron from any conversation; it runs as the persona and others are refused", async () => {
   const { built, control } = setup();
   for (const who of ["U1", "U2", "U3"])
-    await built.featureFlags.setEnabled("personas", `personal:${who}`, true, "admin");
+    await built.featureFlags.setEnabled("personas", personalScope(who), true, "admin");
   const created = await built.app.personas!.create("U1", { name: "Ada" });
   const personaId = (created as { value: { id: string } }).value.id;
   const cron = { schedule: { everyMs: 60_000 }, action: "digest" };
@@ -1077,14 +1087,14 @@ test("a persona's owner gives it a cron from any conversation; it runs as the pe
   assert.equal(theirs.ok ? "created" : theirs.code, "forbidden");
 
   const writer = [
-    { scopeId: "personal:U1", role: "owner" },
-    { scopeId: "personal:U2", role: "write" },
+    { scopeId: personalScope("U1"), role: "owner" },
+    { scopeId: personalScope("U2"), role: "write" },
   ];
   await built.app.personas!.setAccess("U1", personaId, writer);
   const granted = await control.createCron({ ...cron, persona: "Ada" }, claims("U2"));
   assert.ok(granted.ok, JSON.stringify(granted));
   assert.ok((await built.app.listCronsForViewer("U1")).visible.some((c) => c.id === granted.cron.id));
-  await built.app.personas!.setAccess("U1", personaId, [...writer, { scopeId: "personal:U3", role: "read" }]);
+  await built.app.personas!.setAccess("U1", personaId, [...writer, { scopeId: personalScope("U3"), role: "read" }]);
   const worn = (who: string) =>
     claims(who, scopeId("personal", who), {
       threadRef: `web:${who}:p`,
@@ -1100,17 +1110,17 @@ test("a persona's owner gives it a cron from any conversation; it runs as the pe
   const readDef = await control.createCron(cron, worn("U3"));
   assert.ok(def.ok && optOut.ok && readDef.ok);
   assert.equal(def.cron.ownerScopeId, `persona:${personaId}`);
-  assert.equal(optOut.cron.ownerScopeId, "personal:U1");
+  assert.equal(optOut.cron.ownerScopeId, personalScope("U1"));
   assert.equal((await control.createCron({ ...cron, persona: "  " }, worn("U1"))).ok, false);
-  assert.equal(readDef.cron.ownerScopeId, "personal:U3");
+  assert.equal(readDef.cron.ownerScopeId, personalScope("U3"));
 
   assert.ok((await control.patchCron(def.cron.id, { title: "v2" }, claims("U2"))).ok);
   assert.ok((await control.setCronEnabled(def.cron.id, false, claims("U2"))).ok);
-  const s3 = await control.shareArtifact({ type: "cron", id: def.cron.id, scope: "personal:U3" }, claims("U2"));
-  const s2 = await control.shareArtifact({ type: "cron", id: def.cron.id, scope: "personal:U2" }, claims("U2"));
+  const s3 = await control.shareArtifact({ type: "cron", id: def.cron.id, scope: personalScope("U3") }, claims("U2"));
+  const s2 = await control.shareArtifact({ type: "cron", id: def.cron.id, scope: personalScope("U2") }, claims("U2"));
   assert.ok(s3.ok && s3.copy?.id && s2.ok && s2.copy?.id);
   const c3 = await built.app.getCron(s3.copy.id);
-  assert.equal(c3?.ownerScopeId, "personal:U3");
+  assert.equal(c3?.ownerScopeId, personalScope("U3"));
   assert.deepEqual(await built.app.cronOrigin(c3!), { personaId });
   await control.patchCron(def.cron.id, { action: "v3" }, claims("U1"));
   assert.equal((await built.app.getCron(s3.copy.id))?.action, "v3");
@@ -1127,7 +1137,7 @@ test("a persona's owner gives it a cron from any conversation; it runs as the pe
   assert.equal((await control.setCronEnabled(sys.id, true, claims("U3"))).ok, false);
   const f = await built.files.put({
     id: "fp",
-    ownerScopeId: "personal:U3",
+    ownerScopeId: personalScope("U3"),
     createdBy: "U3",
     name: "a.txt",
     path: "a.txt",

@@ -120,6 +120,7 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   transformed, or dropped; explain migration, backfill, rollout, and compatibility
   effects. Distinguish approved design, implemented code, and live schema. A migration
   diff alone is not enough. If configuration or schema is unchanged, say so explicitly.
+  Schema changes are new files in `db/migrations/` plus a regenerated `db/schema.sql`; see `db/README.md`.
 - **Verify locally with the affected tests, not the whole suite.** Run the tests covering
   what you changed plus typecheck and lint, then push and let CI be the full gate — CI
   shards the suite across parallel runners, and reproducing that serially costs several
@@ -138,7 +139,8 @@ Two habits that keep task-focused changes from scarring the rest of the repo:
   end-to-end — new or changed agent behavior, or anything touching the Slack/web
   surfaces, orchestrator, directory, or cron flows — boot this worktree with the
   `/dev-instance` skill and exercise it through a browser against the configured Slack
-  development workspace before opening a PR. Do this Slack QA in **Firefox**, never the
+  development workspace before opening a PR; a run against the Slack twin does not count.
+  Do this Slack QA in **Firefox**, never the
   Slack Mac app, and don't ask permission first — do it on your own; don't wait to be
   asked. Skip it for trivial refactors, docs, config, or pure-logic changes already
   covered by tests.
@@ -190,6 +192,19 @@ to prepare a clean branch and scrub outgoing content and history. Never referenc
 upstream issue or PR by number in private repository PRs, issues, comments, or commit
 messages: GitHub cross-references can disclose their existence and titles upstream.
 Name upstream work in plain words instead.
+
+## Database
+
+- `db/schema.sql` is the single generated source of truth for the current Postgres schema
+  (never edit by hand); `db/vector.sql` is the optional pgvector schema.
+- To change the schema or add a data migration, add `db/migrations/NNNN-what-it-does.sql`,
+  run `DATABASE_URL=... npm run db:schema` against Postgres 16 (or set `PG_DUMP` to a
+  Postgres 16 `pg_dump`), and commit both files. CI regenerates `db/schema.sql` and fails on
+  any diff.
+- Never edit a migration once merged; add a new one. A file containing only a single
+  `CREATE INDEX CONCURRENTLY IF NOT EXISTS` runs outside a transaction automatically; use
+  `SET LOCAL lock_timeout` when altering busy tables. See [`db/README.md`](./db/README.md)
+  for full details.
 
 ## Durable by default
 

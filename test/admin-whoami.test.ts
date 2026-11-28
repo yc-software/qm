@@ -8,22 +8,22 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createAdminService } from "../src/admin/admin-service.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testAdminGrantStore, testDatabaseUrl, testUsers } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
 
-function start(withAdmin = true, signingSecret?: string) {
+function start(signingSecret?: string) {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-whoami-")) }));
-  const deps = {
-    ...(withAdmin ? { admin: built.admin } : {}),
-    auditLog: built.auditLog,
-  };
   const server = signingSecret
-    ? createServer(built.app, { replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()), ...deps, signingSecret })
-    : createInsecureTestServer(built.app, deps);
+    ? createServer(built.app, {
+        ...testCore(built),
+        replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+        signingSecret,
+      })
+    : createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };
@@ -81,16 +81,6 @@ test("whoami with no x-admin-actor is not-admin (200)", async () => {
   }
 });
 
-test("whoami is 404 when the admin plane is unwired", async () => {
-  const s = start(false);
-  try {
-    const r = await whoami(s.base, "admin-alice@default-org");
-    assert.equal(r.status, 404);
-  } finally {
-    await s.close();
-  }
-});
-
 test("whoami audits an admin.whoami event for a resolved actor", async () => {
   const s = start();
   try {
@@ -104,7 +94,7 @@ test("whoami audits an admin.whoami event for a resolved actor", async () => {
 
 test("with a signing secret set, a whoami GET with a BAD/missing signature is 401", async () => {
   const SECRET = "whoami-signing-secret".repeat(3);
-  const s = start(true, SECRET);
+  const s = start(SECRET);
   try {
     const unsigned = await whoami(s.base, "admin-alice@default-org");
     assert.equal(unsigned.status, 401);

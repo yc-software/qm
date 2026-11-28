@@ -1,7 +1,7 @@
 import "./support/auto-fake-sprites.ts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildApp, serverDeps } from "../src/wiring.ts";
+import { buildApp } from "../src/wiring.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
@@ -11,7 +11,7 @@ const headers = { "content-type": "application/json", "x-admin-actor": "admin-al
 test("admin lookup recognizes an existing model without asking for a clone template", async () => {
   const config = testConfig({ anthropicApiKey: "test-only" });
   const built = stopAtEnd(buildApp(config));
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(built.app, built);
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   try {
     const result = await fetch(
@@ -141,7 +141,7 @@ test("live lookup is admin-only and builtin enable verifies without a duplicate 
       },
     }),
   );
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(built.app, built);
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const post = (path: string, body: object, actor = "admin-alice@default-org") =>
@@ -185,7 +185,7 @@ test("enable rechecks serving credentials before mutating the picker", async () 
   let onProbe: () => Promise<void> = async () => {};
   const config = testConfig({ anthropicApiKey: "test-key" });
   const built = stopAtEnd(buildApp(config, { modelVerificationProbe: async () => onProbe() }));
-  const server = createInsecureTestServer(built.app, serverDeps(config, built));
+  const server = createInsecureTestServer(built.app, built);
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/admin/model-registry/claude-opus-4-6/enable`;
   const enable = () =>

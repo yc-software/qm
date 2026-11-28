@@ -2,7 +2,7 @@ import { testTenant } from "./support/test-tenant.ts";
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
-import { scopeId, type GrantedHandle, type IncomingAttachment } from "../src/types.ts";
+import { scopeId, type GrantedHandle, type IncomingAttachment, personalScope } from "../src/types.ts";
 import { createToolContext } from "../src/tools/primitives.ts";
 import { createSpritesSandbox } from "../src/sandbox/sprites-sandbox.ts";
 import { installFakeSprites } from "./support/fake-sprites.ts";
@@ -56,7 +56,7 @@ function attachStaging(sandbox: Sandbox, handle: SandboxHandle, blobTransfer: Bl
     sandbox,
     provision: async () => handle,
     blobTransfer,
-    fileRegistration: { store: null as never, ownerScopeId: "personal:U1", createdBy: "U1", seed: "run-1" },
+    fileRegistration: { store: null as never, ownerScopeId: personalScope("U1"), createdBy: "U1", seed: "run-1" },
   });
 }
 
@@ -67,7 +67,7 @@ function filesStore(fail = false) {
     saved.set(file.name, file.data);
     return { created: true };
   };
-  const register = { seed: "s", ownerScopeId: "personal:U1", createdBy: "U1", store: { put } } as never;
+  const register = { seed: "s", ownerScopeId: personalScope("U1"), createdBy: "U1", store: { put } } as never;
   return { register, saved };
 }
 
@@ -142,9 +142,14 @@ test("inboundIssuesNote names the files that were not received and is empty with
 
 test("shared files render as one count line without file names, '' when nothing is shared", () => {
   const handles: GrantedHandle[] = [
-    { handlePath: "shared/report.txt", ownerScopeId: "personal:U2", fileId: "1".repeat(32), permission: "read" },
-    { handlePath: "shared/budget.xlsx", ownerScopeId: "personal:U3", fileId: "2".repeat(32), permission: "write" },
-    { handlePath: "shared/report.txt", ownerScopeId: "personal:U4", fileId: "1".repeat(32), permission: "read" },
+    { handlePath: "shared/report.txt", ownerScopeId: personalScope("U2"), fileId: "1".repeat(32), permission: "read" },
+    {
+      handlePath: "shared/budget.xlsx",
+      ownerScopeId: personalScope("U3"),
+      fileId: "2".repeat(32),
+      permission: "write",
+    },
+    { handlePath: "shared/report.txt", ownerScopeId: personalScope("U4"), fileId: "1".repeat(32), permission: "read" },
   ];
   const s = sharedFilesSystemSection(handles);
   assert.equal(s, "## Files\n2 files are shared with you; list and read them with the `files` tool.");
@@ -510,7 +515,7 @@ test("removeDir wipes a per-turn spool dir (and only it), tolerating an absent d
     token: "test-token",
     baseUrl: ff.baseUrl,
   });
-  const handle = await sandbox.provision("personal:U1");
+  const handle = await sandbox.provision(personalScope("U1"));
   await sandbox.writeFileBytes(handle, "spool/one.txt", new Uint8Array(Buffer.from("1")));
   await sandbox.writeFileBytes(handle, "spool/two.txt", new Uint8Array(Buffer.from("2")));
   await sandbox.writeFileBytes(handle, "keep.txt", new Uint8Array(Buffer.from("keep")));
@@ -534,7 +539,7 @@ test("a binary file round-trips through the sandbox (base64-over-exec) without u
     token: "test-token",
     baseUrl: ff.baseUrl,
   });
-  const handle = await sandbox.provision("personal:U1");
+  const handle = await sandbox.provision(personalScope("U1"));
   const raw = new Uint8Array([0x00, 0x9f, 0x92, 0x96, 0xff, 0xfe]);
   await sandbox.writeFileBytes(handle, "keep.bin", raw);
   const read = await sandbox.readFileBytes(handle, "keep.bin");

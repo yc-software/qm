@@ -15,6 +15,7 @@ import { loopIngressRoutes } from "../src/api/routes/loop-ingress.ts";
 import type { ApiCtx } from "../src/api/routes/route.ts";
 import { testAdvisoryLock, testMap } from "./support/test-database.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
+import { personalScope } from "../src/types.ts";
 
 async function world() {
   const sources = testMap<LoopIngress>();
@@ -24,7 +25,7 @@ async function world() {
   const { loop } = await loops.create({
     owner: "alice",
     createdBy: "alice",
-    ownerScopeId: "personal:alice",
+    ownerScopeId: personalScope("alice"),
     name: "Event review",
     playbook: "Review",
     successCondition: "Reviewed",

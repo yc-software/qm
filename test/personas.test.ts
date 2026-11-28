@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { scopeActor, scopeId, type TurnRequest } from "../src/types.ts";
 import { credentialHandle } from "../src/credentials/keychain.ts";
@@ -245,7 +245,7 @@ test("a persona's page lists its skills and the crons from conversations with it
   const notes = { name: "notes", description: "d", body: "b" };
   await built.app.createOwnedSkill({ principalId: BOB, homeScope: scopeId("personal", BOB), ...notes });
   await built.app.createOwnedSkill({ principalId: ALICE, homeScope: scopeId("persona", ada.id), ...notes });
-  const server = createInsecureTestServer(built.app, { sessions: built.sessions });
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   try {
     const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -253,7 +253,7 @@ test("a persona's page lists its skills and the crons from conversations with it
       const r = await fetch(`${base}/v1/personas/${ada.id}?principalId=${who}`);
       const { persona } = (await r.json()) as { persona: { crons: { title: string }[]; skills: { id: string }[] } };
       const opens = await Promise.all(persona.skills.map((s) => fetch(`${base}/v1/skills/${s.id}?principalId=${who}`)));
-      return [...persona.crons.map((c) => c.title), ...opens.map((o) => o.status)];
+      return [...persona.crons.map((c) => c.title).sort(), ...opens.map((o) => o.status)];
     };
     assert.deepEqual(await cronsFor(ALICE), ["Ada digest", "Pinned channel check", 200]);
     assert.deepEqual(await cronsFor(BOB), [200]);
@@ -389,7 +389,7 @@ test("the versions API pages who and when, with content on request", async () =>
   await enable(ALICE);
   const ada = ok(await personas.create(ALICE, { name: "Ada", instructions: "one" }));
   for (const text of ["two", "three"]) ok(await personas.update(ALICE, ada.id, { instructions: text }));
-  const server = createInsecureTestServer(built.app, { sessions: built.sessions });
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   try {
     const base = `http://localhost:${(server.address() as AddressInfo).port}/v1/personas/${ada.id}/versions`;
@@ -624,8 +624,9 @@ test("an agent's runtime write lands on the scope it names, only where it may wr
   await enable(ALICE);
   const ada = ok(await personas.create(ALICE, { name: "Ada" }));
   ok(await personas.setAccess(ALICE, ada.id, [{ scopeId: scopeId("personal", ALICE), role: "owner" }]));
+  await built.modelCredentials.set("openai", "test-openai-key", ALICE);
   const server = createInsecureTestServer(built.app, {
-    config: built.config,
+    ...testCore(built),
     capabilitySecret: TEST_CAPABILITY_SECRET,
     runs: liveRunStore(),
   });
@@ -730,6 +731,19 @@ test("one turn_start call routes a DM to the persona it is addressed to, alongsi
   const c = { surface: "cron", origin: { kind: "automation" as const }, actor: { externalId: ALICE }, text: "hi" };
   const cron = await built.app.turn({ ...c, conversation: { kind: "dm", threadRef: "cron:1" }, personaId: bea.id });
   assert.equal(cron.persona?.id, bea.id);
+  const s = { surface: "slack", actor: { externalId: ALICE }, text: "hi", personaId: bea.id };
+  const surfaceOrigin = {
+    author: { id: "U_B", account: `persona:${bea.id}`, surface: "slack" as const },
+    workspace: "T1",
+    audience: "internal" as const,
+  };
+  const sp = await built.app.turn({ ...s, surfaceOrigin, conversation: { kind: "dm", threadRef: "dm:D_BEA" } });
+  assert.equal(sp.persona?.id, bea.id);
+  assert.equal((await built.sessions.get(sp.sessionId!))?.personaId, bea.id);
+  assert.notEqual(
+    (await built.app.turn({ ...s, conversation: { kind: "dm", threadRef: "dm:D_SPOOF" } })).persona?.id,
+    bea.id,
+  );
 });
 
 test("wildcard persona turn_start rule offers only personas the sender can use in that scope", async () => {

@@ -5,8 +5,8 @@ import type { Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { type Core } from "../src/wiring.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { signedRequestHeaders } from "../plugins/chassis/src/source-auth-sign.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
 import { createServer } from "../src/api/server.ts";
@@ -15,25 +15,26 @@ import { CoreClient } from "./live-slack/core.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const SECRET = "directory-resolve-secret".repeat(3);
 
 describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", async () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
 
   const cap = await mintCapabilityToken(
-    { actorId: "U1", scopeId: "personal:U1", exp: Date.now() + CAPABILITY_TTL_MS },
+    { actorId: "U1", scopeId: personalScope("U1"), exp: Date.now() + CAPABILITY_TTL_MS },
     SECRET,
   );
 
   before(async () => {
     built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "dir-resolve-")), signingSecret: SECRET }));
     server = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
-      scheduler: built.scheduler,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -181,7 +182,8 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
     assert.equal((await post(body)).status, 200);
     assert.equal(await built.directory.channelPrivacy("C_OTHER"), false);
     assert.equal(await built.directory.channelMember("C_LIVE", "U1"), true);
-    assert.equal((await post({ ...body, channelsSyncedAt: 20 })).status, 409);
+    assert.equal((await post({ ...body, channelsSyncedAt: 20, channelMembers: [] })).status, 200);
+    assert.equal(await built.directory.channelMember("C_LIVE", "U1"), true);
     for (const invalid of [
       { ...body, channelsSyncedAt: undefined },
       { ...body, channelMembers: undefined },
@@ -194,10 +196,10 @@ describe("GET /v1/directory/resolve (agent looks up a teammate's mention id)", a
 describe("a deployment without the Slack surface (the directory store is never populated)", async () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
 
   const cap = await mintCapabilityToken(
-    { actorId: "dana@acme.com", scopeId: "personal:dana@acme.com", exp: Date.now() + CAPABILITY_TTL_MS },
+    { actorId: "dana@acme.com", scopeId: personalScope("dana@acme.com"), exp: Date.now() + CAPABILITY_TTL_MS },
     SECRET,
   );
 
@@ -210,13 +212,13 @@ describe("a deployment without the Slack surface (the directory store is never p
       }),
     );
     server = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
-      scheduler: built.scheduler,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
-    const session = await built.sessions.getOrCreateByThread("web:1", "dm", "personal:rex@acme.com");
+    const session = await built.sessions.getOrCreateByThread("web:1", "dm", personalScope("rex@acme.com"));
     await built.sessions.addParticipant(session.id, "rex@acme.com");
   });
 
@@ -253,7 +255,7 @@ describe("a deployment without the Slack surface (the directory store is never p
 
   it("lists a signed-in person under the name stored at sign-in, and finds them by it", async () => {
     const oidc = "oidc:issuer:ruth";
-    const session = await built.sessions.getOrCreateByThread("web:2", "dm", `personal:${oidc}`);
+    const session = await built.sessions.getOrCreateByThread("web:2", "dm", personalScope(oidc));
     await built.sessions.addParticipant(session.id, oidc);
     await built.users.setDisplayName(oidc, "Ruth Founder");
     const res = await get(`/v1/directory/resolve?q=${encodeURIComponent("ruth f")}`);
@@ -300,12 +302,12 @@ describe("qualification membership readiness with signed portal identity enforce
       [{ channelId: "CQA", principalId: "qa@example.com" }],
     );
     const server = createServer(app.app, {
+      ...testCore(app),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       portalIdentitySecret: portalSecret,
       capabilitySecret: "readiness-capability-key-distinct-from-source",
       requireSignedPortalIdentity: true,
-      identity: app.identity,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     const base = `http://localhost:${(server.address() as AddressInfo).port}`;

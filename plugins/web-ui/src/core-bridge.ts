@@ -580,7 +580,8 @@ export type AssistantWork = AssistantMessage & {
   viaTitle?: string;
   viaId?: string;
   personaId?: string;
-  supersedes?: number;
+  supersedes?: number[];
+  runId?: string;
 };
 
 function tagPersona(item: Item, turnRows: AgentMessage[]): void {
@@ -2242,9 +2243,9 @@ export function appendConsumedSteers(messages: AgentMessage[], work: WorkBlock):
   }
 }
 
-const SILENCE_TOOLS = new Set(["finish_silently", "stay_silent"]);
+export const SILENCE_TOOLS = new Set(["finish_silently", "stay_silent"]);
 
-function deliveredSilence(item: Item): boolean {
+export function deliveredSilence(item: Item): boolean {
   if (item.kind !== "ToolResult") return false;
   return (
     (item.tool === "finish_silently" && item.body.silent === true) ||
@@ -2286,6 +2287,7 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
   let posted = false;
   let stoppedShown = false;
   let hiddenPrompt = false;
+  let turn = { id: null as string | null, start: 0 };
   const heldPosts = new Map<string, { text: string; item: Item }>();
   const spillHeldPosts = (): void => {
     for (const held of heldPosts.values()) pending.push(held.item);
@@ -2344,6 +2346,7 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
     }
     const msg: AssistantWork = {
       persisted: true,
+      ...(turn.id !== null ? { runId: turn.id } : {}),
       ...(entrySeqs.length ? { entrySeqs } : {}),
       role: "assistant",
       content: [{ type: "text", text }],
@@ -2369,7 +2372,6 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
     pending = [];
     deliveryFiles = [];
   };
-  let turn = { id: null as string | null, start: 0 };
   for (const e of items) {
     if (e.turnId !== turn.id) turn = { id: e.turnId, start: out.length };
     const text = e.text ?? "";
@@ -2465,8 +2467,8 @@ export function itemsToMessages(items: Item[], model?: Model<Api>): AgentMessage
         }
       }
       tagPersona(e, out.slice(turn.start));
-      if (typeof e.body.supersedes === "number" && out.length > before)
-        (out.at(-1) as AssistantWork).supersedes = e.body.supersedes;
+      if (Array.isArray(e.body.supersedes) && out.length > before)
+        (out.at(-1) as AssistantWork).supersedes = e.body.supersedes.filter(Number.isSafeInteger);
       posted = false;
     } else if (e.kind === "AgentMessage" && e.variant === "files_delivered") {
       appendDeliveryFiles(deliveredFilesFromAttachments(e.body.files as UserAttachment[] | undefined));

@@ -21,70 +21,7 @@ async function sql(text: string, params: unknown[] = []) {
 
 beforeEach(async () => {
   if (!URL) return;
-  await sql("DROP TABLE IF EXISTS qm_schema_migrations, memory_revisions, memory_facts CASCADE");
-});
-
-test("pg memory: notebook snapshots migrate into one row per fact, in order", { skip }, async () => {
-  await sql(`CREATE TABLE memory_revisions(id BIGSERIAL PRIMARY KEY, scope_id TEXT NOT NULL, seq BIGINT NOT NULL,
-    op TEXT NOT NULL, body TEXT NOT NULL, author TEXT, at BIGINT NOT NULL, records JSONB, UNIQUE (scope_id, seq))`);
-  const records = {
-    version: 1,
-    capturesSinceConsolidation: 3,
-    records: [
-      { id: "a", text: "# Memory", sensitivity: "unknown", sources: [], sourceUnknown: true },
-      {
-        id: "b",
-        text: "- (2026-05-01) Prefers terse replies",
-        sensitivity: "sensitive",
-        sources: [{ scopeId: "channel:C1", sessionId: "s1" }, { scopeId: "channel:C1" }],
-        sourceUnknown: false,
-      },
-    ],
-  };
-  await sql(
-    "INSERT INTO memory_revisions(scope_id, seq, op, body, at, records) VALUES ($1, 1, 'capture', '', $2, $3)",
-    ["personal:U1", at, { ...records, records: [] }],
-  );
-  await sql(
-    "INSERT INTO memory_revisions(scope_id, seq, op, body, at, records) VALUES ($1, 2, 'capture', '', $2, $3)",
-    ["personal:U1", at, records],
-  );
-  await sql("INSERT INTO memory_revisions(scope_id, seq, op, body, at) VALUES ($1, 1, 'replace', $2, $3)", [
-    "personal:U2",
-    "# Memory\n\nIntro paragraph\nthat wraps.\n- (2026-04-01) Owns billing\n<!-- consolidated: 2026-04-02 -->\n* Second fact\n## Projects\nWorks on search.\n- (2026-02-30) Bad date\n- (2026-10-01)\n",
-    at,
-  ]);
-
-  const memory = createPostgresMemoryService(URL!);
-  const one = await memory.facts!("personal:U1");
-  assert.deepEqual(
-    one.map(({ text, sensitivity, sources, sourceUnknown }) => ({ text, sensitivity, sources, sourceUnknown })),
-    [{ text: "Prefers terse replies", sensitivity: "sensitive", sources: ["channel:C1"], sourceUnknown: false }],
-  );
-  assert.equal(await memory.read("personal:U1"), "- (2026-05-01) Prefers terse replies");
-  const legacy = await memory.facts!("personal:U2");
-  assert.deepEqual(
-    legacy.map((fact) => fact.text),
-    ["Intro paragraph\nthat wraps.", "Owns billing", "Second fact", "Works on search.", "Bad date"],
-  );
-  assert.equal(legacy[1]!.createdAt, Date.UTC(2026, 3, 1));
-  assert.equal(legacy[2]!.createdAt, at);
-  assert.equal(legacy[4]!.createdAt, at);
-});
-
-test("pg memory: notebooks written before the records column migrate into fact rows", { skip }, async () => {
-  await sql(`CREATE TABLE memory_revisions(id BIGSERIAL PRIMARY KEY, scope_id TEXT NOT NULL, seq BIGINT NOT NULL,
-    op TEXT NOT NULL, body TEXT NOT NULL, author TEXT, at BIGINT NOT NULL, UNIQUE (scope_id, seq))`);
-  await sql("INSERT INTO memory_revisions(scope_id, seq, op, body, at) VALUES ($1, 1, 'replace', $2, $3)", [
-    "personal:U3",
-    "# Memory\n- (2026-04-01) Owns billing\n",
-    at,
-  ]);
-  const memory = createPostgresMemoryService(URL!);
-  assert.deepEqual(
-    (await memory.facts!("personal:U3")).map((fact) => fact.text),
-    ["Owns billing"],
-  );
+  await sql("DELETE FROM memory_facts");
 });
 
 test("pg memory: add, edit and delete by id; a bad id rolls back the whole call", { skip }, async () => {

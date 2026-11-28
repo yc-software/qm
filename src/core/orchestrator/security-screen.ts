@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { ScopeId, TurnRequest } from "../../types.ts";
 import type { TurnOrigin } from "../turn-origin.ts";
 import type { SecurityScreenClassification, SecurityScreenHook } from "../../security/security-screener.ts";
@@ -298,6 +298,8 @@ export function screenedFields(
   };
 }
 
+const contentKey = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+
 async function buildInboundScreen(turn: InboundScreenTurn) {
   const { deps, input, actor, conversation, scopeId, screenInbound, ambientTurn, sessionTurn, swarmBinding } = turn;
   const screened = screenedFields(input, turn.homeChannelName);
@@ -309,6 +311,7 @@ async function buildInboundScreen(turn: InboundScreenTurn) {
     overheard = conversation.kind === "dm" ? [] : selectOverheardToImport(screened.overheard, recorded);
   }
   let hasUnscreenableAttachment = false;
+  const screenedAttachments: string[] = [];
   const attachmentPromptData: Array<{ source: string; content: string }> = [];
   if (screenInbound) {
     for (const attachment of screened.attachments) {
@@ -333,6 +336,7 @@ async function buildInboundScreen(turn: InboundScreenTurn) {
         hasUnscreenableAttachment = true;
         continue;
       }
+      screenedAttachments.push(contentKey(data));
       attachmentPromptData.push({
         source: "attachment",
         content: data.toString("utf8"),
@@ -375,7 +379,7 @@ async function buildInboundScreen(turn: InboundScreenTurn) {
         verifiedSessionMessage,
       })
     : [];
-  return { hasUnscreenableAttachment, externalPromptData, screenPayloads };
+  return { hasUnscreenableAttachment, screenedAttachments, externalPromptData, screenPayloads };
 }
 
 export async function screenInboundInput(turn: InboundScreenTurn) {
@@ -393,7 +397,8 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
     audit,
     approvalGrantsFor,
   } = turn;
-  let flaggedScreenedInput: { reason: string; sources: string[]; onceOnly: boolean } | undefined;
+  let flaggedScreenedInput:
+    { reason: string; sources: string[]; onceOnly: boolean; classifiedAttachments?: string[] } | undefined;
   let inputUnscreened = false;
   if (replaysHeldInput && enforceScreen) {
     const { screenPayloads, hasUnscreenableAttachment } = await buildInboundScreen({ ...turn, screenInbound: true });
@@ -407,14 +412,21 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
       )
       .catch(swallowAs("orchestrator: observed inbound screen", undefined));
   } else if (screenInbound) {
-    const { hasUnscreenableAttachment, externalPromptData, screenPayloads } = await buildInboundScreen(turn);
+    const { hasUnscreenableAttachment, screenedAttachments, externalPromptData, screenPayloads } =
+      await buildInboundScreen(turn);
     if (!screenPayloads || screenPayloads.length || hasUnscreenableAttachment) {
       const canScreenText = !!screenPayloads?.length && (!!deps.securityScreener || !!deps.agent.screenSecurity);
       let verdict = screenPayloads ? undefined : oversizeVerdict();
+      const classify = classifyAs({ hook: "user_input", surface: input.surface }, recordScreenRequest);
+      let classified = 0;
       if (canScreenText && screenPayloads)
         verdict = await screenChunks(
           screenPayloads,
-          classifyAs({ hook: "user_input", surface: input.surface }, recordScreenRequest),
+          async (chunk) => {
+            const chunkVerdict = await classify(chunk);
+            if (cleanVerdict(chunkVerdict) || chunkVerdict?.decision === "strict") classified += 1;
+            return chunkVerdict;
+          },
           { batch: 4 },
         );
       let unscreenableCause: "unscreenable-attachment" | "no-screener" | undefined;
@@ -426,6 +438,9 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
           reason: verdict.reason ?? "strict security screen verdict",
           sources,
           onceOnly: verdict.unscreened === true,
+          ...(classified === screenPayloads?.length && screenedAttachments.length
+            ? { classifiedAttachments: screenedAttachments }
+            : {}),
         };
         audit(flaggedAudit(input.surface ?? "unknown", "pending_approval", flaggedScreenedInput.reason, sources));
       } else if (unscreenableCause || verdict?.unscreened) {
@@ -493,7 +508,7 @@ export function createSkillScreen(turn: SkillScreenTurn) {
   } = turn;
   const carriedSkillScreens = new Map<string, Promise<boolean>>();
   const visibleSkillsForTurn = async (sources?: readonly string[]): Promise<SkillResolution[]> => {
-    const current = await tracePhase("turn.skills", () => context.listSkills(sources), { counts: countSkills });
+    const current = await tracePhase("turn.skills", () => context.listSkills(sources), { attributes: countSkills });
     const resolved = filterConnectorSkills(current.skills, configuredProviders, appConnections);
     const allowed: SkillResolution[] = [];
     for (const entry of resolved) {
@@ -684,11 +699,12 @@ export function createToolResultScreen(turn: ToolResultScreenTurn) {
 }
 
 export function createInboundFileScreen(turn: Parameters<typeof createDocumentScreen>[0]) {
-  const { session, securityPolicy, enforceScreen, classifyAs, turnAbort, audit } = turn;
+  const { session, securityPolicy, enforceScreen, classifyAs, turnAbort, audit, released } = turn;
   return (requestText: string): Parameters<typeof materializeInbound>[3] =>
     securityPolicy.screening === "off"
       ? undefined
-      : async ({ content, name, mimetype }) => {
+      : async ({ content, name, mimetype, bytes }) => {
+          if (released.size && released.has(contentKey(bytes))) return { decision: "auto" };
           const payload = JSON.stringify({ name, mimetype, content });
           let verdict = enforceScreen ? oversizeVerdict() : unscreenedVerdict();
           if (payload.length <= MAX_DOCUMENT_TEXT_CHARS)
@@ -715,8 +731,9 @@ export function createDocumentScreen(turn: {
   classifyAs: ClassifyAs;
   turnAbort: AbortController;
   audit: InboundScreenTurn["audit"];
+  released: ReadonlySet<string>;
 }) {
-  const { deps, session, securityPolicy, enforceScreen, classifyAs, turnAbort, audit } = turn;
+  const { deps, session, securityPolicy, enforceScreen, classifyAs, turnAbort, audit, released } = turn;
   return async (
     documentInputs: Awaited<ReturnType<typeof loadDocumentInputs>>,
     requestText: string,
@@ -724,7 +741,10 @@ export function createDocumentScreen(turn: {
     let documentsUnscreened = false;
     if (securityPolicy.screening !== "off") {
       for (const document of documentInputs.documents.slice()) {
-        documentsUnscreened ||= !isTextDocument(document);
+        const textDocument = isTextDocument(document);
+        documentsUnscreened ||= !textDocument;
+        if (textDocument && released.size && released.has(contentKey(Buffer.from(document.dataBase64, "base64"))))
+          continue;
         if (!(deps.securityScreener || deps.agent.screenSecurity)) {
           documentsUnscreened = true;
           continue;

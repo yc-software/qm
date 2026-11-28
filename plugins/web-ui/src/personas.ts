@@ -110,8 +110,12 @@ function setPersonaList(list: PersonaView[]): void {
   renderList();
 }
 
+export function personaById(personaId: string | undefined): PersonaView | undefined {
+  return personaId ? personasState.list.find((p) => p.id === personaId) : undefined;
+}
+
 export function personaGlyph(personaId: string, size: number): TemplateResult {
-  return personaIconTpl(personasState.list.find((p) => p.id === personaId)?.icon, size);
+  return personaIconTpl(personaById(personaId)?.icon, size);
 }
 
 export function personaSeeds(): Array<{ scopeId: string; name: string; kind: "persona" }> {
@@ -139,12 +143,12 @@ export function viewPersona(personaId: string, focusEditor = false): void {
 }
 
 export function personaEditable(personaId: string): boolean {
-  const persona = personasState.list.find((p) => p.id === personaId);
+  const persona = personaById(personaId);
   return persona ? canEditPersona(persona.role) : false;
 }
 
 export async function chatWithPersonaId(personaId: string): Promise<void> {
-  const persona = personasState.list.find((p) => p.id === personaId);
+  const persona = personaById(personaId);
   if (persona) await chatWithPersona(persona);
 }
 
@@ -246,7 +250,7 @@ function drawPersonasPage(): void {
 }
 
 function rowAction(label: string, glyph: Parameters<typeof icon>[0], run: () => void): TemplateResult {
-  return html`<button class="btn persona-action" type="button" ?disabled=${busyId !== null} @click=${run}>
+  return html`<button class="btn persona-action" type="button" @click=${run}>
     ${icon(glyph, 14)}<span>${label}</span>
   </button>`;
 }
@@ -285,7 +289,6 @@ function personaRow(persona: PersonaView): TemplateResult {
 async function busy(persona: PersonaView, work: () => Promise<void>, fallback: string): Promise<void> {
   if (busyId) return;
   busyId = persona.id;
-  if (pageHost?.isConnected) drawPersonasPage();
   try {
     await work();
   } catch (e) {
@@ -298,7 +301,7 @@ async function busy(persona: PersonaView, work: () => Promise<void>, fallback: s
 
 async function startPersonaChat(personaId: string): Promise<CoreSession> {
   await ensureContexts();
-  const scopeId = personalScopeId() ?? `personal:${appState.me?.user ?? ""}`;
+  const scopeId = personalScopeId() ?? appState.me?.personalScope ?? "";
   const { session } = await api<{ session: CoreSession }>("/api/sessions", {
     method: "POST",
     body: JSON.stringify({ scopeId }),
@@ -366,6 +369,16 @@ async function fetchPersona(id: string): Promise<PersonaDetail> {
 }
 
 async function openPersona(id: string, flash = "", opts: { push?: boolean } = {}): Promise<void> {
+  if (appState.currentView !== "personas") return;
+  const host = paneHost(id);
+  if (host && !host.firstChild)
+    render(
+      html`<div class="resource-detail persona-detail">
+        ${listBackLink("Bots", backToList)}
+        <p class="hint" role="status">Loading…</p>
+      </div>`,
+      host,
+    );
   const seq = ++viewSeq;
   try {
     const persona = await fetchPersona(id);
@@ -389,7 +402,7 @@ function granteeLabel(scopeId: string): string {
   return scopeId;
 }
 
-const isMe = (grant: Pick<PersonaGrant, "scopeId">): boolean => grant.scopeId === `personal:${appState.me?.user ?? ""}`;
+const isMe = (grant: Pick<PersonaGrant, "scopeId">): boolean => grant.scopeId === appState.me?.personalScope;
 
 function grantLabel(grant: PersonaGrant): string {
   if (isMe(grant)) return "You";
@@ -889,7 +902,7 @@ function granteePickerTpl(persona: PersonaDetail, kind: PickerKind): TemplateRes
   const current = picker;
   if (current?.personaId !== persona.id || current.kind !== kind || !canSharePersona(persona.role)) return nothing;
   const granted = new Set(persona.access.map((grant) => grant.scopeId));
-  const people = current.people.filter((person) => !granted.has(`personal:${person.principalId}`));
+  const people = current.people.filter((person) => !granted.has(person.scopeId));
   const channels = current.channels.filter((channel) => !granted.has(channel.scopeId));
   const orgScope = `org:${appState.me?.org ?? ""}`;
   const saving = busyId !== null;
@@ -937,11 +950,7 @@ function granteePickerTpl(persona: PersonaDetail, kind: PickerKind): TemplateRes
     </div>
     ${
       kind === "people"
-        ? peopleResults(
-            people,
-            saving,
-            (person) => void addGrantee(persona, `personal:${person.principalId}`, person.displayName),
-          )
+        ? peopleResults(people, saving, (person) => void addGrantee(persona, person.scopeId, person.displayName))
         : html`<div class="project-member-results">
             ${channels.map(
               (channel) =>

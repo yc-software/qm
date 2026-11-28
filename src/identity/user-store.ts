@@ -1,15 +1,14 @@
 import type { PoolClient } from "pg";
-import { createPgPool, withPgTransaction, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
-import { DIRECTORY_MIGRATIONS } from "../directory/postgres-directory-store.ts";
-import { SESSION_MIGRATIONS } from "../sessions/session-schema.ts";
+import { createPgPool, withPgTransaction } from "../persistence/pg-pool.ts";
 import { authoredUserTurn, msOf, TENANT } from "../sessions/items.ts";
 import { foldPrincipalId } from "../directory/person.ts";
 import { orgId } from "../config.ts";
 import type { DirectoryMember } from "../directory/directory-store.ts";
 import { APP_IS_NOT_A_PERSON, PrincipalLinkError } from "./principal-links.ts";
-import { PERSONA_MIGRATIONS } from "../personas/persona-schema.ts";
-import { PERSONA_TENANCY } from "../personas/persona-tenancy.ts";
-import { fold, tenantedUsers, ts, USERS_SCHEMA } from "./user-tenancy.ts";
+import { fold, ts } from "./user-tenancy.ts";
+import { foundingUserId } from "../directory/person-refs.ts";
+import { movePersonalScope } from "./personal-scopes.ts";
+import { scopeId } from "../types.ts";
 import { markBotWork, unlessSlackListsAPerson } from "../triggers/trigger-store.ts";
 import { holdBotLoopShips } from "../loops/loop-store.ts";
 
@@ -31,6 +30,7 @@ export interface UserRecord {
 }
 
 export interface UserLink {
+  userId: string;
   principalId: string;
   canonicalId: string;
   evidence: string;
@@ -50,7 +50,8 @@ export interface UserActivity {
 
 export interface UserLinkStore {
   links(): Promise<UserLink[]>;
-  link(link: UserLink): Promise<UserLink>;
+  ensure(alias: string): Promise<string>;
+  link(link: Omit<UserLink, "userId">): Promise<UserLink>;
   unlink(aliasId: string): Promise<UserLink | null>;
 }
 
@@ -89,269 +90,12 @@ export function cleanDisplayName(raw: unknown): string | undefined {
 
 const userOf = (expr: string): string => `(SELECT l.user_id FROM user_links l WHERE l.alias_id = ${expr})`;
 
-const ensureUsers = (aliases: string): string => `
-  INSERT INTO users(primary_alias)
-    SELECT DISTINCT s.a FROM (${aliases}) AS s(a)
-     WHERE coalesce(s.a, '') <> '' AND NOT EXISTS (SELECT 1 FROM user_links l WHERE l.alias_id = s.a)
-  ON CONFLICT (primary_alias) DO NOTHING;
-  INSERT INTO user_links(alias_id, user_id, evidence, created_at)
-    SELECT u.primary_alias, u.id, 'primary', now() FROM users u
-     WHERE NOT EXISTS (SELECT 1 FROM user_links l WHERE l.alias_id = u.primary_alias);`;
-
-const knownPerson = (expr: string): string =>
-  `(EXISTS (SELECT 1 FROM user_links k WHERE k.alias_id = ${expr}) OR ${expr} IN (SELECT alias FROM admins)
-    OR ${expr} LIKE '%@%' OR ${expr} LIKE 'oidc:%')`;
-
-const TURN_AUTHORS = `
-  CREATE TEMP TABLE turn_authors ON COMMIT DROP AS
-  SELECT ${fold("e.author")} AS author, MIN(e.created_at) AS at
-    FROM items e
-    JOIN sessions s ON s.id = e.session_id
-   WHERE e.author IS NOT NULL AND e.author NOT LIKE 'system:%'
-     AND e.kind IN ('UserMessage', 'SteeringMessage')
-     AND NOT (e.body @> '{"overheard":true}')
-     AND s.origin = 'conversation' AND s.parent_session_id IS NULL
-     AND coalesce(s.spawn_meta::jsonb -> 'surfaceOrigin' ->> 'audience', '') <> 'external'
-     AND coalesce(s.spawn_meta::jsonb -> 'origin' ->> 'kind', '') <> 'automation'
-   GROUP BY 1;`;
-
-const seenAs = (rows: string, source: string): string => `
-  UPDATE users u SET first_seen_at = s.at, source = '${source}'
-    FROM (SELECT ${userOf("r.alias")} AS id, MIN(r.at) AS at FROM (${rows}) AS r(alias, at) GROUP BY 1) s
-   WHERE u.id = s.id AND (u.first_seen_at IS NULL OR s.at < u.first_seen_at);`;
-
-export const USER_MIGRATIONS: PgMigrationDefinition[] = [
-  {
-    id: "users/v2/0001-uuid-users",
-    statements: [
-      `DO $$
-       BEGIN
-         CREATE TEMP TABLE staged_users(alias TEXT, kind TEXT, first_seen_at TIMESTAMPTZ, source TEXT,
-                                        offboarded_at TIMESTAMPTZ, offboarded_by TEXT) ON COMMIT DROP;
-         CREATE TEMP TABLE staged_links(alias TEXT, canonical TEXT, evidence TEXT, linked_by TEXT,
-                                        created_at TIMESTAMPTZ) ON COMMIT DROP;
-         IF EXISTS (SELECT 1 FROM information_schema.columns
-                     WHERE table_schema = current_schema() AND table_name = 'users'
-                       AND column_name = 'id' AND data_type = 'text') THEN
-           INSERT INTO staged_users
-             SELECT j->>'id', coalesce(j->>'kind', 'person'), (j->>'first_seen_at')::timestamptz, j->>'source',
-                    (j->>'offboarded_at')::timestamptz, j->>'offboarded_by'
-               FROM (SELECT to_jsonb(u) AS j FROM users u) x;
-           IF to_regclass('user_links') IS NOT NULL THEN
-             INSERT INTO staged_links
-               SELECT j->>'alias_id', j->>'user_id', j->>'evidence', j->>'linked_by', (j->>'created_at')::timestamptz
-                 FROM (SELECT to_jsonb(l) AS j FROM user_links l) x;
-             DROP TABLE user_links;
-           END IF;
-           DROP TABLE users;
-         END IF;
-         IF to_regclass('principal_links') IS NOT NULL THEN
-           INSERT INTO staged_links
-             SELECT ${fold("id")}, ${fold("json->>'canonicalId'")}, coalesce(json->>'evidence', ''),
-                    coalesce(json->>'linkedBy', ''),
-                    to_timestamp(coalesce((json->>'createdAt')::double precision, 0) / 1000)
-               FROM principal_links;
-           DROP TABLE principal_links;
-           IF to_regclass('durable_map_versions') IS NOT NULL THEN
-             DELETE FROM durable_map_versions WHERE tbl = 'principal_links';
-           END IF;
-         END IF;
-
-         ${USERS_SCHEMA}
-
-         DELETE FROM staged_links WHERE coalesce(alias, '') = '' OR coalesce(canonical, '') = '' OR alias = canonical;
-         ${ensureUsers("SELECT canonical FROM staged_links")}
-         INSERT INTO user_links(alias_id, user_id, evidence, created_at)
-           SELECT DISTINCT ON (s.alias) s.alias, ${userOf("s.canonical")}, s.evidence, s.created_at
-             FROM staged_links s
-            ORDER BY s.alias, s.created_at
-         ON CONFLICT (alias_id) DO NOTHING;
-
-         ${ensureUsers("SELECT alias FROM staged_users")}
-         UPDATE users u SET kind = 'app' FROM staged_users s WHERE u.id = ${userOf("s.alias")} AND s.kind = 'app';
-         ${seenAs("SELECT alias, first_seen_at FROM staged_users WHERE first_seen_at IS NOT NULL AND source = 'turn'", "turn")}
-         ${seenAs("SELECT alias, first_seen_at FROM staged_users WHERE first_seen_at IS NOT NULL AND source = 'invite'", "invite")}
-         ${seenAs("SELECT alias, first_seen_at FROM staged_users WHERE first_seen_at IS NOT NULL AND source = 'admin'", "admin")}
-         CREATE TEMP TABLE admins(alias TEXT) ON COMMIT DROP;
-         IF to_regclass('admin_grants') IS NOT NULL THEN
-           INSERT INTO admins SELECT ${fold("principal_id")} FROM admin_grants;
-         END IF;
-         UPDATE staged_links SET linked_by = ${fold("linked_by")};
-         UPDATE staged_users SET offboarded_by = ${fold("offboarded_by")};
-         ${ensureUsers(`SELECT linked_by FROM staged_links WHERE ${knownPerson("staged_links.linked_by")}`)}
-         ${ensureUsers(`SELECT offboarded_by FROM staged_users WHERE offboarded_at IS NOT NULL AND ${knownPerson("staged_users.offboarded_by")}`)}
-         UPDATE user_links l SET linked_by = ${userOf("s.linked_by")},
-                evidence = CASE WHEN ${userOf("s.linked_by")} IS NULL
-                                THEN l.evidence || ' (linked by ' || s.linked_by || ')' ELSE l.evidence END
-           FROM staged_links s
-          WHERE s.alias = l.alias_id AND l.evidence <> 'primary' AND coalesce(s.linked_by, '') NOT IN ('', 'migration');
-         UPDATE users u SET offboarded_at = s.offboarded_at, offboarded_by = ${userOf("s.offboarded_by")}
-           FROM staged_users s
-          WHERE u.id = ${userOf("s.alias")} AND s.offboarded_at IS NOT NULL
-            AND (u.offboarded_at IS NULL OR s.offboarded_at < u.offboarded_at);
-       END $$`,
-    ],
-  },
-  {
-    id: "users/v2/0002-history",
-    statements: [
-      `DO $$
-       BEGIN
-         IF to_regclass('items') IS NULL OR to_regclass('sessions') IS NULL THEN RETURN; END IF;
-         ${TURN_AUTHORS}
-         IF to_regclass('directory_members') IS NOT NULL THEN
-           CREATE TEMP TABLE slack_authors ON COMMIT DROP AS
-           SELECT DISTINCT ON (a.author) a.author, ${fold("d.principal_id")} AS person
-             FROM turn_authors a
-             JOIN directory_members d ON d.slack_id = a.author AND ${fold("d.principal_id")} <> a.author
-            WHERE NOT EXISTS (SELECT 1 FROM user_links l WHERE l.alias_id = a.author)
-            ORDER BY a.author, d.principal_id;
-           ${ensureUsers("SELECT person FROM slack_authors")}
-           INSERT INTO user_links(alias_id, user_id, evidence, created_at)
-             SELECT author, ${userOf("person")}, 'slack directory: slack_id→principal_id', now() FROM slack_authors
-           ON CONFLICT (alias_id) DO NOTHING;
-         END IF;
-         ${ensureUsers("SELECT author FROM turn_authors")}
-         ${seenAs("SELECT author, at FROM turn_authors", "turn")}
-       END $$`,
-    ],
-  },
-  {
-    id: "users/v2/0003-grants-and-invites",
-    statements: [
-      `DO $$
-       BEGIN
-         IF to_regclass('admin_grants') IS NOT NULL THEN
-           CREATE TEMP TABLE granted ON COMMIT DROP AS
-             SELECT ${fold("principal_id")} AS alias,
-                    CASE WHEN coalesce(created_at, 0) > 0 THEN ${ts("created_at")} ELSE now() END AS at
-               FROM admin_grants;
-           ${ensureUsers("SELECT alias FROM granted")}
-           UPDATE users u SET first_seen_at = s.at, source = 'admin'
-             FROM (SELECT ${userOf("alias")} AS id, MIN(at) AS at FROM granted GROUP BY 1) s
-            WHERE u.id = s.id AND u.first_seen_at IS NULL;
-         END IF;
-         IF to_regclass('external_members') IS NOT NULL THEN
-           CREATE TEMP TABLE invited ON COMMIT DROP AS
-             SELECT ${fold("json->>'email'")} AS alias, ${ts("(json->>'createdAt')::bigint")} AS at
-               FROM external_members
-              WHERE json->>'kind' = 'teammate' AND coalesce(json->>'email', '') <> '';
-           ${ensureUsers("SELECT alias FROM invited")}
-           UPDATE users u SET first_seen_at = s.at, source = 'invite'
-             FROM (SELECT ${userOf("alias")} AS id, MIN(at) AS at FROM invited GROUP BY 1) s
-            WHERE u.id = s.id AND u.first_seen_at IS NULL;
-         END IF;
-       END $$`,
-    ],
-  },
-  ...PERSONA_MIGRATIONS,
-];
-
-const TENANTED = tenantedUsers(USER_MIGRATIONS.filter((migration) => !PERSONA_MIGRATIONS.includes(migration)));
-
-export const USER_SCHEMA_MIGRATIONS: PgMigrationDefinition[] = [
-  ...TENANTED.before,
-  ...USER_MIGRATIONS,
-  ...TENANTED.after,
-  ...PERSONA_TENANCY,
-  {
-    id: "users/v2/0006-display-name",
-    statements: [
-      `ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name TEXT
-         CHECK (display_name IS NULL OR (display_name <> '' AND char_length(display_name) <= ${DISPLAY_NAME_MAX}))`,
-    ],
-  },
-].sort((a, b) => Number(a.id > b.id) - Number(a.id < b.id));
-
-export const SPLIT_LINKED_BOTS_MIGRATION = {
-  id: "users/v2/0009-split-linked-bots",
-  statements: [
-    `DO $$
-    BEGIN
-      IF to_regclass('users') IS NULL OR to_regclass('user_links') IS NULL OR to_regclass('runs') IS NULL
-         OR to_regclass('audit_log') IS NULL OR to_regclass('directory_members') IS NULL THEN
-        RETURN;
-      END IF;
-      CREATE TEMP TABLE app_sign_ins ON COMMIT DROP AS
-        SELECT l.tenant_id, l.user_id, l.alias_id, l.evidence, l.linked_by, l.alias_id = u.primary_alias AS is_primary
-          FROM users u JOIN user_links l ON l.tenant_id = u.tenant_id AND l.user_id = u.id
-         WHERE u.kind = 'app';
-      IF NOT EXISTS (SELECT 1 FROM app_sign_ins) THEN
-        RETURN;
-      END IF;
-      CREATE TEMP TABLE app_signals ON COMMIT DROP AS
-        SELECT tenant_id, user_id, alias_id, evidence, linked_by, is_primary, first_spoke,
-               CASE WHEN bot AND person THEN 'bot and person' WHEN bot THEN 'bot' WHEN person THEN 'person' ELSE 'none'
-               END AS signal
-          FROM (SELECT s.tenant_id, s.user_id, s.alias_id, s.evidence, s.linked_by, s.is_primary,
-                       min(t.created_at) AS first_spoke, count(t.speaker) > 0 AS bot,
-                       EXISTS (SELECT 1 FROM directory_members m
-                                WHERE m.tenant_id = s.tenant_id AND m.slack_id IS NOT NULL
-                                  AND ${fold("m.principal_id")} = s.alias_id)
-                       OR EXISTS (SELECT 1 FROM directory_members m
-                                   WHERE m.tenant_id = s.tenant_id AND m.slack_id = s.alias_id) AS person
-                  FROM app_sign_ins s
-                  LEFT JOIN (SELECT r.tenant_id, r.created_at, v.speaker
-                               FROM runs r
-                              CROSS JOIN LATERAL (
-                                    SELECT j #>> '{surfaceOrigin,author,id}' AS author
-                                      FROM (SELECT CASE WHEN pg_input_is_valid(r.request, 'jsonb')
-                                                        THEN r.request::jsonb END AS j OFFSET 0) parsed
-                                     WHERE j @> '{"botActor": true, "surfaceOrigin": {"author": {"surface": "slack"}}}'
-                                       AND NOT j @> '{"surfaceOrigin": {"audience": "external"}}'
-                                       AND (j #>> '{origin,kind}' IN ('human', 'direct')
-                                            OR j @> '{"origin": {"kind": "ambient", "live": true}}')
-                                       AND coalesce(j ->> 'sessionSenderId', '') = ''
-                                       AND coalesce(j ->> 'delegatingRunId', '') = ''
-                                    OFFSET 0) p
-                               LEFT JOIN directory_members d ON d.tenant_id = r.tenant_id AND d.slack_id = p.author
-                              CROSS JOIN LATERAL (VALUES (${fold("p.author")}), (${fold("d.principal_id")})) v(speaker)) t
-                    ON t.tenant_id = s.tenant_id AND t.speaker = s.alias_id
-                 GROUP BY 1, 2, 3, 4, 5, 6) g;
-      CREATE TEMP TABLE person_users ON COMMIT DROP AS
-        SELECT tenant_id, user_id FROM app_signals GROUP BY 1, 2
-        HAVING bool_and(signal IN ('bot', 'person')) AND bool_or(is_primary AND signal = 'person');
-      CREATE TEMP TABLE mixed_splits ON COMMIT DROP AS
-        SELECT tenant_id, user_id, alias_id, evidence, linked_by, first_spoke FROM app_signals
-         WHERE signal = 'bot' AND NOT is_primary
-           AND (tenant_id, user_id) IN (SELECT tenant_id, user_id FROM app_signals WHERE signal <> 'bot');
-      INSERT INTO users(tenant_id, primary_alias, kind, first_seen_at, source)
-        SELECT tenant_id, alias_id, 'app', ${ts("first_spoke")}, 'turn' FROM mixed_splits;
-      UPDATE user_links l SET user_id = n.id, evidence = 'primary', linked_by = NULL
-        FROM mixed_splits s JOIN users n ON n.tenant_id = s.tenant_id AND n.primary_alias = s.alias_id
-       WHERE l.tenant_id = s.tenant_id AND l.alias_id = s.alias_id;
-      UPDATE users u SET kind = 'person' FROM person_users p WHERE u.tenant_id = p.tenant_id AND u.id = p.user_id;
-      INSERT INTO audit_log (tenant_id, at, principal_id, action, resource, scope_label, detail)
-      SELECT tenant_id, ${msOf("now()")}, 'system:migration', action, user_id::text, 'users', detail::text
-        FROM (SELECT p.tenant_id, p.user_id, 'user_sign_in_split' AS action,
-                     jsonb_build_object('movedSignIns', coalesce(jsonb_agg(
-                       jsonb_build_object('alias', s.alias_id, 'userId', n.id, 'evidence', s.evidence, 'linkedBy', s.linked_by)
-                       ORDER BY s.alias_id) FILTER (WHERE s.alias_id IS NOT NULL), '[]')) AS detail
-                FROM (SELECT tenant_id, user_id FROM person_users UNION SELECT tenant_id, user_id FROM mixed_splits) p
-                LEFT JOIN mixed_splits s ON s.tenant_id = p.tenant_id AND s.user_id = p.user_id
-                LEFT JOIN users n ON n.tenant_id = s.tenant_id AND n.primary_alias = s.alias_id
-               GROUP BY 1, 2
-              UNION ALL
-              SELECT tenant_id, user_id, 'user_sign_in_review',
-                     jsonb_build_object(
-                       'reason', CASE WHEN bool_or(signal NOT IN ('bot', 'person')) THEN 'some sign-ins have no certain signal'
-                                      ELSE 'the primary sign-in is not a person' END,
-                       'signIns', jsonb_agg(jsonb_build_object('alias', alias_id, 'evidence', evidence, 'signal', signal)
-                                            ORDER BY is_primary DESC, alias_id))
-                FROM app_signals
-               WHERE (tenant_id, user_id) NOT IN (SELECT tenant_id, user_id FROM person_users)
-               GROUP BY 1, 2
-              HAVING count(*) > 1 AND NOT bool_and(signal = 'bot')) entries;
-    END $$`,
-  ],
-};
-
 const COLUMNS = `u.id, u.primary_alias, u.kind,
   ARRAY(SELECT a.alias_id FROM user_links a WHERE a.user_id = u.id
          ORDER BY a.alias_id = u.primary_alias DESC, a.created_at, a.alias_id) AS aliases, ${msOf("u.first_seen_at")} AS first_seen_at, u.source,
   ${msOf("u.offboarded_at")} AS offboarded_at,
   (SELECT b.primary_alias FROM users b WHERE b.id = u.offboarded_by) AS offboarded_by, u.display_name`;
-const LINK_SELECT = `SELECT l.alias_id, u.primary_alias AS canonical_id, l.evidence,
+const LINK_SELECT = `SELECT l.user_id, l.alias_id, u.primary_alias AS canonical_id, l.evidence,
     coalesce((SELECT b.primary_alias FROM users b WHERE b.id = l.linked_by), '') AS linked_by,
     ${msOf("l.created_at")} AS created_at
   FROM user_links l JOIN users u ON u.id = l.user_id`;
@@ -371,6 +115,7 @@ function toRecord(r: Record<string, unknown>): UserRecord {
 
 function toLink(r: Record<string, unknown>): UserLink {
   return {
+    userId: r.user_id as string,
     principalId: r.alias_id as string,
     canonicalId: r.canonical_id as string,
     evidence: r.evidence as string,
@@ -432,12 +177,10 @@ export async function ensureUserIn(client: PoolClient, alias: string): Promise<s
   const q = onClient(client);
   const found = await findUser(q, alias);
   if (found) return found;
-  const created = (
-    await q(
-      `INSERT INTO users(primary_alias) VALUES ($1) ON CONFLICT (tenant_id, primary_alias) DO NOTHING RETURNING id`,
-      [alias],
-    )
-  )[0]?.id as string | undefined;
+  const insert = `INSERT INTO users(id, primary_alias) VALUES (coalesce($2::uuid, gen_random_uuid()), $1)
+                  ON CONFLICT DO NOTHING RETURNING id`;
+  const created = ((await q(insert, [alias, foundingUserId(alias)]))[0]?.id ??
+    (await q(insert, [alias, null]))[0]?.id) as string | undefined;
   if (created) {
     const linked = await q(
       `INSERT INTO user_links(alias_id, user_id, evidence, created_at) VALUES ($1, $2, 'primary', now())
@@ -483,7 +226,7 @@ async function findBotSignIns(q: Query, aliases: readonly string[]): Promise<str
   return rows.map((r) => r.alias as string);
 }
 
-async function linkInTransaction(client: PoolClient, link: UserLink): Promise<UserLink> {
+async function linkInTransaction(client: PoolClient, link: Omit<UserLink, "userId">): Promise<UserLink> {
   const q = onClient(client);
   await q(`LOCK TABLE user_links IN SHARE ROW EXCLUSIVE MODE`);
   if ((await findBotSignIns(q, [link.principalId, link.canonicalId])).length)
@@ -519,6 +262,7 @@ async function linkInTransaction(client: PoolClient, link: UserLink): Promise<Us
     await q(`UPDATE persona_access SET granted_by = $1 WHERE granted_by = $2`, [target, source]);
     await q(`UPDATE persona_versions SET edited_by = $1 WHERE edited_by = $2`, [target, source]);
     await q(`DELETE FROM users WHERE id = $1`, [source]);
+    await movePersonalScope(client, source, scopeId("personal", target));
   }
   const linkedBy = link.linkedBy ? await ensureUserIn(client, foldPrincipalId(link.linkedBy)) : null;
   await q(
@@ -531,11 +275,7 @@ async function linkInTransaction(client: PoolClient, link: UserLink): Promise<Us
 }
 
 export function createPostgresUserStore(connectionString: string): UserStore {
-  const pg = createPgPool(connectionString, [
-    ...DIRECTORY_MIGRATIONS,
-    ...SESSION_MIGRATIONS,
-    ...USER_SCHEMA_MIGRATIONS,
-  ]);
+  const pg = createPgPool(connectionString);
   const { q } = pg;
   const transaction = async <T>(fn: (client: PoolClient) => Promise<T>): Promise<T> =>
     withPgTransaction(await pg.pool(), fn);
@@ -672,8 +412,9 @@ export function createPostgresUserStore(connectionString: string): UserStore {
       );
       return rows[0] ? toRecord(rows[0]) : null;
     },
+    ensure: ensureUser,
     async links() {
-      return (await q(`${LINK_SELECT} WHERE l.alias_id <> u.primary_alias`)).map(toLink);
+      return (await q(LINK_SELECT)).map(toLink);
     },
     async link(link) {
       return transaction((client) => linkInTransaction(client, link));

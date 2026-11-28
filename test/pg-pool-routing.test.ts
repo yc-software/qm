@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts";
-import { createPostgresMap, processLevelMap } from "../src/persistence/durable-map.ts";
+import { createPostgresMap } from "../src/persistence/durable-map.ts";
 import { createPgPool, configurePgPooling } from "../src/persistence/pg-pool.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
 
@@ -76,14 +76,9 @@ test("pooled credentials cannot silently change company identity", { skip }, () 
 test("one session slot can hold a lock while a transaction uses the query pool", { skip }, async () => {
   const a = createPgPool(direct!);
   const lock = createPostgresAdvisoryLock(a);
-  const map = createPostgresMap<{ n: number }>(
-    a,
-    "pgbouncer_lock_write_test",
-    [],
-    [],
-    [processLevelMap("pgbouncer_lock_write_test")],
-  );
+  const map = createPostgresMap<{ n: number }>(a, "pgbouncer_lock_write_test", [], { tenanted: false });
   try {
+    await a.q("CREATE TABLE IF NOT EXISTS pgbouncer_lock_write_test (id TEXT PRIMARY KEY, json JSONB NOT NULL)");
     await lock.withLock("pgbouncer-write", async () => {
       await map.put("one", { n: 42 });
       assert.deepEqual(await map.get("one"), { n: 42 });
@@ -116,27 +111,6 @@ test("closing during initialization rejects pending queries and leaves other sto
     assert.equal((await b.q("SELECT 42 AS answer"))[0]!.answer, 42);
   } finally {
     await b.close();
-  }
-});
-
-test("dynamic migration waits for its prerequisite schema on a fresh database", { skip }, async () => {
-  const a = createPgPool(direct!, [
-    {
-      id: "pool-routing/prerequisite/0001",
-      statements: ["CREATE TABLE IF NOT EXISTS pool_routing_prerequisite(id INTEGER PRIMARY KEY)"],
-    },
-  ]);
-  try {
-    await a.migrate({
-      id: "pool-routing/prerequisite/0002",
-      statements: ["ALTER TABLE pool_routing_prerequisite ADD COLUMN IF NOT EXISTS value TEXT"],
-    });
-    await a.q(
-      "INSERT INTO pool_routing_prerequisite(id, value) VALUES (1, 'ready') ON CONFLICT (id) DO UPDATE SET value=EXCLUDED.value",
-    );
-    assert.equal((await a.q("SELECT value FROM pool_routing_prerequisite WHERE id=1"))[0]!.value, "ready");
-  } finally {
-    await a.close();
   }
 });
 

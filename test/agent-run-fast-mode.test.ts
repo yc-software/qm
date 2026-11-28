@@ -17,6 +17,7 @@ import {
   FAST_COST_MULTIPLIER,
   wantsFastMode,
 } from "../src/model/model-runtime.ts";
+import { personalScope } from "../src/types.ts";
 
 test("modelSupportsFastMode allows only the documented direct Opus ids", () => {
   for (const id of ["claude-opus-5-5", "claude-opus-5", "claude-opus-4-8"]) {
@@ -375,7 +376,7 @@ async function runTurn(
       systemPrompt: "BASE",
       history: [],
       tools: {} as AgentTurnInput["tools"],
-      scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
+      scopeLabel: personalScope("tester") as AgentTurnInput["scopeLabel"],
       orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
       runtime: { modelId, fastMode },
       ...(!gateway && modelId === ASTRA.id ? { providerKeys: { openai: "sk-openai-direct" } } : {}),

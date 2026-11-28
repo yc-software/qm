@@ -358,3 +358,10 @@ test("a refusal on exec parks the turn instead of failing it generically", async
     return true;
   });
 });
+
+test("a computer's chosen image is its instance template", async () => {
+  const s = make({ template: "qm-base", imageFor: async (id: string) => (id === scope ? "toolchain" : undefined) });
+  const chosen = await s.provision(scope);
+  const plain = await s.provision(scopeId("personal", "other"));
+  assert.deepEqual([fake.instance(chosen.id)?.template, fake.instance(plain.id)?.template], ["toolchain", "qm-base"]);
+});

@@ -5,15 +5,15 @@ export const welcomeThreadRef = (user: string): string => `web:${user}:welcome:$
 
 export function isWelcomeConversation(
   sessions: readonly CoreSession[],
-  user: string,
+  { user, personalScope }: Pick<Me, "user" | "personalScope">,
   threadRef: string | null,
   scopeId: string | null,
 ): boolean {
   if (threadRef?.startsWith(`web:${user}:ideas:`)) return false;
-  if (!threadRef?.startsWith(`web:${user}:`) || (scopeId && scopeId !== `personal:${user}`)) return false;
+  if (!threadRef?.startsWith(`web:${user}:`) || (scopeId && scopeId !== personalScope)) return false;
   const personal = sessions.filter(
     (session) =>
-      session.scopeId === `personal:${user}` &&
+      session.scopeId === personalScope &&
       session.threadRef.startsWith(`web:${user}:`) &&
       !session.threadRef.startsWith(`web:${user}:ideas:`),
   );
@@ -39,7 +39,7 @@ export function welcomeLayout(view: {
   draft: boolean;
 }): { show: boolean; hideSuggestions: boolean; hideComposer: boolean } {
   const { me, threadRef, empty } = view;
-  const first = Boolean(me && isWelcomeConversation(view.sessions, me.user, threadRef, view.scopeId));
+  const first = Boolean(me && isWelcomeConversation(view.sessions, me, threadRef, view.scopeId));
   const seeded = Boolean(me?.welcome) && empty && (first || Boolean(threadRef?.startsWith(`web:${me?.user}:welcome:`)));
   const show = me?.welcome ? seeded : view.isNewUser && empty;
   return {

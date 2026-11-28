@@ -12,7 +12,8 @@ import { orgScope } from "./shared.ts";
 import { modelAuthStatus } from "./user-model-auth.ts";
 import { adminPermissions } from "./admin/scope-config.ts";
 import { inboxPreviewEnabled } from "./loops.ts";
-import { webNotificationsOn } from "../../notifications/web-push.ts";
+import { webNotificationsOn } from "../../notifications/reply-notifications.ts";
+import { personalScope } from "../../types.ts";
 
 export interface WebMeConfig {
   analytics?: { module: string; options?: unknown };
@@ -57,11 +58,12 @@ async function me(ctx: ApiCtx): Promise<void> {
     modelAuthStatus(deps, user),
     resolveBranding(deps.config, orgScope(deps), deps.brandingDefault),
     starterActivities({ ...deps, fallback: config.suggestedActivities }, orgScope(deps), user),
-    deps.directory?.teammateName(tenantOf(ctx), user).catch(swallowAs("web: /me teammate", null)),
+    deps.directory.teammateName(tenantOf(ctx), user).catch(swallowAs("web: /me teammate", null)),
   ]);
   const generated = Boolean(deps.suggestedActivities);
   return sendJson(res, 200, {
     user,
+    personalScope: personalScope(user),
     org: orgId(),
     companyName: branding.orgName?.trim() || null,
     workspace: tenancyBooted() && !bootTenant() ? branding.orgName?.trim() || null : null,

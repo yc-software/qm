@@ -9,6 +9,7 @@ import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { scopeId } from "../src/types.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testCore } from "./support/build-app.ts";
 
 const SECRET = "deploy-redeploy-route-secret".repeat(2);
 const PID = "deploy-redeploy-route-portal".repeat(2);
@@ -53,6 +54,7 @@ describe("deployment redeploy route", () => {
       },
     } as unknown as App;
     server = createServer(app, {
+      ...testCore(),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       portalIdentitySecret: PID,

@@ -9,6 +9,7 @@ import {
   type PersonOf,
   type SpendReport,
 } from "../src/api/routes/admin/spend.ts";
+import { personalScope } from "../src/types.ts";
 
 const DAY = 86_400_000;
 const MON = 20353;
@@ -30,7 +31,7 @@ const row = (over: Partial<SpendRow> & Pick<SpendRow, "day" | "scopeId" | "origi
 const ROWS: SpendRow[] = [
   row({
     day: MON,
-    scopeId: "personal:alice",
+    scopeId: personalScope("alice"),
     origin: "conversation",
     costUsd: 1.5,
     input: 100,
@@ -40,7 +41,7 @@ const ROWS: SpendRow[] = [
   }),
   row({
     day: TUE,
-    scopeId: "personal:alice",
+    scopeId: personalScope("alice"),
     origin: "conversation",
     costUsd: 0.25,
     input: 20,
@@ -50,7 +51,7 @@ const ROWS: SpendRow[] = [
   }),
   row({
     day: TUE,
-    scopeId: "personal:alice",
+    scopeId: personalScope("alice"),
     origin: "cron",
     costUsd: 0.75,
     calls: 3,
@@ -61,7 +62,7 @@ const ROWS: SpendRow[] = [
   }),
   row({
     day: TUE,
-    scopeId: "personal:bob",
+    scopeId: personalScope("bob"),
     origin: "conversation",
     costUsd: 0.5,
     input: 10,
@@ -82,7 +83,7 @@ const ROWS: SpendRow[] = [
   }),
   row({
     day: WED,
-    scopeId: "personal:bob",
+    scopeId: personalScope("bob"),
     origin: "monitor",
     costUsd: 4,
     input: 7,
@@ -121,7 +122,7 @@ test("summarizeSpend: people plus non-person scopes conserve the org totals", ()
   );
   assert.deepEqual(
     report.people.map((p) => p.scopeId),
-    ["personal:bob", "personal:alice"],
+    [personalScope("bob"), personalScope("alice")],
   );
   assert.deepEqual(
     report.scopes.map((s) => [s.principalId, s.scopeId, s.kind]),
@@ -150,12 +151,12 @@ test("summarizeSpend: people plus non-person scopes conserve the org totals", ()
 
 test("summarizeSpend: background holds every non-live source, split by where it came from", () => {
   const report = summarize([
-    row({ day: MON, scopeId: "personal:alice", origin: "conversation", costUsd: 1 }),
-    row({ day: MON, scopeId: "personal:alice", origin: "cron", costUsd: 2 }),
-    row({ day: MON, scopeId: "personal:alice", origin: "loop", costUsd: 4 }),
-    row({ day: MON, scopeId: "personal:alice", origin: "swarm", costUsd: 8 }),
-    row({ day: MON, scopeId: "personal:alice", origin: "webhook", costUsd: 16 }),
-    row({ day: MON, scopeId: "personal:alice", origin: "monitor", costUsd: 32 }),
+    row({ day: MON, scopeId: personalScope("alice"), origin: "conversation", costUsd: 1 }),
+    row({ day: MON, scopeId: personalScope("alice"), origin: "cron", costUsd: 2 }),
+    row({ day: MON, scopeId: personalScope("alice"), origin: "loop", costUsd: 4 }),
+    row({ day: MON, scopeId: personalScope("alice"), origin: "swarm", costUsd: 8 }),
+    row({ day: MON, scopeId: personalScope("alice"), origin: "webhook", costUsd: 16 }),
+    row({ day: MON, scopeId: personalScope("alice"), origin: "monitor", costUsd: 32 }),
   ]);
   const alice = report.people[0]!;
   assert.equal(alice.live.costUsd, 1);
@@ -186,7 +187,9 @@ test("summarizeSpend: cache hit ratio comes from the shared helper and is null w
   for (const person of report.people) {
     assert.ok(person.cacheHitRatio === null || (person.cacheHitRatio >= 0 && person.cacheHitRatio <= 1));
   }
-  const noCache = summarize([row({ day: MON, scopeId: "personal:zoe", origin: "conversation", costUsd: 0, input: 0 })]);
+  const noCache = summarize([
+    row({ day: MON, scopeId: personalScope("zoe"), origin: "conversation", costUsd: 0, input: 0 }),
+  ]);
   assert.equal(noCache.people[0]!.cacheHitRatio, null, "a zero denominator reports null, never 0%");
 });
 
@@ -194,7 +197,7 @@ test("summarizeSpend: zero-dollar calls keep their tokens instead of disappearin
   const report = summarize([
     row({
       day: MON,
-      scopeId: "personal:codex",
+      scopeId: personalScope("codex"),
       origin: "conversation",
       costUsd: 0,
       input: 900,
@@ -263,9 +266,9 @@ test("spendCsv: one row per entity, people first, matching the report's numbers"
 
 test("spendCsv: hostile display names are RFC 4180 quoted and de-fanged", () => {
   const labels = new Map([
-    ["personal:alice", 'Alice "The, Closer"'],
+    [personalScope("alice"), 'Alice "The, Closer"'],
     ["channel:C1", "=cmd|' /c calc'!A1"],
-    ["personal:bob", "line one\r\nline two"],
+    [personalScope("bob"), "line one\r\nline two"],
   ]);
   const report = summarize(ROWS, { label: (id) => labels.get(id) ?? "" });
   const csv = spendCsv(report);
@@ -313,7 +316,7 @@ test("summarizeSpend: model ties sort by identifier with unknown last, independe
   const rows = [null, "zeta", "alpha", ""].map((model) =>
     row({
       day: MON,
-      scopeId: "personal:alice",
+      scopeId: personalScope("alice"),
       origin: "conversation",
       model,
       costUsd: 1,
@@ -333,7 +336,7 @@ test("spendCsv: model export retains totals, unknown models, and safe escaping",
     models.map((model) =>
       row({
         day: MON,
-        scopeId: "personal:alice",
+        scopeId: personalScope("alice"),
         origin: "cron",
         model,
         costUsd: 1,
@@ -358,14 +361,14 @@ test("spendCsv: model export retains totals, unknown models, and safe escaping",
 for (const bucket of ["day", "week"] as const) {
   test(`summarizeSpend: ${bucket} model series conserves each point and window model totals`, () => {
     const rows = [
-      row({ day: MON, scopeId: "personal:alice", origin: "conversation", model: "alpha", costUsd: 1 }),
-      row({ day: MON, scopeId: "personal:alice", origin: "cron", model: "alpha", costUsd: 2 }),
+      row({ day: MON, scopeId: personalScope("alice"), origin: "conversation", model: "alpha", costUsd: 1 }),
+      row({ day: MON, scopeId: personalScope("alice"), origin: "cron", model: "alpha", costUsd: 2 }),
       row({ day: MON, scopeId: "channel:C1", origin: "webhook", model: "beta", costUsd: 4 }),
-      row({ day: MON, scopeId: "personal:bob", origin: "monitor", model: null, costUsd: 8 }),
-      row({ day: TUE, scopeId: "personal:alice", origin: "conversation", model: "alpha", costUsd: 16 }),
-      row({ day: MON + 6, scopeId: "personal:bob", origin: "cron", model: null, costUsd: 32 }),
-      row({ day: MON + 7, scopeId: "personal:bob", origin: "conversation", model: "beta", costUsd: 64 }),
-      row({ day: MON + 7, scopeId: "personal:bob", origin: "conversation", model: "free", costUsd: 0 }),
+      row({ day: MON, scopeId: personalScope("bob"), origin: "monitor", model: null, costUsd: 8 }),
+      row({ day: TUE, scopeId: personalScope("alice"), origin: "conversation", model: "alpha", costUsd: 16 }),
+      row({ day: MON + 6, scopeId: personalScope("bob"), origin: "cron", model: null, costUsd: 32 }),
+      row({ day: MON + 7, scopeId: personalScope("bob"), origin: "conversation", model: "beta", costUsd: 64 }),
+      row({ day: MON + 7, scopeId: personalScope("bob"), origin: "conversation", model: "free", costUsd: 0 }),
     ];
     const report = summarize(rows, { bucket, to: (MON + 8) * DAY });
     assert.deepEqual(
@@ -407,14 +410,14 @@ for (const bucket of ["day", "week"] as const) {
   test(`summarizeSpend: ${bucket} person series merges a user's sign-ins and conserves shared spend`, () => {
     const person = linked("slack-alice", "alice", "user-alice");
     const rows = [
-      row({ day: MON, scopeId: "personal:alice", origin: "conversation", costUsd: 1 }),
-      row({ day: MON, scopeId: "personal:slack-alice", origin: "cron", costUsd: 2 }),
-      row({ day: TUE, scopeId: "personal:slack-alice", origin: "monitor", costUsd: 4 }),
+      row({ day: MON, scopeId: personalScope("alice"), origin: "conversation", costUsd: 1 }),
+      row({ day: MON, scopeId: personalScope("slack-alice"), origin: "cron", costUsd: 2 }),
+      row({ day: TUE, scopeId: personalScope("slack-alice"), origin: "monitor", costUsd: 4 }),
       row({ day: MON, scopeId: "channel:C1", origin: "conversation", costUsd: 8 }),
       row({ day: TUE, scopeId: "team:T1", origin: "cron", costUsd: 16 }),
-      row({ day: MON + 7, scopeId: "personal:bob", origin: "conversation", costUsd: 32 }),
+      row({ day: MON + 7, scopeId: personalScope("bob"), origin: "conversation", costUsd: 32 }),
       row({ day: MON + 7, scopeId: "org:default", origin: "webhook", costUsd: 64 }),
-      row({ day: MON + 7, scopeId: "personal:free", origin: "conversation", costUsd: 0 }),
+      row({ day: MON + 7, scopeId: personalScope("free"), origin: "conversation", costUsd: 0 }),
     ];
     const report = summarize(rows, { bucket, to: (MON + 8) * DAY, person });
     assert.deepEqual(
@@ -462,30 +465,30 @@ for (const bucket of ["day", "week"] as const) {
 test("spendExportRows keeps the ledger grain, merging a user's sign-ins into one person per day, source and model", () => {
   const person = linked("slack-alice", "alice", "user-alice");
   const labels = new Map([
-    ["personal:slack-alice", "Alice"],
-    ["personal:alice", "alice@example.com"],
+    [personalScope("slack-alice"), "Alice"],
+    [personalScope("alice"), "alice@example.com"],
     ["channel:C1", "#general"],
   ]);
   const ledger = [
     row({ day: TUE, scopeId: "channel:C1", origin: "cron", model: "m1", costUsd: 8, calls: 2 }),
-    row({ day: MON, scopeId: "personal:slack-alice", origin: "conversation", model: "m1", costUsd: 2, input: 5 }),
-    row({ day: MON, scopeId: "personal:alice", origin: "conversation", model: "m1", costUsd: 1, input: 3 }),
-    row({ day: MON, scopeId: "personal:alice", origin: "monitor", model: "m1", costUsd: 4 }),
-    row({ day: MON, scopeId: "personal:alice", origin: "webhook", model: "m1", costUsd: 16 }),
-    row({ day: MON, scopeId: "personal:alice", origin: "conversation", model: null, costUsd: 32 }),
-    row({ day: MON, scopeId: "personal:alice", origin: "loop", model: "m1", costUsd: 64 }),
-    row({ day: MON, scopeId: "personal:alice", origin: "swarm", model: "m1", costUsd: 128 }),
+    row({ day: MON, scopeId: personalScope("slack-alice"), origin: "conversation", model: "m1", costUsd: 2, input: 5 }),
+    row({ day: MON, scopeId: personalScope("alice"), origin: "conversation", model: "m1", costUsd: 1, input: 3 }),
+    row({ day: MON, scopeId: personalScope("alice"), origin: "monitor", model: "m1", costUsd: 4 }),
+    row({ day: MON, scopeId: personalScope("alice"), origin: "webhook", model: "m1", costUsd: 16 }),
+    row({ day: MON, scopeId: personalScope("alice"), origin: "conversation", model: null, costUsd: 32 }),
+    row({ day: MON, scopeId: personalScope("alice"), origin: "loop", model: "m1", costUsd: 64 }),
+    row({ day: MON, scopeId: personalScope("alice"), origin: "swarm", model: "m1", costUsd: 128 }),
   ];
   const rows = spendExportRows(ledger, (id) => labels.get(id) ?? "", person);
   assert.deepEqual(
     rows.map((r) => [r.day, r.scopeId, r.kind, r.principalId, r.displayName, r.source, r.model, r.costUsd, r.calls]),
     [
-      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "live", null, 32, 1],
-      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "live", "m1", 3, 2],
-      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "loop", "m1", 64, 1],
-      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "swarm", "m1", 128, 1],
-      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "webhook", "m1", 16, 1],
-      ["2025-09-22", "personal:alice", "person", "alice", "Alice", "monitor", "m1", 4, 1],
+      ["2025-09-22", personalScope("alice"), "person", "alice", "Alice", "live", null, 32, 1],
+      ["2025-09-22", personalScope("alice"), "person", "alice", "Alice", "live", "m1", 3, 2],
+      ["2025-09-22", personalScope("alice"), "person", "alice", "Alice", "loop", "m1", 64, 1],
+      ["2025-09-22", personalScope("alice"), "person", "alice", "Alice", "swarm", "m1", 128, 1],
+      ["2025-09-22", personalScope("alice"), "person", "alice", "Alice", "webhook", "m1", 16, 1],
+      ["2025-09-22", personalScope("alice"), "person", "alice", "Alice", "monitor", "m1", 4, 1],
       ["2025-09-23", "channel:C1", "channel", null, "#general", "cron", "m1", 8, 2],
     ],
     "each row names its exact source, live first, then background kinds in report order",
@@ -513,18 +516,26 @@ test("summarizeSpend: crons group each cron's spend under the scope it ran in, a
     id: "nightly",
     title: "Nightly report",
     owner: "alice",
-    ownerScopeId: "personal:alice",
+    ownerScopeId: personalScope("alice"),
     schedule: { cron: "0 9 * * *", timezone: "UTC" },
     enabled: true,
   };
   const rows = [
-    row({ day: MON, scopeId: "personal:alice", origin: "cron", cronId: "nightly", model: "m1", costUsd: 2 }),
-    row({ day: TUE, scopeId: "personal:alice", origin: "cron", cronId: "nightly", model: "m2", costUsd: 3, calls: 2 }),
+    row({ day: MON, scopeId: personalScope("alice"), origin: "cron", cronId: "nightly", model: "m1", costUsd: 2 }),
+    row({
+      day: TUE,
+      scopeId: personalScope("alice"),
+      origin: "cron",
+      cronId: "nightly",
+      model: "m2",
+      costUsd: 3,
+      calls: 2,
+    }),
     row({ day: TUE, scopeId: "channel:C1", origin: "cron", cronId: "digest", costUsd: 4 }),
-    row({ day: WED, scopeId: "personal:slack-bob", origin: "cron", cronId: "gone", costUsd: 1 }),
-    row({ day: MON, scopeId: "personal:alice", origin: "cron", cronId: "moved", costUsd: 1 }),
+    row({ day: WED, scopeId: personalScope("slack-bob"), origin: "cron", cronId: "gone", costUsd: 1 }),
+    row({ day: MON, scopeId: personalScope("alice"), origin: "cron", cronId: "moved", costUsd: 1 }),
     row({ day: TUE, scopeId: "channel:C1", origin: "cron", cronId: "moved", costUsd: 1 }),
-    row({ day: WED, scopeId: "personal:bob", origin: "conversation", costUsd: 10 }),
+    row({ day: WED, scopeId: personalScope("bob"), origin: "conversation", costUsd: 10 }),
   ];
   const infos = new Map([
     ["nightly", nightly],
@@ -538,17 +549,17 @@ test("summarizeSpend: crons group each cron's spend under the scope it ran in, a
   assert.deepEqual(
     report.crons.map((c) => [c.cronId, c.scopeId, c.scopeName, c.info?.title ?? null, c.costUsd, c.calls]),
     [
-      ["nightly", "personal:alice", "", "Nightly report", 5, 3],
+      ["nightly", personalScope("alice"), "", "Nightly report", 5, 3],
       ["digest", "channel:C1", "#general", "Digest", 4, 1],
-      ["moved", "personal:alice", "", null, 2, 2],
-      ["gone", "personal:slack-bob", "", null, 1, 1],
+      ["moved", personalScope("alice"), "", null, 2, 2],
+      ["gone", personalScope("slack-bob"), "", null, 1, 1],
     ],
   );
   assert.deepEqual(
     report.people.map((p) => [p.scopeId, p.costUsd]),
     [
-      ["personal:bob", 11],
-      ["personal:alice", 6],
+      [personalScope("bob"), 11],
+      [personalScope("alice"), 6],
     ],
   );
   assert.deepEqual(report.crons[0]!.info, nightly);
@@ -560,13 +571,20 @@ test("summarizeSpend: crons group each cron's spend under the scope it ran in, a
 
 test("spendCsv: cron export names each cron by id, title, owner and spend scope, and de-fangs titles", () => {
   const rows = [
-    row({ day: MON, scopeId: "personal:alice", origin: "cron", cronId: "c1", costUsd: 2, calls: 1 }),
+    row({ day: MON, scopeId: personalScope("alice"), origin: "cron", cronId: "c1", costUsd: 2, calls: 1 }),
     row({ day: MON, scopeId: "channel:C1", origin: "cron", cronId: "gone", costUsd: 1, calls: 1 }),
   ];
   const report = summarize(rows, {
     cron: (id) =>
       id === "c1"
-        ? { id, title: "=HYPERLINK()", owner: "alice", ownerScopeId: "personal:alice", schedule: {}, enabled: true }
+        ? {
+            id,
+            title: "=HYPERLINK()",
+            owner: "alice",
+            ownerScopeId: personalScope("alice"),
+            schedule: {},
+            enabled: true,
+          }
         : null,
   });
   const lines = spendCsv(report, "cron").trimEnd().split("\r\n");
@@ -575,7 +593,7 @@ test("spendCsv: cron export names each cron by id, title, owner and spend scope,
     "cron_id,title,owner,scope_id,live_usd,background_usd,cron_usd,loop_usd,swarm_usd,webhook_usd,monitor_usd,total_usd,calls,input_tokens,output_tokens,cache_read_tokens,cache_write_tokens,cache_hit_ratio",
   );
   assert.deepEqual(lines.slice(1), [
-    "c1,'=HYPERLINK(),alice,personal:alice,0,2,2,0,0,0,0,2,1,0,0,0,0,",
+    `c1,'=HYPERLINK(),alice,${personalScope("alice")},0,2,2,0,0,0,0,2,1,0,0,0,0,`,
     "gone,,,channel:C1,0,1,1,0,0,0,0,1,1,0,0,0,0,",
   ]);
 });
@@ -583,9 +601,9 @@ test("spendCsv: cron export names each cron by id, title, owner and spend scope,
 test("spendExportRows keeps two crons in the same scope, day and model apart", () => {
   const rows = spendExportRows(
     [
-      row({ day: MON, scopeId: "personal:alice", origin: "cron", cronId: "a", model: "m1", costUsd: 1 }),
-      row({ day: MON, scopeId: "personal:alice", origin: "cron", cronId: "b", model: "m1", costUsd: 2 }),
-      row({ day: MON, scopeId: "personal:alice", origin: "conversation", model: "m1", costUsd: 4 }),
+      row({ day: MON, scopeId: personalScope("alice"), origin: "cron", cronId: "a", model: "m1", costUsd: 1 }),
+      row({ day: MON, scopeId: personalScope("alice"), origin: "cron", cronId: "b", model: "m1", costUsd: 2 }),
+      row({ day: MON, scopeId: personalScope("alice"), origin: "conversation", model: "m1", costUsd: 4 }),
     ],
     () => "",
     asIs,

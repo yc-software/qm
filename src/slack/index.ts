@@ -55,7 +55,7 @@ const slackAccountClients = perTenant(
         deliveryClient: WebClient;
         teamId: string;
         policy?: ExternalSlackAccess;
-        inFlightRuns?: { add(id: string): void; delete(id: string): void };
+        inFlightRuns?: { add(id: string): void; delete(id: string): void; has(id: string): boolean };
       }
     >(),
 );
@@ -336,6 +336,8 @@ export async function startSlackPlugin(
     rejectRateLimitedCalls: true,
   });
   const statusAccount = () => `${ids.ownTeamId}:${ids.botUserId}`;
+  const statusCard = (channel: string, threadTs: string) =>
+    core.sessionStatus?.card(statusClient, statusAccount(), channel, threadTs);
   let statusSync: Promise<void> | undefined;
   const reconcileStatus = () => {
     statusSync ??= Promise.all([
@@ -372,6 +374,7 @@ export async function startSlackPlugin(
     onSettled: () => {
       void reconcileStatus();
     },
+    card: statusCard,
     rateLimitNotice,
     readHistory,
     core,
@@ -458,6 +461,7 @@ export async function startSlackPlugin(
       if (!account || (teamId && account.teamId !== teamId)) return undefined;
       return account.deliveryClient;
     },
+    inFlightRunsForAccount: (id) => slackAccountClients().get(id)?.inFlightRuns,
     externalNamespace: (id) => {
       const account = slackAccountClients().get(id);
       return account?.policy ? externalSlackNamespace(account.teamId, account.policy) : undefined;
@@ -469,6 +473,7 @@ export async function startSlackPlugin(
     threads,
     clientForIdentity,
     webUiPublicUrl: cfg.webUiPublicUrl,
+    card: statusCard,
   });
 
   let auth: AuthTestResponse;

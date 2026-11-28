@@ -15,9 +15,10 @@ import { createPostgresSessionStore } from "../src/sessions/postgres-session-sto
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { randomUUID } from "node:crypto";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
+import { personalScope } from "../src/types.ts";
 
 const THREAD = "web:alice@example.com:conv-1";
-const SCOPE = "personal:alice@example.com" as ScopeId;
+const SCOPE = personalScope("alice@example.com") as ScopeId;
 
 const cronProvenance = (over: Partial<DeliveryProvenance> = {}): DeliveryProvenance => ({
   trigger: "cron",

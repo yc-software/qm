@@ -38,9 +38,11 @@ receives fact text during background indexing and the query during recall. Postg
 stores typed vectors in `memory_fact_vectors`; recall ranks live, disclosed facts once per
 scope in SQL and returns compact ranked matches. No approximate vector index is used.
 
-Semantic recall requires the PostgreSQL `vector` extension. Its migration is registered
-only after a configured embedding model resolves, not during an unconfigured startup.
-If the application database role cannot install extensions, an administrator must install
+Semantic recall requires the PostgreSQL `vector` extension. The migration command
+(`node src/migrate-main.ts`) applies `db/vector.sql` when the server offers the extension, so a
+core that runs as a login without migration authority finds it in place. A core whose login may
+migrate applies it the first time it uses the vector index.
+If the migrating database role cannot install extensions, an administrator must install
 `vector` first. File-backed installations use newest-first recall, even with a model selected.
 
 A single background indexer embeds at most 64 missing facts and removes stale vectors in

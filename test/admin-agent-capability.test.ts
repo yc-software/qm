@@ -11,10 +11,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createKeychain } from "../src/credentials/keychain.ts";
 import { deriveConnectorKey } from "../src/connectors/connector-client-store.ts";
-import { scopeId, type PendingApprovalRecord, type TurnRequest } from "../src/types.ts";
+import { scopeId, type PendingApprovalRecord, type TurnRequest, personalScope } from "../src/types.ts";
 import {
   mintCapabilityToken,
   CAPABILITY_TTL_MS,
@@ -32,7 +32,7 @@ import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 const SECRET = "agent-admin-test-secret".repeat(3);
 const ORG = scopeId("org", "default-org");
 
-async function start(withConfig = true) {
+async function start() {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "admin-agent-cap-")),
@@ -57,15 +57,11 @@ async function start(withConfig = true) {
     key: deriveConnectorKey("admin-agent-capability-keychain"),
   });
   const server = createServer(built.app, {
+    ...testCore(built),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-    admin: built.admin,
-    memory: built.memory,
-    ...(withConfig ? { config: built.config } : {}),
-    auditLog: built.auditLog,
     sessions: signOff.sessions,
     approvals: testMap<PendingApprovalRecord>(),
     runs: liveRunStore(built.runs),
-    errors: built.errors,
     keychain,
     capabilitySecret: SECRET,
     signingSecret: SECRET,
@@ -767,18 +763,6 @@ for (const room of [scopeId("channel", "C1"), scopeId("group", "G1")]) {
   });
 }
 
-test("shared admin reads fail closed without a sharing config resolver", async () => {
-  const s = await start(false);
-  try {
-    await s.built.config.setSharingPosture(ORG, "open");
-    const cap = await capFor("admin-alice", { scope: scopeId("channel", "C1") });
-    const response = await fetch(`${s.base}/v1/admin/sessions`, { headers: { "x-agent-capability": cap } });
-    assert.equal(response.status, 403);
-  } finally {
-    await s.close();
-  }
-});
-
 for (const room of [scopeId("personal", "admin-alice"), scopeId("channel", "C1"), scopeId("group", "G1")]) {
   test(`retired bulk import is equally unsupported from ${room}`, async () => {
     const s = await start();
@@ -810,7 +794,7 @@ test("shared-channel admin runtime mutations do not return a private cron prompt
   try {
     await s.built.config.setSharingPosture("channel:C1", "isolated");
     const cron = await s.built.app.createCron({
-      ownerScopeId: "personal:U1",
+      ownerScopeId: personalScope("U1"),
       owner: "U1",
       createdBy: "U1",
       schedule: { everyMs: 60_000 },
@@ -946,6 +930,44 @@ test("a guest in the room: a person's turn without an internal audience gets a t
       [200, 403],
     );
     assert.match(replies[1]![1], /carry a person's own authority/);
+  } finally {
+    await s.close();
+  }
+});
+
+test("org admin can set and clear another user's session persona", async () => {
+  const s = await start();
+  try {
+    const [adminCap, memberCap] = await Promise.all([capFor("admin-alice"), capFor("U1")]);
+    await s.built.featureFlags.setEnabled("personas", ORG, true, "admin-alice");
+    const created = await s.built.app.personas!.create("admin-alice", { name: "Helper" });
+    assert.equal(created.status, "ok");
+    const session = await s.built.sessions.getOrCreateByThread(
+      "dm:D_U1",
+      "dm",
+      personalScope("U1"),
+      undefined,
+      "slack",
+    );
+    const put = (token: string, scope: string, personaId: unknown) =>
+      fetch(
+        `${s.base}/v1/admin/sessions/${encodeURIComponent(session.id)}/persona?scope=${encodeURIComponent(scope)}`,
+        {
+          method: "PUT",
+          headers: { "x-agent-capability": token, "content-type": "application/json" },
+          body: JSON.stringify({ personaId }),
+        },
+      );
+    assert.equal((await put(memberCap, session.scopeId, created.value.id)).status, 403);
+    assert.equal((await put(adminCap, session.scopeId, "")).status, 400);
+    assert.equal((await put(adminCap, session.scopeId, "missing")).status, 404);
+    assert.equal((await put(adminCap, personalScope("admin-alice"), created.value.id)).status, 403);
+    assert.equal((await put(adminCap, session.scopeId, created.value.id)).status, 200);
+    assert.equal((await s.built.sessions.get(session.id))?.personaId, created.value.id);
+    assert.equal((await put(adminCap, session.scopeId, null)).status, 200);
+    assert.equal((await s.built.sessions.get(session.id))?.personaId, undefined);
+    const audited = (await s.built.auditLog.events(tenant)).filter((e) => e.action === "session.persona.update");
+    assert.equal(audited.length, 2);
   } finally {
     await s.close();
   }

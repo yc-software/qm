@@ -43,7 +43,7 @@ export function audit(
   e: Omit<AuditEvent, "at" | "impersonatedBy">,
 ): void {
   const impersonatedBy = ctx.actor?.imp;
-  ctx.deps.auditLog?.record(tenantOf(ctx), { at: Date.now(), ...e, ...(impersonatedBy ? { impersonatedBy } : {}) });
+  ctx.deps.auditLog.record(tenantOf(ctx), { at: Date.now(), ...e, ...(impersonatedBy ? { impersonatedBy } : {}) });
 }
 
 export function resolveSelfRead(
@@ -77,8 +77,8 @@ export function requirePersonAuthority(ctx: Pick<ApiCtx, "capability" | "res">):
 function rawAdminActor(ctx: Pick<ApiCtx, "req" | "deps" | "capability" | "actor">): Principal | null {
   if (ctx.capability) return { id: ctx.capability.actorId, type: "internal" };
   if (ctx.actor)
-    return ctx.deps.admin?.resolveActor(`${ctx.actor.p}@${configOrgId()}`) ?? { id: ctx.actor.p, type: "internal" };
-  return ctx.deps.admin?.resolveActor(headerValue(ctx.req, "x-admin-actor")) ?? null;
+    return ctx.deps.admin.resolveActor(`${ctx.actor.p}@${configOrgId()}`) ?? { id: ctx.actor.p, type: "internal" };
+  return ctx.deps.admin.resolveActor(headerValue(ctx.req, "x-admin-actor")) ?? null;
 }
 
 export function adminActorFrom(ctx: Pick<ApiCtx, "req" | "deps" | "capability" | "actor">): Principal | null {
@@ -93,7 +93,7 @@ export async function adminStanding(
 ): Promise<"inactive" | "org_admin" | "owner" | "member"> {
   const id = canonicalPerson(principalId);
   if (!(await activePrincipal(deps, id))) return "inactive";
-  return adminStatusFromGrants((await deps.admin?.listGrants(tenant)) ?? [], id).role ?? "member";
+  return adminStatusFromGrants(await deps.admin.listGrants(tenant), id).role ?? "member";
 }
 
 export interface AuthorizedAdmin extends Principal {
@@ -110,10 +110,6 @@ export async function authorizeAdmin(
   scope: string,
 ): Promise<AuthorizedAdmin | null> {
   const { res, deps } = ctx;
-  if (!deps.admin) {
-    sendJson(res, 404, { error: "not_found" });
-    return null;
-  }
   const actor = adminActorFrom(ctx);
   const standing = actor ? await adminStanding(deps, tenantOf(ctx), actor.id) : "member";
   if (standing === "inactive") {
@@ -134,7 +130,6 @@ export async function authorizeAdmin(
 }
 
 export async function activePrincipal(deps: ServerDeps, principalId: string): Promise<boolean> {
-  if (!deps.identity) return true;
   await deps.identity.refresh();
   return deps.identity.classify(principalId).type === "internal";
 }

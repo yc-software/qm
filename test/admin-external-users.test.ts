@@ -10,13 +10,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { INVITE_EMAIL_NOT_CONFIGURED, renderInviteEmail } from "../src/admin/invite-email.ts";
 import type { Mailer } from "../plugins/chassis/src/resend.ts";
 import { adminStatusFromGrants } from "../src/admin/admin-service.ts";
 import { coreEmailAdmission, coreEmailAllowed } from "../plugins/chassis/src/external-members.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
+import { scopeId, type TurnRequest, personalScope } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
@@ -54,26 +54,17 @@ function start(
     }),
   );
   const deps = {
-    admin: built.admin,
-    sessions: built.sessions,
-    auditLog: built.auditLog,
-    identity: built.identity,
-    directory: built.directory,
-    config: built.config,
+    ...testCore(built),
     portalUrl: PORTAL,
     portalIdentitySecret: SECRET,
-    replayDedupe: { durable: true, claim: built.replayDedupe!.claim.bind(built.replayDedupe!) },
+    replayDedupe: { durable: true, claim: built.replayDedupe.claim.bind(built.replayDedupe) },
     brandingDefault: { selfLabel: "Acme Bot" },
     ...(opts.mailer ? { inviteMailer: opts.mailer } : {}),
     ...(opts.emailAuthDomain ? { emailAuthDomain: opts.emailAuthDomain } : {}),
     ...(opts.emailAuthPrincipals ? { emailAuthPrincipals: opts.emailAuthPrincipals } : {}),
   };
   const server = opts.signed
-    ? createServer(built.app, {
-        ...deps,
-        signingSecret: SECRET,
-        runs: liveRunStore(),
-      })
+    ? createServer(built.app, { ...deps, signingSecret: SECRET, runs: liveRunStore() })
     : createInsecureTestServer(built.app, deps);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -568,7 +559,7 @@ test("the directory resolves participants without loading every participant row"
   const s = start();
   t.after(s.close);
   for (const thread of ["first", "second"]) {
-    const session = await s.built.sessions.getOrCreateByThread(thread, "dm", "personal:alice");
+    const session = await s.built.sessions.getOrCreateByThread(thread, "dm", personalScope("alice"));
     await s.built.sessions.addParticipant(session.id, "alice");
     await s.built.sessions.addParticipant(session.id, "inactive");
   }

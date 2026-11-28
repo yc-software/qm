@@ -39,7 +39,8 @@ import { ownerUrl, TEST_TENANT } from "./support/test-tenant.ts";
 import { mockHeldTurns } from "./support/mock-agent.ts";
 
 const SECRET = "generic-chat-test-secret-0123456789abcdef";
-const tenantFor = async () => TEST_TENANT;
+const ISSUER = "https://idp.example";
+const accountTenant = async () => TEST_TENANT;
 const NO_BLOBS = { readBlob: async () => Buffer.alloc(0), readFileArtifact: async () => Buffer.alloc(0) };
 const PROVENANCE = { trigger: "cron", surface: "partner-chat", fireKey: "f", sourceScopeId: "s", sourceThreadRef: "t" };
 
@@ -159,11 +160,14 @@ async function genericChatApp() {
   const genericChat = await fakeGenericChat();
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "generic-chat-surface-")),
-    genericChat: { url: genericChat.url, secret: SECRET },
+    genericChat: { url: genericChat.url, secret: SECRET, issuer: ISSUER },
     emailAuthDomain: "example.com",
   });
   const owner = createPgPool(ownerUrl(config.databaseUrl!).toString());
-  await owner.q(`UPDATE tenants SET settings = '{"partnerChatAccount":"7001"}' WHERE id = $1`, [TEST_TENANT]);
+  await owner.q("INSERT INTO tenant_external_orgs(issuer, org_id, tenant) VALUES ($1, '7001', $2)", [
+    ISSUER,
+    TEST_TENANT,
+  ]);
   await owner.close();
   const built = buildApp(config);
   built.runtime.start();
@@ -423,10 +427,10 @@ test("generic-chat conversation reads are answered from the mirror", async () =>
 
 function outboundFor(url: string, deliveries = createDeliveryStore(), mirrored: IngestEvent[] = []) {
   const send = genericChatSender({
+    accountTenant,
     client: createGenericChatClient({ url, secret: SECRET }),
     blobs: NO_BLOBS,
     app: {
-      tenantFor,
       getApproval: async () => null,
       readSurfaceMessages: async () => [],
       ingestSurfaceEvents: async (events) => (mirrored.push(...events), { upserted: events.length }),
@@ -602,14 +606,18 @@ test("a chat with any member neither the deployment nor the host vouches for, or
   }
 });
 
-test("generic-chat config requires the url and secret together", () => {
-  assert.throws(() => loadConfig({ GENERIC_CHAT_URL: "https://chat.example" }), /must be set together/);
-  assert.deepEqual(
-    loadConfig({ GENERIC_CHAT_URL: "https://chat.example", GENERIC_CHAT_SECRET: "s", GENERIC_CHAT_LABEL: "Acme Chat" })
-      .genericChat,
-    { url: "https://chat.example", secret: "s", label: "Acme Chat" },
+test("generic-chat config requires the url, secret and issuer together", () => {
+  const base = { GENERIC_CHAT_URL: "https://chat.example", GENERIC_CHAT_SECRET: "s", GENERIC_CHAT_ISSUER: ISSUER };
+  assert.throws(
+    () => loadConfig({ GENERIC_CHAT_URL: "https://chat.example", GENERIC_CHAT_SECRET: "s" }),
+    /set together/,
   );
-  const base = { GENERIC_CHAT_URL: "https://chat.example", GENERIC_CHAT_SECRET: "s" };
+  assert.deepEqual(loadConfig({ ...base, GENERIC_CHAT_LABEL: "Acme Chat" }).genericChat, {
+    url: "https://chat.example",
+    secret: "s",
+    issuer: ISSUER,
+    label: "Acme Chat",
+  });
   assert.equal(loadConfig({ ...base, GENERIC_CHAT_MARK: "M2 2h20v20H2z" }).genericChat?.mark, "M2 2h20v20H2z");
   assert.throws(() => loadConfig({ ...base, GENERIC_CHAT_MARK: '<svg onload="x()"/>' }), /SVG path data/);
 });
@@ -1023,9 +1031,9 @@ test("a retryable failure holds back later posts to the same chat target only", 
   const deliveries = createDeliveryStore();
   const sent: string[] = [];
   const send = genericChatSender({
+    accountTenant,
     blobs: NO_BLOBS,
     app: {
-      tenantFor,
       getApproval: async () => null,
       readSurfaceMessages: async () => [],
       ingestSurfaceEvents: async () => ({ upserted: 0 }),
@@ -1145,13 +1153,12 @@ test("a credential request is a card its owner decides from the chat, and a deci
   };
   const client = createGenericChatClient({ url: genericChat.url, secret: SECRET });
   const app = {
-    tenantFor,
     getApproval: async () => null,
     readSurfaceMessages: async () => [],
     ingestSurfaceEvents: async () => ({ upserted: 1 }),
   };
   const deliveries = createDeliveryStore();
-  const send = genericChatSender({ client, blobs: NO_BLOBS, app, keychainApprovals });
+  const send = genericChatSender({ client, blobs: NO_BLOBS, app, accountTenant, keychainApprovals });
   const destination = { type: "partner-chat", target: `${CONTAINER}:1002`, keychainAskId: "ask1" };
   try {
     await deliveries.enqueue({ destination, text: "notice", idempotencyKey: "ask:ask1:notice" });
@@ -1219,7 +1226,7 @@ test("a status post becomes the final reply in place, and the agent can revise o
     client: createGenericChatClient({ url: genericChat.url, secret: SECRET }),
     app: built.app,
   };
-  const send = genericChatSender({ ...ops, app: built.app, blobs: NO_BLOBS });
+  const send = genericChatSender({ ...ops, app: built.app, accountTenant, blobs: NO_BLOBS });
   const thread = { account: "7001", kind: "group" as const, chat: "88", thread: "1009" };
   const status = () =>
     withTenant(TEST_TENANT, () => postGenericChatMessage(ops, thread, { text: "On it", idempotencyKey: "status:r1" }));

@@ -318,8 +318,3 @@ export const holdBotLoopShips = (by: string, users?: string): string => `DO $$
               UNION ALL
               SELECT tenant_id, 'ship_grant_revoke', id, scope, jsonb_build_object('loopId', loop_id) FROM granted) entries;
     END $$`;
-
-export const HOLD_BOT_LOOP_SHIPS_MIGRATION = {
-  id: "users/v2/0011-hold-bot-loop-ships",
-  statements: [holdBotLoopShips("system:migration")],
-};

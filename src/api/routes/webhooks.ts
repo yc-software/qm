@@ -9,6 +9,7 @@ import { bearerToken } from "../request-tenant.ts";
 import { isObj } from "./shared.ts";
 import type { ApiCtx, BaseCtx, Route } from "./route.ts";
 import { actionApproved } from "../action-approval.ts";
+import { personalScope } from "../../types.ts";
 
 const FILTERS_MESSAGE = "every filter requires a non-empty path and at least one non-empty value";
 const VERIFICATION_MESSAGE = "a supported verification scheme and non-empty secret are required";
@@ -44,10 +45,6 @@ export function redactWebhook(w: Webhook): Webhook {
 
 async function incomingWebhook(ctx: BaseCtx): Promise<void> {
   const { req, res, deps, params, url } = ctx;
-  if (!deps.webhookReceiver) {
-    req.resume();
-    return sendJson(res, 404, { error: "not_found" });
-  }
   const id = params.id!;
   let rawBody: string;
   try {
@@ -106,7 +103,7 @@ function personWebhook(body: unknown, owner: string): CreateWebhookInput | { err
   };
   if (!isWebhookVerification(verification)) return { error: "bad_request", message: VERIFICATION_MESSAGE };
   return {
-    ownerScopeId: `personal:${owner}`,
+    ownerScopeId: personalScope(owner),
     owner,
     createdBy: owner,
     ...(typeof body.title === "string" ? { title: body.title } : {}),

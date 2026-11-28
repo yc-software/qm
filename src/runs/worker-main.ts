@@ -2,13 +2,13 @@ import "./instrument.ts";
 import { loadConfig } from "../config.ts";
 import { buildApp, stopWithBackstop } from "../wiring.ts";
 import { shutdownOnUncaught } from "../util/process-guard.ts";
-import { migrateRegisteredPgSchemas } from "../persistence/pg-pool.ts";
+import { migrateDatabase } from "../persistence/pg-pool.ts";
 import { bindBootTenant, inBootTenant, readBootTenant } from "../tenants/boot.ts";
 import { loadTenant } from "../tenants/cache.ts";
 
 const config = loadConfig();
 const built = buildApp(config);
-await migrateRegisteredPgSchemas(config.databaseUrl);
+if (config.databaseUrl) await migrateDatabase(config.databaseUrl);
 const tenant = await bindBootTenant(() => readBootTenant(config.databaseUrl!));
 if (tenant) await inBootTenant(tenant, loadTenant);
 const { runtime } = built;

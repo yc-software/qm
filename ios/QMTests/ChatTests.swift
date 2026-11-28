@@ -141,12 +141,15 @@ final class ChatTests: XCTestCase {
     XCTAssertEqual(
       chat.messages.map(\.text),
       [
-        #"@ada and @here: see [the plan](https://docs.example/plan) in #launch \<today> & reply"#,
-        #"Return Result\<T, E> & ping @ada"#,
+        ##"@ada and @here: see [the plan](https://docs.example/plan) in \#launch \<today\> \& reply"##,
+        #"Return Result\<T, E\> \& ping @ada"#,
       ])
     XCTAssertEqual(
       SlackText.plain("<@U1|ada> see <https://docs.example/plan|the plan> &lt;3 <not a token"),
       "@ada see the plan <3 <not a token")
+    XCTAssertEqual(
+      SlackText.markdown("&gt; *Our plan:* ship it, 2*3*4 and `*code*` stay\n# _it_ ~st~ a_b_c"),
+      "> **Our plan:** ship it, 2\\*3\\*4 and `*code*` stay\n\\# _it_ ~~st~~ a\\_b\\_c")
   }
 
   func testAgentActivityRetainsCurrentCompletedSpawnsAfterTheRunEnds() throws {

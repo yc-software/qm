@@ -51,7 +51,6 @@ function redact(server: McpServer): Omit<McpServer, "bearerToken" | "clientSecre
 export async function getMcpServers(ctx: ApiCtx): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
-  if (!ctx.deps.mcpServers) return sendJson(ctx.res, 404, { error: "not_found" });
   audit(ctx, {
     principalId: authorized.id,
     action: "mcp-servers.read",
@@ -61,7 +60,7 @@ export async function getMcpServers(ctx: ApiCtx): Promise<void> {
   const servers = await ctx.deps.mcpServers.list();
   return sendJson(ctx.res, 200, {
     servers: servers.map(redact),
-    tools: (await ctx.deps.mcpToolService?.toolDefs())?.map(
+    tools: (await ctx.deps.mcpToolService.toolDefs())?.map(
       ({ name, serverId, description, readOnly, needsApproval }) => ({
         name,
         serverId,
@@ -76,7 +75,6 @@ export async function getMcpServers(ctx: ApiCtx): Promise<void> {
 export async function putMcpServer(ctx: ApiCtx): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
-  if (!ctx.deps.mcpServers) return sendJson(ctx.res, 404, { error: "not_found" });
   const id = ctx.params.id ?? "";
   if (!isValidMcpServerId(id)) {
     return sendJson(ctx.res, 400, {
@@ -292,7 +290,6 @@ export async function putMcpServer(ctx: ApiCtx): Promise<void> {
 export async function deleteMcpServer(ctx: ApiCtx): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
-  if (!ctx.deps.mcpServers) return sendJson(ctx.res, 404, { error: "not_found" });
   const id = ctx.params.id ?? "";
   if (!(await ctx.deps.mcpServers.get(id))) return sendJson(ctx.res, 404, { error: "not_found" });
   await ctx.deps.mcpServers.delete(id);

@@ -4,17 +4,17 @@ import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
-import { buildApp, serverDeps } from "../src/wiring.ts";
+import { buildApp } from "../src/wiring.ts";
 import { stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 import { testTenant } from "./support/test-tenant.ts";
-import { scopeId, type ScopeId } from "../src/types.ts";
+import { scopeId, type ScopeId, personalScope } from "../src/types.ts";
 
 async function core(t: TestContext): Promise<{ base: string; built: ReturnType<typeof buildApp> }> {
   const config = testConfig({ signingSecret: "web-keychain-signing-secret-0123456789" });
   const built = stopAtEnd(buildApp(config));
-  const server = createServer(built.app, { ...serverDeps(config, built), ...browserSessionDeps });
+  const server = createServer(built.app, { ...built, ...browserSessionDeps });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   return { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, built };
@@ -92,7 +92,7 @@ test("a signed-in person adds, lists and removes only their own keychain entries
 test("persona deletes, attaches and detaches are audited with the grants they revoke, and impersonation is named", async (t) => {
   const { base, built } = await core(t);
   const alice = browserSessionCookie("alice");
-  await built.featureFlags.setEnabled("personas", "personal:alice", true, "test");
+  await built.featureFlags.setEnabled("personas", personalScope("alice"), true, "test");
   const created = await fetch(`${base}/api/personas`, as(alice, "POST", { name: "Ada" }));
   const { id } = ((await created.json()) as { persona: { id: string } }).persona;
   const attach = async () => {

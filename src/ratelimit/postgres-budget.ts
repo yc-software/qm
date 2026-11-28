@@ -1,24 +1,7 @@
-import { createPgPool, type PgMigrationDefinition } from "../persistence/pg-pool.ts";
+import { createPgPool } from "../persistence/pg-pool.ts";
 import type { BudgetTracker } from "./budget.ts";
 import { DEFAULT_BUDGET_WINDOW_MS } from "./budget.ts";
 import { reportFailure } from "../util/errors.ts";
-import { tenantTables } from "../tenants/migrations.ts";
-
-export const BUDGET_MIGRATIONS: PgMigrationDefinition[] = [
-  {
-    id: "ratelimit/budget/0001",
-    statements: [
-      `CREATE TABLE IF NOT EXISTS budget_spend(
-        id BIGSERIAL PRIMARY KEY,
-        principal_id TEXT NOT NULL,
-        at BIGINT NOT NULL,
-        usd DOUBLE PRECISION NOT NULL
-      )`,
-      `CREATE INDEX IF NOT EXISTS budget_spend_by_principal_at ON budget_spend(principal_id, at)`,
-    ],
-  },
-  ...tenantTables("ratelimit/budget/0002-tenants", [{ table: "budget_spend", primaryKey: "id" }]),
-];
 
 export function createPostgresBudgetTracker(
   connectionString: string,
@@ -28,7 +11,7 @@ export function createPostgresBudgetTracker(
   const orgLimitUsd = opts.orgLimitUsd ?? Infinity;
   const windowMs = opts.windowMs ?? DEFAULT_BUDGET_WINDOW_MS;
   const orgKey = "@org";
-  const pg = createPgPool(connectionString, BUDGET_MIGRATIONS);
+  const pg = createPgPool(connectionString);
 
   return {
     async check(tenant, principalId, now = Date.now()) {

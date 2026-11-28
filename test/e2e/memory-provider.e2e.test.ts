@@ -12,6 +12,7 @@ import { createInsecureTestServer } from "../../src/api/server.ts";
 import { parseMemoryProviderConfig } from "../../src/memory/provider-config.ts";
 import { testConfig } from "../support/test-config.ts";
 import { startMcpTestServer, type McpTestServer } from "../support/mcp-test-server.ts";
+import { testCore } from "../support/build-app.ts";
 
 const NO_KEY = !process.env.ANTHROPIC_API_KEY;
 
@@ -98,7 +99,7 @@ describe("memory provider e2e (live Pi + stub MCP)", { skip: NO_KEY ? "set ANTHR
         ...(process.env.ANTHROPIC_API_KEY ? { anthropicApiKey: process.env.ANTHROPIC_API_KEY } : {}),
       }),
     );
-    server = createInsecureTestServer(built.app);
+    server = createInsecureTestServer(built.app, testCore(built));
     await new Promise<void>((r) => server.listen(0, r));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });

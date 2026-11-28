@@ -7,14 +7,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp as buildProductionApp, type BuiltApp } from "../src/wiring.ts";
-import { stopAtEnd } from "./support/build-app.ts";
+import { buildApp as buildProductionApp, type Core } from "../src/wiring.ts";
+import { stopAtEnd, testCore } from "./support/build-app.ts";
 import { providerKeysPresent, companySubscriptionAuth } from "../src/config.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createModelCredentialStore, type StoredModelCredential } from "../src/model/model-credential-store.ts";
 import { getRequiredModel, modelServiceable, resolveModel } from "../src/model/pi-models.ts";
 import { MODEL_REGISTRY } from "../src/model/model-registry.ts";
 import { testMap } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const buildApp = (...args: Parameters<typeof buildProductionApp>) => stopAtEnd(buildProductionApp(...args));
 
@@ -25,7 +26,7 @@ function start(
   modelCredentialFetch: typeof fetch = async () => new Response(null, { status: 200 }),
 ): {
   base: string;
-  built: BuiltApp;
+  built: Core;
   close: () => Promise<void>;
 } {
   const appConfig = testConfig({
@@ -34,14 +35,10 @@ function start(
   });
   const built = buildApp(appConfig, { modelCredentialFetch });
   const server = createInsecureTestServer(built.app, {
-    config: built.config,
-    modelCredentials: built.modelCredentials,
-    userModelCredentials: built.userModelCredentials,
+    ...testCore(built),
     modelCredentialFetch,
     ...(companySubscriptionAuth(appConfig) ? { companySubscriptionAuth: companySubscriptionAuth(appConfig) } : {}),
     providerKeys: providerKeysPresent(appConfig),
-    admin: built.admin,
-    auditLog: built.auditLog,
   });
   server.listen(0);
   return {
@@ -551,7 +548,7 @@ test("a stored scope runtime remains usable outside the legacy configured picker
   try {
     await srv.built.config.setRuntimeSelection("org:default-org", { modelId: "claude-opus-4-8" });
     await srv.built.config.setWebuiModels("org:default-org", ["claude-sonnet-4-6"]);
-    await srv.built.config.setRuntimeSelection("personal:alice", { modelId: "claude-haiku-4-5" });
+    await srv.built.config.setRuntimeSelection(personalScope("alice"), { modelId: "claude-haiku-4-5" });
     const turn = (threadRef: string, model?: string) =>
       srv.built.app.turn({
         surface: "web",
@@ -568,7 +565,7 @@ test("a stored scope runtime remains usable outside the legacy configured picker
     const explicitOrgDefault = await turn("web:alice:org-default", "claude-opus-4-8");
     assert.equal(explicitOrgDefault.status, "queued");
 
-    await srv.built.config.setRuntimeSelection("personal:alice", null);
+    await srv.built.config.setRuntimeSelection(personalScope("alice"), null);
     const inherited = await turn("web:alice:inherited");
     assert.equal(inherited.status, "queued");
   } finally {
@@ -593,7 +590,7 @@ test("inbox runtime overrides use the web model allowlist without changing defau
     assert.equal(rejected.status, "refused");
     assert.match(rejected.reason ?? "", /runtime is no longer available/);
     assert.equal((await srv.built.config.getRuntimeSelectionDurable("org:default-org"))?.modelId, "claude-opus-4-8");
-    assert.equal(await srv.built.config.getRuntimeSelectionDurable("personal:alice"), null);
+    assert.equal(await srv.built.config.getRuntimeSelectionDurable(personalScope("alice")), null);
   } finally {
     await srv.close();
   }
@@ -611,7 +608,7 @@ test("company runtime reads exclude personal-only models without changing the re
     assert.ok(!company.models.includes("gpt-5.6-terra"));
     assert.deepEqual(await (await fetch(url)).json(), personal);
     assert.equal((await fetch(`${url}&account=unknown`)).status, 400);
-    assert.equal(await srv.built.config.getRuntimeSelectionDurable("personal:alice"), null);
+    assert.equal(await srv.built.config.getRuntimeSelectionDurable(personalScope("alice")), null);
   } finally {
     await srv.close();
   }

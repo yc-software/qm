@@ -15,6 +15,9 @@ import { sleep } from "../src/util/async.ts";
 import { scopeId } from "../src/types.ts";
 import { installFakeDocker, type FakeDocker } from "./support/fake-docker.ts";
 import { freePort } from "../scripts/dev/lib/proc.ts";
+import { withTenant } from "../src/tenants/context.ts";
+import { bindBootTenant } from "../src/tenants/boot.ts";
+import { randomUUID } from "node:crypto";
 
 const tmp = mkdtempSync(join(tmpdir(), "local-sbx-"));
 const guestHome = join(tmp, "home");
@@ -218,22 +221,34 @@ test("an aborted run returns control promptly", async () => {
   assert.ok(Date.now() - startedAt < 5_000, "run returned promptly after abort");
 });
 
-test("each container runs on its own network; destroy removes it", async () => {
+test("tenants with the same scope and scratch key keep separate containers, volumes and networks", async () => {
   const fake = installFakeDocker(daemonPort);
   const sb = makeSandbox(fake);
-  const scopeA = scopeId("personal", "U20");
-  const scopeB = scopeId("personal", "U21");
-  const ha = await sb.provision(scopeA);
-  const hb = await sb.provision(scopeB);
-  const netA = localNetworkName(ha.id);
-  const netB = localNetworkName(hb.id);
-  assert.notEqual(netA, netB);
-  assert.equal(fake.networks.has(netA), true);
-  assert.equal(fake.networks.has(netB), true);
-  await sb.teardown(ha, { destroy: true });
-  assert.equal(fake.networks.has(netA), false);
-  assert.equal(fake.networks.has(netB), true);
-  await sb.teardown(hb);
+  const tenants = [randomUUID(), randomUUID()];
+  const scope = scopeId("personal", "U20");
+  for (const options of [undefined, { scratch: { key: "shared-key" } }]) {
+    const [first, second] = await Promise.all(
+      tenants.map((tenant) => withTenant(tenant, () => sb.provision(scope, options))),
+    );
+    assert.notEqual(first!.id, second!.id);
+    assert.equal(fake.volumes.size, options ? 0 : 2);
+    await withTenant(tenants[0]!, () => sb.teardown(first!, { destroy: true }));
+    assert.equal(fake.networks.has(localNetworkName(first!.id)), false);
+    assert.equal(fake.networks.has(localNetworkName(second!.id)), true);
+    assert.equal(fake.volumes.size, options ? 0 : 1);
+    fake.containers.get(second!.id)!.args = fake.containers
+      .get(second!.id)!
+      .args.filter((arg) => arg !== "--cap-drop=CAP_NET_RAW");
+    await assert.rejects(sb.run(second!, "true"), /must be provisioned again/);
+    const resumed = await withTenant(tenants[1]!, () => makeSandbox(fake).provision(scope, options));
+    assert.equal(resumed.id, second!.id);
+    assert.equal(fake.containers.get(resumed.id)!.args.includes("--cap-drop=CAP_NET_RAW"), true);
+    await withTenant(tenants[1]!, () =>
+      options ? sb.teardown(second!, { destroy: true }) : makeSandbox(fake).destroyScope!(scope),
+    );
+    assert.equal(fake.containers.has(second!.id), false);
+    assert.equal(fake.volumes.size, 0);
+  }
 });
 
 test("concurrent teardown and provision for one scope serialize (no stop of a fresh user)", async () => {
@@ -271,6 +286,10 @@ test("a replacement core reattaches to an already-running sandbox", async () => 
 
 test("containerized core joins each sandbox network and reaches the daemon by container name", async () => {
   const fake = installFakeDocker(daemonPort);
+  fake.coreForwarding = true;
+  await assert.rejects(makeSandbox(fake, { coreContainer: "qm-test-core" }).provision("blocked"), /ip_forward=0/);
+  assert.equal(fake.runCount, 0);
+  fake.coreForwarding = false;
   const seen: string[] = [];
   const fetchImpl: typeof fetch = (input) => {
     const url = typeof input === "string" ? input : input.toString();
@@ -319,4 +338,22 @@ test("a computer's memory size is the container's memory limit", async () => {
   const unsized = await sb.provision(scopeId("personal", "U42"));
   assert.equal(fake.containers.get(unsized.id)!.args.includes("--memory"), false);
   assert.equal(sb.profile.sizesMemory, true);
+});
+
+test("a computer's chosen image is the image its container runs", async () => {
+  const fake = installFakeDocker(daemonPort);
+  const chosenScope = scopeId("personal", "U51");
+  const sb = makeSandbox(fake, { imageFor: async (id: string) => (id === chosenScope ? "toolchain:1" : undefined) });
+  const chosen = await sb.provision(chosenScope);
+  const plain = await sb.provision(scopeId("personal", "U52"));
+  assert.equal(fake.containers.get(chosen.id)!.args.at(-1), "toolchain:1");
+  assert.notEqual(fake.containers.get(plain.id)!.args.at(-1), "toolchain:1");
+});
+
+test("the boot tenant keeps its existing local sandbox names", async () => {
+  const tenant = randomUUID();
+  const name = localContainerName("existing-scope");
+  await bindBootTenant(async () => tenant);
+  const bootTenantName = withTenant(tenant, () => localContainerName("existing-scope"));
+  assert.equal(bootTenantName, name);
 });

@@ -101,7 +101,11 @@ const { vite, dom, close } = await browserEnv({
     }
     if (path.startsWith("/api/directory/resolve")) {
       const found = () =>
-        json({ matches: [{ principalId: "bo@acme.com", displayName: "Bo Person", type: "internal" }] });
+        json({
+          matches: [
+            { principalId: "bo@acme.com", scopeId: "personal:bo@acme.com", displayName: "Bo Person", type: "internal" },
+          ],
+        });
       if (!holdDirectory) return found();
       return new Promise<Response>((resolve) => {
         releaseDirectory = () => void found().then(resolve);
@@ -153,7 +157,7 @@ async function mountPage(openId?: string) {
   const personasModule = await vite.ssrLoadModule("/src/personas.ts");
   appState.currentView = "personas";
   appState.mainEl = main;
-  appState.me = { user: "tester", org: "acme", companyName: "Acme" };
+  appState.me = { user: "tester", personalScope: "personal:tester", org: "acme", companyName: "Acme" };
   if (openId) personasModule.openPersonaById(openId);
   await personasModule.renderPersonasPage();
   return { main, personasModule };
@@ -202,20 +206,15 @@ test("when personas are off for the person, Browse has no Bots entry and the pag
   disabled = true;
   const { main } = await mountPage();
   const { destinations } = await vite.ssrLoadModule("/src/browse.ts");
-  assert.equal(
-    destinations().some((d: { label: string }) => d.label === "Bots"),
-    false,
-  );
+  const offersBots = () => destinations().some((d: { label: string }) => d.label === "Bots");
+  assert.equal(offersBots(), false);
   assert.equal(main.querySelector(".list-page-action"), null);
   assert.equal(main.querySelectorAll(".persona-row").length, 0);
   assert.match(main.textContent ?? "", /Bots aren't turned on for you/);
 
   disabled = false;
   await mountPage();
-  assert.equal(
-    destinations().some((d: { label: string }) => d.label === "Bots"),
-    true,
-  );
+  assert.equal(offersBots(), true);
 });
 
 test("Chat starts a conversation, sets its persona before anything is sent, and opens on the model core started it on", async () => {
@@ -237,6 +236,28 @@ test("Chat starts a conversation, sets its persona before anything is sent, and 
   assert.deepEqual(JSON.parse(dom.window.localStorage.getItem("web-ui:model-picks") ?? "[]"), [
     ["web:tester:new", "alpha"],
   ]);
+});
+
+test("the list's buttons still work after the chat they opened is archived from the sidebar, and after a bot is deleted", async () => {
+  const { main } = await mountPage();
+  button(main, "Chat", "Cy").click();
+  await settle();
+  (await vite.ssrLoadModule("/src/shell.ts")).switchView("personas");
+  (await vite.ssrLoadModule("/src/sessions.ts")).archiveSessionById("s-new");
+  button(main, "Edit", "Ada").click();
+  await settle();
+  assert.equal(main.querySelector(".persona-heading")?.textContent?.trim(), "🧮Ada");
+  button(main, "Delete").click();
+  await settle();
+  assert.equal(button(main, "Edit", "Bo").disabled, false);
+});
+
+test("opening a bot leaves the list at once, before its details arrive", async () => {
+  const { main } = await mountPage();
+  button(main, "Edit", "Ada").click();
+  assert.equal(main.querySelector('[role="status"]')?.textContent, "Loading…");
+  await settle();
+  assert.equal(main.querySelector(".persona-heading")?.textContent?.trim(), "🧮Ada");
 });
 
 test("Fork hands off to QM in a new chat instead of copying on the page", async () => {
@@ -717,18 +738,11 @@ test("the conversation shows its persona", async () => {
 });
 
 test("opening a persona from the list pushes browser history", async () => {
-  const { appState } = await vite.ssrLoadModule("/src/shell.ts");
-  const { renderPersonasPage } = await vite.ssrLoadModule("/src/personas.ts");
-  appState.currentView = "personas";
-  appState.mainEl = document.querySelector("main")!;
-  appState.me = { user: "tester", org: "test" };
   const pushed: string[] = [];
   const origPush = window.history.pushState.bind(window.history);
   window.history.pushState = (s, t, url) => (pushed.push(String(url)), origPush(s, t, url));
   try {
-    await renderPersonasPage();
-    document.querySelector<HTMLButtonElement>('.persona-row-main[aria-label="Open Ada"]')!.click();
-    await new Promise((r) => setTimeout(r, 30));
+    await openPersonaPage("Ada");
     assert.deepEqual(pushed, ["/bots/p-ada"]);
   } finally {
     window.history.pushState = origPush;

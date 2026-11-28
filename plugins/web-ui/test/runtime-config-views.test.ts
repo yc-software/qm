@@ -69,7 +69,7 @@ test("runtime defaults are shared while pane choices and editor drafts remain lo
       await vite.ssrLoadModule("/src/context-model.ts");
     const { render } = await vite.ssrLoadModule("lit");
     resetPanel = resetContextModel;
-    appState.me = { user: "owner", org: "test" };
+    appState.me = { user: "owner", personalScope: "personal:owner", org: "test" };
     seedRuntimeConfig("personal:owner", configs.get("personal:owner"));
     for (const [i, scopeId] of [null, "personal:owner", "channel:other"].entries()) {
       const host = document.createElement("section");

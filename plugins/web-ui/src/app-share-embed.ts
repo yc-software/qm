@@ -20,7 +20,7 @@ export async function bootAppShare(params: URLSearchParams): Promise<void> {
   appState.me = (await r.json()) as Me;
   const { openShare } = await import("./share-dialog");
   const opened = openShare(
-    { type: "deploy", id: slug, title: params.get("name") || slug, owner: `personal:${appState.me.user}` },
+    { type: "deploy", id: slug, title: params.get("name") || slug, owner: appState.me.personalScope },
     {
       onChange: () => tellEmbedder({ type: "qm:app-check" }),
       onClose: closeEmbed,

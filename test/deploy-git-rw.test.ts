@@ -24,6 +24,7 @@ import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-dat
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { testCore } from "./support/build-app.ts";
 
 const execFileP = promisify(execFile);
 const SECRET = "deploy-git-rw-secret".repeat(3);
@@ -60,6 +61,7 @@ function fixture(urls: { apiBaseUrl?: string; publicUrl?: string } = {}) {
     identity,
   } as unknown as Parameters<typeof createApp>[0]);
   const server: Server = createServer(app, {
+    ...testCore(),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
     identity,

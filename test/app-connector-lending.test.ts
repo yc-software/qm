@@ -6,12 +6,7 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { appView, createApp } from "../src/api/app.ts";
 import { createServer } from "../src/api/server.ts";
-import { createDeployStore, WITHDRAW_LOANS_MIGRATION, type PublishedApp } from "../src/deploy/deploy-store.ts";
-import { APP_TABLES } from "../src/deploy/page-views.ts";
-import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
-import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
-import { testTenant } from "./support/test-tenant.ts";
+import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
@@ -27,12 +22,14 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl, testMap, testDeployBackings } from "./support/test-database.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
 import { signOffs } from "./support/signed-off-action.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
 import { createControlService } from "../src/api/control-service.ts";
+import { testCore } from "./support/build-app.ts";
 
 const SIGNING = "s".repeat(64);
 const PUBLISHER = "pub@example.com";
@@ -80,6 +77,7 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
   const upstream: Array<{ url: string; method: string; headers: Record<string, string>; body?: string }> = [];
   const signOff = signOffs({ getItems: async () => [] });
   const server = createServer(app, {
+    ...testCore(),
     sessions: signOff.sessions as never,
     approvals: testMap<PendingApprovalRecord>(),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
@@ -222,7 +220,7 @@ test("only the publisher can lend, with a signed-off card, per app and per conne
     ["/v1/share", { type: "deploy", id: h.d.id, toScope: personalScope(CO_MANAGER) }, { botActor: true }],
     [
       "/v1/share",
-      { type: "deploy", id: h.d.id, toScope: "personal:x@example.com", move: true },
+      { type: "deploy", id: h.d.id, toScope: personalScope("x@example.com"), move: true },
       { personAuthority: false },
     ],
   ] as const) {
@@ -308,23 +306,4 @@ test("while the app borrows connectors, only the publisher can share it", async 
   await share(PUBLISHER);
   await lend([]);
   await share(CO_MANAGER);
-});
-
-test("an upgrade withdraws loans on apps outside their publisher's library", async () => {
-  const url = testDatabaseUrl();
-  const apps = createPostgresMapFactory(url).map<PublishedApp>("deployments", undefined, APP_TABLES);
-  const lent = (id: string, owner: string) =>
-    ({ id, createdBy: PUBLISHER, ownerScopeId: personalScope(owner), connectors: ["slack.com"] }) as PublishedApp;
-  await apps.put("kept", lent("kept", PUBLISHER));
-  await apps.put("moved", lent("moved", CO_MANAGER));
-  const audit = createPostgresAuditLog(url);
-  await audit.events(testTenant);
-  const pg = createPgPool(url);
-  await pg.migrate(WITHDRAW_LOANS_MIGRATION).finally(() => pg.close());
-  assert.deepEqual((await apps.get("kept"))?.connectors, ["slack.com"]);
-  assert.equal((await apps.get("moved"))?.connectors, undefined);
-  assert.deepEqual(
-    (await audit.events(testTenant)).map((e) => e.resource),
-    ["deployment:moved"],
-  );
 });

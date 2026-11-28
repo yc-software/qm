@@ -6,19 +6,11 @@ import { isObj } from "../util/objects.ts";
 import type { TurnResult } from "../types.ts";
 import type { EnqueueInput, EnqueueResult, ReapEvent, Run, RunStop, RunStore } from "./run-store.ts";
 import { countedClaims, isTerminal, runPriority, stopErrorCode, withTraceCarrier } from "./run-store.ts";
-import { tenantTables } from "../tenants/migrations.ts";
 import { createRunWatch, NOTIFY_SESSION_AVAILABLE } from "./run-watch.ts";
-import { createRunReturns, PENDING_RETURNS } from "./run-returns.ts";
+import { createRunReturns } from "./run-returns.ts";
 import { createRunReads } from "./run-reads.ts";
 import { parked, rowToRun, turnOrder } from "./run-rows.ts";
-import {
-  claimFunction,
-  claimRows,
-  claimThenBind,
-  claimThenLoad,
-  servingTenant,
-  type ClaimedRow,
-} from "../tenants/claim.ts";
+import { claimRows, claimThenBind, claimThenLoad, type ClaimedRow } from "../tenants/claim.ts";
 
 export interface PostgresRuntime {
   runs: RunStore;
@@ -45,145 +37,12 @@ const claimable = (
     OFFSET 0
   )`;
 
-const runClaims = (id: string, gate: (column: string) => string) => ({
-  id,
-  statements: [
-    claimFunction(
-      "claim_runs",
-      "lease_until bigint, worker text, now bigint, lim integer",
-      `WITH picked AS (
-         SELECT candidate.tenant_id, candidate.id FROM runs candidate WHERE ${claimable("$3")}${gate("candidate.tenant_id")}
-         ORDER BY candidate.claim_priority ASC, candidate.created_at ASC, candidate.seq ASC FOR UPDATE SKIP LOCKED LIMIT $4
-       )
-       UPDATE runs SET status='running', lease_token=gen_random_uuid()::text, lease_expires_at=$1, worker_id=$2,
-         attempts=attempts+1, started_at=COALESCE(started_at,$3)
-       FROM picked WHERE runs.tenant_id = picked.tenant_id AND runs.id = picked.id RETURNING runs.tenant_id, runs.id`,
-    ),
-    claimFunction(
-      "claim_available_runs",
-      "now bigint",
-      `SELECT r.tenant_id, r.id FROM runs r WHERE r.status='pending' AND r.retry_after <= $1${gate("r.tenant_id")}
-         AND NOT EXISTS (
-           SELECT 1 FROM runs blocked WHERE blocked.tenant_id=r.tenant_id AND blocked.session_id=r.session_id
-             AND (blocked.status='running' OR (blocked.status='pending' AND blocked.retry_after > $1))
-         ) LIMIT 1`,
-    ),
-    claimFunction(
-      "claim_waiting_runs",
-      "created_before bigint, now bigint",
-      `SELECT candidate.tenant_id, candidate.id FROM runs candidate WHERE ${claimable("$2")}${gate("candidate.tenant_id")}
-         AND candidate.claim_priority=0 AND candidate.created_at <= $1 LIMIT 1`,
-    ),
-    claimFunction(
-      "claim_pending_returns",
-      "lim integer, after_id text, now bigint",
-      `SELECT tenant_id, id FROM (${PENDING_RETURNS}) due WHERE retry_after <= $3${gate("due.tenant_id")} ORDER BY id LIMIT $1`,
-    ),
-    claimFunction(
-      "claim_terminal_runs",
-      "before bigint, after_finished bigint, after_id text, lim integer",
-      `SELECT tenant_id, id FROM runs WHERE status IN ('done','failed') AND finished_at <= $1
-         AND (finished_at > $2 OR (finished_at = $2 AND id > $3))
-       ORDER BY finished_at, id LIMIT $4`,
-    ),
-    claimFunction(
-      "claim_expired_runs",
-      "now bigint",
-      `SELECT tenant_id, id FROM runs WHERE status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at <= $1${gate("tenant_id")}`,
-    ),
-  ],
-});
-
-const RUN_CLAIMS = runClaims("runs/store/0013-claims", () => "");
-const SERVING_RUN_CLAIMS = runClaims("runs/store/0015-serving-claims", servingTenant);
-
 const FENCE_HOLD_MS = 600_000;
-const PREVIOUS_SCHEMA = "runs/store/0010-drop-turn-metrics";
 
 export function createPostgresRunStore(connectionString: string, opts?: { maxClaims?: number }): PostgresRuntime {
   const maxClaims = opts?.maxClaims ?? Number.POSITIVE_INFINITY;
 
-  const pg = createPgPool(connectionString, [
-    {
-      id: "runs/store/0011-base-schema",
-      expectedChecksum: "77ca2d1c3ec5253374c0eadbf47d91d53c6d2c3fc7232079b33006bc9233a24e",
-      statements: [
-        `SET LOCAL lock_timeout = '60s'`,
-        `DO $base_schema$
-BEGIN
-  IF EXISTS (SELECT 1 FROM qm_schema_migrations WHERE id = '${PREVIOUS_SCHEMA}') THEN
-    RETURN;
-  END IF;
-  IF to_regclass('runs') IS NOT NULL THEN
-    RAISE EXCEPTION 'This database has a runs table from a release older than ${PREVIOUS_SCHEMA}. Start a release that applies ${PREVIOUS_SCHEMA} but predates the base schema, then upgrade.';
-  END IF;
-  CREATE TABLE runs(
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    status TEXT NOT NULL,
-    request TEXT NOT NULL,
-    result TEXT,
-    idempotency_key TEXT UNIQUE,
-    attempts INT NOT NULL DEFAULT 0,
-    max_attempts INT NOT NULL DEFAULT 3,
-    lease_token TEXT,
-    lease_expires_at BIGINT,
-    worker_id TEXT,
-    created_at BIGINT NOT NULL,
-    started_at BIGINT,
-    finished_at BIGINT,
-    delivery_state TEXT,
-    error_attempts INT NOT NULL DEFAULT 0,
-    seq BIGSERIAL,
-    turn_user_seq BIGINT,
-    retry_after BIGINT NOT NULL DEFAULT 0,
-    returned_at BIGINT,
-    last_stop TEXT,
-    claim_priority SMALLINT NOT NULL DEFAULT 2,
-    preemptions INT NOT NULL DEFAULT 0
-  );
-  CREATE INDEX idx_runs_status_created ON runs(status, created_at);
-  CREATE INDEX idx_runs_status_created_seq ON runs(status, created_at, seq);
-  CREATE INDEX idx_runs_session_active_created ON runs(session_id, created_at DESC) WHERE status IN ('pending', 'running');
-  CREATE UNIQUE INDEX idx_runs_one_running_per_session ON runs(session_id) WHERE status = 'running';
-  CREATE INDEX idx_runs_pending_child_returns ON runs(id)
-    WHERE status IN ('done', 'failed') AND returned_at IS NULL AND session_id LIKE 'agent:main:subagent:%';
-  CREATE INDEX idx_runs_session_created_seq ON runs(session_id, created_at DESC, seq DESC);
-  CREATE INDEX idx_runs_created ON runs(created_at DESC);
-  CREATE INDEX idx_runs_terminal_finished ON runs(finished_at, id) WHERE status IN ('done', 'failed');
-  CREATE INDEX idx_runs_pending_priority ON runs(claim_priority, created_at, seq) WHERE status = 'pending';
-END $base_schema$`,
-        `DROP TABLE IF EXISTS tool_calls`,
-      ],
-    },
-    ...tenantTables("runs/store/0012-tenants", [
-      {
-        table: "runs",
-        primaryKey: "id",
-        unique: [
-          { name: "runs_idempotency_key_key", columns: "idempotency_key", constraint: true },
-          { name: "idx_runs_one_running_per_session", columns: "session_id", where: "status = 'running'" },
-        ],
-      },
-    ]),
-    RUN_CLAIMS,
-    {
-      id: "runs/store/0014-handbacks",
-      statements: [
-        `SET LOCAL lock_timeout = '3s'`,
-        `ALTER TABLE runs ADD COLUMN IF NOT EXISTS handbacks INT NOT NULL DEFAULT 0`,
-        `UPDATE runs SET handbacks = preemptions WHERE status IN ('pending', 'running') AND handbacks < preemptions`,
-      ],
-    },
-    SERVING_RUN_CLAIMS,
-    {
-      id: "runs/store/0016-bot-limited",
-      statements: [
-        `SET LOCAL lock_timeout = '3s'`,
-        `ALTER TABLE runs ADD COLUMN IF NOT EXISTS bot_limited BOOLEAN NOT NULL DEFAULT false`,
-      ],
-    },
-  ]);
+  const pg = createPgPool(connectionString);
   const { query: q, close: closePool } = pg;
 
   async function getRun(id: string): Promise<Run | null> {

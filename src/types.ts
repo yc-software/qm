@@ -4,6 +4,7 @@ import type { SharingPosture } from "./resolution/sharing-posture.ts";
 import type { SurfaceAccount, TurnSurfaceOrigin } from "./surfaces/contract.ts";
 import type { SessionOrigin } from "./sessions/session-store.ts";
 import type { ProjectIcon } from "./projects/project-store.ts";
+import { personUserId, userPerson } from "./directory/person-refs.ts";
 
 export type PrincipalType = "internal" | "guest";
 
@@ -30,7 +31,7 @@ function isScopeKind(s: string): s is ScopeKind {
 }
 
 export function scopeId(kind: ScopeKind, ref: string): ScopeId {
-  return `${kind}:${ref}`;
+  return `${kind}:${kind === "personal" ? personUserId(ref) : ref}`;
 }
 
 export interface WornPersona {
@@ -59,7 +60,19 @@ export function parseScopeId(id: ScopeId): { kind: ScopeKind | null; ref: string
   const sep = id.indexOf(":");
   if (sep < 0) return { kind: null, ref: "" };
   const raw = id.slice(0, sep);
-  return { kind: isScopeKind(raw) ? raw : null, ref: id.slice(sep + 1) };
+  const ref = id.slice(sep + 1);
+  if (raw === "personal") return { kind: raw, ref: userPerson(ref) };
+  return { kind: isScopeKind(raw) ? raw : null, ref };
+}
+
+export function canonicalScopeId(id: ScopeId): ScopeId {
+  const { kind, ref } = parseScopeId(id);
+  return kind === "personal" ? scopeId(kind, ref) : id;
+}
+
+export function scopeLabel(id: ScopeId): string {
+  const { kind, ref } = parseScopeId(id);
+  return kind === "personal" ? `${kind}:${ref}` : id;
 }
 
 export function isManageableCreationScope(id: ScopeId | undefined): boolean {
@@ -255,6 +268,7 @@ export interface DeliveryProvenance {
   sourceScopeId: ScopeId;
   sourceThreadRef: string;
   sourceSessionId?: string;
+  sourceRunId?: string;
   sourceUserSeq?: number;
   sourceAssistantEntrySeq?: number;
 }
@@ -485,6 +499,7 @@ export interface PendingApprovalRecord {
   grantModes?: ApprovalGrantModes;
   request?: TurnRequest;
   homeChannel?: string;
+  classifiedAttachments?: string[];
   blocksInput?: boolean;
   kind?: "approval" | "input";
   call?: ApprovedToolCallSpec;

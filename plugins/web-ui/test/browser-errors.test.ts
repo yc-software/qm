@@ -49,6 +49,7 @@ test("browser errors keep HTTP failures and their context while dropping network
   try {
     await initializeBrowserErrors({
       user: "alice@example.com",
+      personalScope: "personal:alice@example.com",
       org: "acme",
       browserErrors: { dsn: "https://public@sentry.example.com/1" },
     });

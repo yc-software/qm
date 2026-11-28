@@ -1,11 +1,10 @@
 import pg from "pg";
-import { applyPgMigrations, definePgMigration } from "../../src/persistence/pg-pool.ts";
-import { TENANCY } from "../../src/tenants/migrations.ts";
+import { migrateDatabase } from "../../src/persistence/pg-pool.ts";
 import { grantAppRole } from "../../src/persistence/app-role-grants.ts";
 import { withTenant } from "../../src/tenants/context.ts";
+import { TEST_TENANT } from "./test-tenant-id.ts";
 
 export { TEST_TENANT } from "./test-tenant-id.ts";
-import { TEST_TENANT } from "./test-tenant-id.ts";
 export const APP_ROLE = "qm_app";
 
 const BINDING = /\s*-c (role|qm\.tenant_id)=\S+/g;
@@ -42,11 +41,12 @@ async function createAppRole(databaseUrl: string): Promise<void> {
   }
 }
 
-export async function seedTestTenant(databaseUrl: string): Promise<void> {
+export async function seedTestTenant(databaseUrl: string, { vector = false } = {}): Promise<void> {
   await createAppRole(databaseUrl);
   const pool = new pg.Pool({ connectionString: ownerUrl(databaseUrl).toString(), max: 1 });
   try {
-    await applyPgMigrations(pool, TENANCY.map(definePgMigration));
+    await migrateDatabase(ownerUrl(databaseUrl).toString(), { vector });
+    await pool.query("DELETE FROM tenants WHERE id <> $1", [TEST_TENANT]);
     await pool.query("INSERT INTO tenants(id) VALUES ($1) ON CONFLICT (id) DO NOTHING", [TEST_TENANT]);
     await grantAppRole(async (text, params) => (await pool.query(text, params)).rows, APP_ROLE, "public");
   } finally {

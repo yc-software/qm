@@ -9,6 +9,7 @@ import { buildApp } from "./support/build-app.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testConfig } from "./support/test-config.ts";
+import { personalScope } from "../src/types.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-empty-"));
@@ -31,7 +32,7 @@ function enqueueRequest(threadRef: string): OrchestratorInput {
 }
 
 async function strandShell(sessions: ReturnType<typeof freshApp>["sessions"], threadRef: string): Promise<string> {
-  const s = await sessions.getOrCreateByThread(threadRef, "dm", "personal:U1");
+  const s = await sessions.getOrCreateByThread(threadRef, "dm", personalScope("U1"));
   await sessions.addParticipant(s.id, "U1");
   return s.id;
 }

@@ -6,13 +6,14 @@ import { createPostgresMemoryService } from "../src/memory/postgres-memory-servi
 import { createMemoryStrategy } from "../src/memory/strategy.ts";
 import { createPerTurnStrategy } from "../src/memory/strategies/per-turn.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 async function fixture() {
   const memory = createPostgresMemoryService(testDatabaseUrl());
   return { memory, facts: (scope: string) => memory.facts!(scope) };
 }
 
-const scope = "personal:alice";
+const scope = personalScope("alice");
 const turn = { scopeId: scope, actorId: "alice", input: "I prefer short replies", reply: "Noted", sessionId: "s1" };
 
 test("automatic capture classifies each extracted fact independently in one extraction call", async () => {

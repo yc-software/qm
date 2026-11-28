@@ -6,6 +6,7 @@ import { createModelRoutes } from "../src/model/model-route.ts";
 import { ProviderTurnError } from "../src/core/turn-error.ts";
 import type { AgentTurnInput } from "../src/agent/agent.ts";
 import { storedItem, type Item } from "../src/sessions/items.ts";
+import { personalScope } from "../src/types.ts";
 
 const sessionGoals = new Map<string, GoalRecord>();
 const savedGoal = (sessionId: string) => sessionGoals.get(sessionId) ?? null;
@@ -24,7 +25,7 @@ function goalTurn(sessionId: string, cancel: AbortSignal, items: Item[]): AgentT
       sessionGoals.set(sessionId, structuredClone(record));
     },
     tools: {} as AgentTurnInput["tools"],
-    scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
+    scopeLabel: personalScope("tester") as AgentTurnInput["scopeLabel"],
     orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
     emit: async (item) => {
       const stored = storedItem(item, { sessionId, seq: ++seq, createdAt: Date.now() });

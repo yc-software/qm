@@ -7,8 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
-import { scopeId, type ScopeId } from "../src/types.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
+import { scopeId, type ScopeId, personalScope } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { testConfig } from "./support/test-config.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
@@ -26,12 +26,8 @@ async function start(swarmsEnabled = true) {
     }),
   );
   const server = createServer(built.app, {
+    ...testCore(built),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-    admin: built.admin,
-    memory: built.memory,
-    sessions: built.sessions,
-    connectorTokens: built.connectorTokens,
-    auditLog: built.auditLog,
     signingSecret: SECRET,
   });
   server.listen(0);
@@ -232,8 +228,19 @@ test("swarm routes are listed for internal people and hidden from callers the sw
   try {
     const internal = await listApis(base, await capFor("U1"));
     assert.ok(paths(internal.body).includes("/v1/swarm"));
-    await built.identity.deactivate("U2");
-    const refused = await listApis(base, await capFor("U2"));
+    await built.identity.deactivate("U2", "directory-sync");
+    const refused = await listApis(
+      base,
+      await mintCapabilityToken(
+        {
+          actorId: "U1",
+          scopeId: scopeId("personal", "U1"),
+          exp: Date.now() + CAPABILITY_TTL_MS,
+          members: [{ id: "U2", type: "guest" }],
+        },
+        SECRET,
+      ),
+    );
     assert.equal(refused.status, 200);
     assert.ok(!paths(refused.body).includes("/v1/swarm"));
     assert.ok(refused.body.guidance.every((line: string) => !line.includes("Swarm")));
@@ -315,7 +322,9 @@ test("personal-scope parity routes: capability access, shared-room isolation, bo
     assert.ok(
       (await j("/v1/skills?principalId=U2", cronTok)).skills.some((sk: any) => sk.name === "my-personal-skill"),
     );
-    assert.ok((await j("/v1/contexts?principalId=U2", cronTok)).contexts.some((c: any) => c.scopeId === "personal:U1"));
+    assert.ok(
+      (await j("/v1/contexts?principalId=U2", cronTok)).contexts.some((c: any) => c.scopeId === personalScope("U1")),
+    );
     assert.deepEqual(
       (await j("/v1/directory/channels?principalId=U2", cronTok)).channels.map((c: any) => c.channelId).sort(),
       ["C1", "P1"],
