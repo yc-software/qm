@@ -184,7 +184,7 @@ describe("unified slackInstallationStore provisioning", () => {
       assert.deepEqual(await setIcon("too-small"), {
         ok: false,
         error:
-          "Slack app icon not set (apps.icon.set: invalid_icon_size). Slack app icons must be a public image between 512x512 and 2000x2000 pixels, and custom emoji are smaller than that: set an image icon in that range.",
+          "Slack app icon not set (apps.icon.set: invalid_icon_size). Slack app icons must be a public image between 512x512 and 2000x2000 pixels, which rules out custom emoji. Set an image icon in that range.",
       });
       assert.deepEqual(await setIcon("private"), {
         ok: false,
