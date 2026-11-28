@@ -2824,7 +2824,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (err instanceof NeedsApproval) {
           if (noApprover)
             return unavailableApprovalRefusal(audit, session.id, err.command, err.approvalReason, botRequester);
-          const summary = await approvalSummary(tenant, scopeId, err.command, err.approvalReason);
+          const summary = err.summary ?? (await approvalSummary(tenant, scopeId, err.command, err.approvalReason));
           let approval: PendingApproval;
           try {
             approval = await withManagedRosterVersion(() =>

@@ -58,6 +58,7 @@ export function createToolKit(ref: ToolContextRef, opts?: AgentToolsOptions) {
       reason: e.approvalReason,
       kind: e.kind,
       matched: e.matched,
+      ...(e.summary ? { summary: e.summary } : {}),
       ...(purpose ? { purpose } : {}),
       ...(e.approvalKey ? { approvalKey: e.approvalKey } : {}),
       ...(e.grantModes ? { grantModes: e.grantModes } : {}),

@@ -196,6 +196,7 @@ export async function selectTurnResult(turn: {
           screenedOutput: pa.screenedOutput,
           approvalKey: pa.approvalKey,
           kind: pa.kind,
+          tool: pa.tool,
           call: pa.call,
         },
       ]);

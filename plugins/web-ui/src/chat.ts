@@ -1794,7 +1794,6 @@ export function createChatSurface(
                 </div>`
           }
           ${swarmUi.strip(roSession.id)} ${backgroundActivityStrip()}
-          ${approvals.length ? ctx.composer.composerApprovalPanel(approvals) : nothing}
           <section class="chat-scroll readonly-scroll" tabindex="0" aria-label="Conversation">
             ${pinnedStrip()}
             <div class="message-stack">
@@ -1809,7 +1808,9 @@ export function createChatSurface(
             </div>
           </section>
           <div class="chat-bottom-dock">
-            ${goalStrip(agent, { readOnly: true })} ${slackReply ?? nothing} ${scrollBottomButton()}
+            ${goalStrip(agent, { readOnly: true })}
+            ${approvals.length ? ctx.composer.composerApprovalPanel(approvals) : nothing} ${slackReply ?? nothing}
+            ${scrollBottomButton()}
           </div>
         </div>
       `;
@@ -3015,8 +3016,10 @@ export function createChatSurface(
       ${subagentStopTpl(rootId, row)}
       ${
         approvals.length
-          ? ctx.composer.composerApprovalPanel(approvals, (decision) =>
-              resolveSubagentApproval(row.session.id, decision),
+          ? ctx.composer.composerApprovalPanel(
+              approvals,
+              (decision) => resolveSubagentApproval(row.session.id, decision),
+              "strip",
             )
           : nothing
       }

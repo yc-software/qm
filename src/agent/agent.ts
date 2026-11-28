@@ -177,6 +177,7 @@ export interface AgentTurnResult {
     purpose?: string;
     approvalKey?: string;
     grantModes?: { session: boolean; always: boolean };
+    tool?: string;
     call?: ApprovedToolCallSpec;
   }>;
   pausedOnApproval?: boolean;

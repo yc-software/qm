@@ -20,8 +20,7 @@ import { headSlice } from "../../util/text.ts";
 import { approvalGrantId, replayableRequest } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 import { approvalCardId, approvedCallId } from "../approval-id.ts";
-import { redactCommandSecrets } from "../../sandbox/exec-process-session.ts";
-import { isSensitiveKey, redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
+import { isSensitiveKey, maskSecretLiterals } from "../../../plugins/chassis/src/redact-secrets.ts";
 
 function grantModesWithin(
   allowed: ApprovalGrantModes,
@@ -51,13 +50,13 @@ export function newApprovalRecord(
 export function approvalView(requestId: string, record: PendingApprovalRecord): PendingApproval {
   return {
     requestId,
-    command: record.command,
+    command: maskSecretLiterals(record.command),
     reason: record.reason ?? "requires approval",
     blocksInput: record.blocksInput !== false,
     ...(record.grantModes ? { grantModes: record.grantModes } : {}),
-    ...(record.matched ? { matched: record.matched } : {}),
+    ...(record.matched ? { matched: maskSecretLiterals(record.matched) } : {}),
     ...(record.purpose ? { purpose: record.purpose } : {}),
-    ...(record.summary ? { summary: record.summary } : {}),
+    ...(record.summary ? { summary: maskSecretLiterals(record.summary) } : {}),
     ...(record.summaryDetail ? { summaryDetail: record.summaryDetail } : {}),
     ...(record.approvalKey ? { approvalKey: record.approvalKey } : {}),
     ...(record.kind ? { kind: record.kind } : {}),
@@ -66,8 +65,18 @@ export function approvalView(requestId: string, record: PendingApprovalRecord): 
   };
 }
 
+export function decisionBody(record: PendingApprovalRecord): Record<string, unknown> {
+  return {
+    command: maskSecretLiterals(record.command),
+    ...(record.purpose ? { purpose: record.purpose } : {}),
+    ...(record.summary && record.call ? { summary: maskSecretLiterals(record.summary) } : {}),
+    ...(record.tool ? { tool: record.tool } : {}),
+    ...visibleCall(record),
+  };
+}
+
 function redactedValue(value: unknown): unknown {
-  if (typeof value === "string") return redactCommandSecrets(redactSecrets(value));
+  if (typeof value === "string") return maskSecretLiterals(value);
   if (Array.isArray(value)) return value.map(redactedValue);
   if (value && typeof value === "object")
     return Object.fromEntries(
@@ -76,7 +85,7 @@ function redactedValue(value: unknown): unknown {
   return value;
 }
 
-export function visibleCall(record: Pick<PendingApprovalRecord, "call">): Pick<PendingApproval, "call"> {
+function visibleCall(record: Pick<PendingApprovalRecord, "call">): Pick<PendingApproval, "call"> {
   if (!record.call) return {};
   return { call: { tool: record.call.tool, input: redactedValue(record.call.input) as Record<string, unknown> } };
 }
@@ -369,9 +378,7 @@ export function createApprovalDecisions(turn: ApprovalDecisionTurn) {
         approved: decided.approved,
         author,
         body: {
-          command: record.command,
-          ...(record.purpose ? { purpose: record.purpose } : {}),
-          ...(record.summary && record.call ? { summary: record.summary } : {}),
+          ...decisionBody(record),
           ...(decided.scope ? { scope: decided.scope } : {}),
           ...(call && record.approvalKey ? { call, approvalKey: record.approvalKey } : {}),
         },

@@ -14493,6 +14493,33 @@ button:disabled .qm-switch {
   overflow-y: auto;
   scrollbar-width: thin;
 }
+.composer-approval-panel.boxed {
+  box-sizing: border-box;
+  width: min(var(--content-w), calc(100% - 32px));
+  margin: 0 auto 10px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--background);
+  box-shadow:
+    0 2px 5px rgb(0 0 0 / 0.05),
+    0 8px 24px rgb(0 0 0 / 0.06);
+  scrollbar-width: thin;
+}
+.composer-approval-panel.strip {
+  box-sizing: border-box;
+  flex-basis: 100%;
+  margin: 2px 0 8px;
+  padding: 14px 14px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--background);
+  scrollbar-width: thin;
+}
+.composer-approval-panel.strip .ac-title {
+  margin: 4px 0 8px;
+  font-size: 1em;
+}
 .composer-wrap.has-approval {
   box-shadow:
     0 2px 6px rgb(0 0 0 / 0.05),
@@ -14529,13 +14556,15 @@ button:disabled .qm-switch {
 }
 .ac-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 10px;
+  gap: 2px 10px;
   min-width: 0;
   min-height: 26px;
 }
 .ac-eyebrow {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
   font-size: 0.93em;
   font-weight: 500;
   color: var(--muted-foreground);
@@ -14809,6 +14838,10 @@ button:disabled .qm-switch {
   text-overflow: ellipsis;
   color: var(--muted-foreground);
 }
+.ac-preview-command {
+  font-family: var(--font-mono);
+  font-size: 0.87em;
+}
 .ac-item summary > svg {
   flex: none;
   position: relative;
@@ -14860,6 +14893,10 @@ button:disabled .qm-switch {
   color: var(--foreground);
   box-shadow: inset 0 0 0 1px var(--border);
 }
+.ac-dismiss kbd {
+  margin-left: 6px;
+}
+.ac-dismiss kbd,
 .send-btn.ac-confirm kbd {
   font: inherit;
   font-weight: 400;

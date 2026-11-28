@@ -14,10 +14,15 @@ export function inTurnSignOff(authorize: (command: string, approvalKey?: string,
     const key = `signoff:${hashId([plain], 64)}`;
     const command = shown === undefined ? summary : approvalCallText(summary, shown);
     if (authorize(command, key, true)) return true;
-    throw new NeedsApproval(command, "needs your sign-off", "approval", undefined, key, {
-      session: false,
-      always: false,
-    });
+    throw new NeedsApproval(
+      command,
+      "needs your sign-off",
+      "approval",
+      undefined,
+      key,
+      { session: false, always: false },
+      summary,
+    );
   };
 }
 

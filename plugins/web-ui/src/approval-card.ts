@@ -8,6 +8,7 @@ import {
   approvalBatch,
   approvalCall,
   approvalHeading,
+  approvalName,
   argView,
   type ApprovalCall,
   type ArgField,
@@ -17,6 +18,7 @@ import {
 
 export interface ApprovalCardOptions {
   docked: boolean;
+  batch: boolean;
   typing: boolean;
   busy: boolean;
   decide: (decision: ApprovalDecision) => void;
@@ -87,9 +89,10 @@ function commandBody(a: PendingApproval): TemplateResult {
     ${showMatch ? html`<div class="ac-note">Matched <code>${a.matched}</code></div>` : nothing}`;
 }
 
-function approvalBody(a: PendingApproval): TemplateResult {
+function approvalBody(a: PendingApproval): TemplateResult | typeof nothing {
   const call = approvalCall(a);
   if (call) return html`${argsView(argView(call.args))}`;
+  if (a.command === approvalHeading(a, call)) return nothing;
   const reason = a.reason;
   return html`${commandBody(a)}
   ${reason ? html`<div class="ac-note">${reason.charAt(0).toUpperCase() + reason.slice(1)}.</div>` : nothing}`;
@@ -115,7 +118,9 @@ function scopeLinks(a: PendingApproval, o: ApprovalCardOptions): TemplateResult 
 function footer(count: number, o: ApprovalCardOptions): TemplateResult | typeof nothing {
   if (o.docked) return nothing;
   return html`<div class="ac-actions">
-    <button type="button" class="ac-link" ?disabled=${o.busy} @click=${o.declineAll}>Decline</button>
+    <button type="button" class="ac-link" ?disabled=${o.busy} @click=${o.declineAll}>
+      ${count > 1 ? "Decline all" : "Decline"}
+    </button>
     <button type="button" class="ac-approve" ?disabled=${o.busy} @click=${o.approveAll}>
       ${count > 1 ? `Approve all ${count}` : "Approve"}
     </button>
@@ -130,13 +135,34 @@ function card(
   body: unknown,
   n: number,
 ) {
-  return html`<section class="ac-card ${cls} ${o.typing ? "declining" : ""}" role="group" aria-label="Approval">
+  const escape = (e: KeyboardEvent): void => {
+    if (e.key !== "Escape" || e.defaultPrevented || o.busy) return;
+    e.preventDefault();
+    o.declineAll();
+  };
+  return html`<section
+    class="ac-card ${cls} ${o.typing ? "declining" : ""}"
+    role="group"
+    aria-label="Approval"
+    @keydown=${escape}
+  >
     <header class="ac-head">
       <span class="ac-eyebrow">${eyebrow}</span>
       ${toolLine(tool)}
-      <button type="button" class="ac-dismiss" ?disabled=${o.busy} @click=${o.declineAll}>
-        ${n > 1 ? "Decline all" : "Decline"}
-      </button>
+      ${
+        o.docked
+          ? html`<button
+              type="button"
+              class="ac-dismiss"
+              aria-label=${n > 1 ? "Decline all" : "Decline"}
+              aria-keyshortcuts="Escape"
+              ?disabled=${o.busy}
+              @click=${o.declineAll}
+            >
+              ${n > 1 ? "Decline all" : "Decline"}<kbd aria-hidden="true">esc</kbd>
+            </button>`
+          : nothing
+      }
     </header>
     ${body} ${footer(n, o)}
   </section>`;
@@ -166,6 +192,7 @@ interface Row {
   approval: PendingApproval;
   heading: string;
   preview: string;
+  command: boolean;
   tool?: string;
 }
 
@@ -197,7 +224,7 @@ function rowView(row: Row, i: number, o: ApprovalCardOptions, titled: boolean): 
                 >`
               : nothing
           }
-          <span class="ac-preview" dir="auto">${row.preview}</span>
+          <span class="ac-preview ${row.command ? "ac-preview-command" : ""}" dir="auto">${row.preview}</span>
         </span>
       </summary>
       <div class="ac-item-body">${approvalBody(row.approval)}</div>
@@ -206,8 +233,8 @@ function rowView(row: Row, i: number, o: ApprovalCardOptions, titled: boolean): 
   </li>`;
 }
 
-function rowsView(rows: Row[], o: ApprovalCardOptions): TemplateResult {
-  const titled = new Set(rows.map((r) => r.heading)).size > 1 || rows.some((r) => !r.preview);
+function rowsView(rows: Row[], batched: boolean, o: ApprovalCardOptions): TemplateResult {
+  const titled = !batched || new Set(rows.map((r) => r.heading)).size > 1 || rows.some((r) => !r.preview);
   return html`<ol class="ac-items">
     ${repeat(
       rows,
@@ -222,27 +249,30 @@ function batchCard(approvals: PendingApproval[], o: ApprovalCardOptions): Templa
   const rows = approvals.map((a, i): Row => {
     const call = approvalCall(a);
     const own = batch ? previewOf(batch.differing[i]!) : "";
+    const heading = approvalHeading(a, call);
+    const command = a.command === heading ? "" : a.command;
     return {
       approval: a,
-      heading: approvalHeading(a, call),
-      preview: own || (call ? previewOf(argView(call.args)) : a.command),
+      heading,
+      preview: own || (call ? previewOf(argView(call.args)) : command),
+      command: !own && !call,
       ...(batch || !call ? {} : { tool: call.tool }),
     };
   });
   const purpose = approvals[0]!.purpose?.trim();
-  const common = purpose && rows.every((r) => r.heading === purpose) ? purpose : null;
+  const common = rows.length > 1 && purpose && rows.every((r) => r.heading === purpose) ? purpose : null;
   return card(
     o,
     "ac-batch",
-    `${approvals.length} calls need your approval`,
+    approvals.length > 1 ? `${approvals.length} calls need your approval` : "1 call needs your approval",
     batch?.call ?? null,
-    html`${common ? html`<h3 class="ac-title" dir="auto">${common}</h3>` : nothing}${rowsView(rows, o)}`,
+    html`${common ? html`<h3 class="ac-title" dir="auto">${common}</h3>` : nothing}${rowsView(rows, !!batch, o)}`,
     approvals.length,
   );
 }
 
 export function approvalCard(approvals: PendingApproval[], o: ApprovalCardOptions): TemplateResult {
-  return approvals.length === 1 ? singleCard(approvals[0]!, o) : batchCard(approvals, o);
+  return o.batch ? batchCard(approvals, o) : singleCard(approvals[0]!, o);
 }
 
 export interface ApprovalReceipt {
@@ -267,6 +297,7 @@ export interface ApprovalRecord {
   declined?: string;
   purpose?: string;
   summary?: string;
+  tool?: string;
   call?: { tool: string; input: Record<string, unknown> };
 }
 
@@ -288,7 +319,7 @@ export function approvalRecord(d: ApprovalRecord): TemplateResult {
   const expired = d.declined === "expired";
   let verdict = expired ? "Expired" : "Declined";
   if (d.approved) verdict = APPROVED_LABEL[d.scope ?? "once"] ?? "Approved";
-  const what = call || a.purpose ? approvalHeading(a, call) : d.command;
+  const what = approvalName(call?.tool ?? d.tool);
   let mark = X;
   if (d.approved) mark = Check;
   else if (expired) mark = Clock3;

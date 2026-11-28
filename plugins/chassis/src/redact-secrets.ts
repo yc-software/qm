@@ -36,8 +36,14 @@ function redactStructuredDiagnostics(value: string): string {
   }
 }
 
+export function maskSecretLiterals(value: string): string {
+  return value
+    .replace(/\b(?:gh[pousr]_|github_pat_|xox[a-z]-|sk-|AKIA)[\w.-]{8,}/g, "[redacted]")
+    .replace(/\b(Bearer\s+)[\w.~+/=-]{20,}/gi, "$1[redacted]");
+}
+
 export function redactSecrets(value: string): string {
-  return redactStructuredDiagnostics(value)
+  return maskSecretLiterals(redactStructuredDiagnostics(value))
     .replace(
       /(["']?(?:access[_-]?token|refresh[_-]?token|id[_-]?token|api[_-]?key|apikey|client[_-]?secret|credential|credentials|password|passphrase|secret|token|authorization|proxy-authorization|cookie|set-cookie)["']?\s*[:=]\s*)\[[\s\S]*?(?:\]|$)/gi,
       "$1[redacted]",
@@ -56,7 +62,6 @@ export function redactSecrets(value: string): string {
     )
     .replace(/\b(?:Basic|Digest)\s+\S+/gi, "[redacted]")
     .replace(/\bBearer\s+\S+/gi, "Bearer [redacted]")
-    .replace(/\bsk-[A-Za-z0-9._-]{8,}/g, "[redacted]")
     .replace(/\b[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, "[redacted]")
     .replace(/\b(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{32,}\b/g, "[redacted]");
 }

@@ -68,7 +68,7 @@ function redactPipedIntoWithToken(command: string): string {
   return `${upstream.slice(0, producer.index)}echo <redacted>${upstream.slice(upstream.trimEnd().length)}|${consumed}${rest}`;
 }
 
-export function redactCommandSecrets(command: string, env?: Record<string, string>): string {
+function redactCommandSecrets(command: string, env?: Record<string, string>): string {
   const flagsRedacted = createSecretValueMasker(env)(command).replace(
     /(--?(?:token|password|secret|client[-_]?secret|api[-_]?key)[ =])\S+/gi,
     "$1<redacted>",

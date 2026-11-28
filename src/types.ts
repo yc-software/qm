@@ -503,6 +503,7 @@ export interface PendingApprovalRecord {
   allowedInputBy?: string;
   blocksInput?: boolean;
   kind?: "approval" | "input";
+  tool?: string;
   call?: ApprovedToolCallSpec;
   cardTo?: string;
 }

@@ -2098,13 +2098,14 @@ export interface HistoryApprovalDecision {
   declined?: string;
   purpose?: string;
   summary?: string;
+  tool?: string;
   call?: { tool: string; input: Record<string, unknown> };
   timestamp: number;
 }
 
 function approvalDecisionMessage(item: Item): HistoryApprovalDecision | null {
   if (item.kind !== "ElicitationResponse") return null;
-  const { command, scope, declined, purpose, summary } = item.body;
+  const { command, scope, declined, purpose, summary, tool } = item.body;
   const call = item.body.call as { tool?: unknown; input?: unknown } | undefined;
   if (typeof item.approved !== "boolean" || typeof command !== "string") return null;
   return {
@@ -2117,6 +2118,7 @@ function approvalDecisionMessage(item: Item): HistoryApprovalDecision | null {
     ...(typeof declined === "string" ? { declined } : {}),
     ...(typeof purpose === "string" ? { purpose } : {}),
     ...(typeof summary === "string" ? { summary } : {}),
+    ...(typeof tool === "string" ? { tool } : {}),
     ...(typeof call?.tool === "string" && call.input && typeof call.input === "object" && !Array.isArray(call.input)
       ? { call: { tool: call.tool, input: call.input as Record<string, unknown> } }
       : {}),
