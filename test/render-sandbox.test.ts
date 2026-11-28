@@ -356,7 +356,7 @@ test("Render checkpoint failure keeps the sandbox running and its last native ch
   assert.equal(fake.snapshots.has(before.checkpoint!.id), false);
 });
 
-test("Render replaces a suspended sandbox from its checkpoint", async (t) => {
+test("Render resumes a suspended computer in place", async (t) => {
   const { make, fake, store, scope } = setup(t);
   const sandbox = make();
   const handle = await sandbox.provision(scope);
@@ -364,11 +364,11 @@ test("Render replaces a suspended sandbox from its checkpoint", async (t) => {
   await sandbox.teardown(handle);
   const stored = (await store.get(scope))!;
   fake.sandboxes.get(stored.sandboxId)!.status = "suspended";
-  const restored = await make().provision(scope);
-  assert.equal(restored.coldStart, false);
-  assert.equal(fake.sandboxes.get(stored.sandboxId)?.status, "terminated");
-  assert.equal(fake.createdFrom[1], stored.checkpoint!.id);
-  assert.equal(await sandbox.readFile(restored, "kept"), "before suspension");
+  const resumed = await make().provision(scope);
+  assert.equal(resumed.coldStart, false);
+  assert.equal((await store.get(scope))!.sandboxId, stored.sandboxId);
+  assert.equal(fake.createdFrom.length, 1);
+  assert.equal(await sandbox.readFile(resumed, "kept"), "before suspension");
 });
 
 test("Render refuses an empty replacement for an existing sandbox without a snapshot", async (t) => {
@@ -377,7 +377,6 @@ test("Render refuses an empty replacement for an existing sandbox without a snap
   const stored = (await store.get(scope))!;
   await store.put(scope, {
     sandboxId: stored.sandboxId,
-    expiresAtMs: stored.expiresAtMs,
     lastActivityMs: 0,
     baseImage: stored.baseImage,
   });
@@ -563,7 +562,6 @@ test("Render disposes a new native checkpoint when its staging record write fail
   const info = await fake.client.create({ lifetimeSec: 86400 });
   await store.put(scope, {
     sandboxId: info.id,
-    expiresAtMs: info.expiresAtMs,
     lastActivityMs: Date.now(),
     baseImage: BASE_REF,
   });
@@ -699,7 +697,7 @@ test(
     assert.equal((await store.get(scope))!.homeDirty, true);
     t.mock.timers.tick(4 * 60_000);
     assert.deepEqual(await make().reapDeepIdle!(1), { reaped: 1 });
-    assert.equal(fake.sandboxes.get(sandboxId)?.status, "terminated");
+    assert.equal(fake.sandboxes.get(sandboxId)?.status, "suspended");
   },
 );
 
@@ -739,7 +737,7 @@ test("Render refuses a write that starts during its idle-stop checkpoint", async
   });
   assert.deepEqual(await make().reapDeepIdle!(0), { reaped: 1 });
   assert.match(String(await late), /is being restarted or stopped; try again in a moment/);
-  assert.equal(fake.sandboxes.get(sandboxId)?.status, "terminated");
+  assert.equal(fake.sandboxes.get(sandboxId)?.status, "suspended");
 });
 
 test("Render reports a write that finishes during a restart instead of losing it", async (t) => {
@@ -808,7 +806,7 @@ test("Render finishes an idle stop that a crashed core left half done", async (t
   const { sandboxId } = (await store.get(scope))!;
   await store.merge(scope, { stopped: true, stopping: true, lastActivityMs: Date.now() - 7200_000 });
   assert.deepEqual(await make().reapDeepIdle!(0), { reaped: 1 });
-  assert.equal(fake.sandboxes.get(sandboxId)?.status, "terminated");
+  assert.equal(fake.sandboxes.get(sandboxId)?.status, "suspended");
   assert.equal((await store.get(scope))!.stopping, undefined);
 });
 
@@ -964,7 +962,7 @@ test("Render saves a home in use without stopping its sandbox and stops it once 
   await store.merge(scope, { lastActivityMs: Date.now() - 7200_000 });
   const get = t.mock.method(fake.client, "get");
   assert.deepEqual(await sandbox.reapDeepIdle!(0), { reaped: 1 });
-  assert.equal(fake.sandboxes.get(before.sandboxId)?.status, "terminated");
+  assert.equal(fake.sandboxes.get(before.sandboxId)?.status, "suspended");
   assert.equal((await store.get(scope))!.stopped, true);
   assert.deepEqual(await sandbox.reapDeepIdle!(0), { reaped: 0 });
   assert.equal(get.mock.callCount(), 1);
@@ -1022,10 +1020,10 @@ test("Render stops an idle computer at its idle limit even when deep idle allows
   assert.equal(fake.sandboxes.get(stored.sandboxId)?.status, "running");
   await store.merge(scope, { lastActivityMs: Date.now() - 70 * 60_000 });
   assert.deepEqual(await make().reapDeepIdle!(threeDays), { reaped: 1 });
-  assert.equal(fake.sandboxes.get(stored.sandboxId)?.status, "terminated");
+  assert.equal(fake.sandboxes.get(stored.sandboxId)?.status, "suspended");
 });
 
-test("Render creates computers with a 30-day lifetime and disposable sandboxes with a 24-hour lifetime", async (t) => {
+test("Render creates computers with no lifetime limit and disposable sandboxes with a 24-hour lifetime", async (t) => {
   const { make, fake, scope } = setup(t);
   const create = t.mock.method(fake.client, "create");
   const sandbox = make();
@@ -1033,7 +1031,7 @@ test("Render creates computers with a 30-day lifetime and disposable sandboxes w
   const disposable = await sandbox.provision(scope, { scratch: { key: "job" } });
   assert.deepEqual(
     create.mock.calls.map((call) => call.arguments[0]?.lifetimeSec),
-    [2592000, 86400],
+    [undefined, 86400],
   );
   await sandbox.teardown(disposable);
   await sandbox.teardown(computer);
@@ -1139,7 +1137,7 @@ test("Render stops an idle computer when it cannot list its sandboxes", async (t
   const { sandboxId } = (await store.get(scope))!;
   await store.merge(scope, { lastActivityMs: Date.now() - 7200_000 });
   assert.deepEqual(await sandbox.reapDeepIdle!(0), { reaped: 1 });
-  assert.equal(fake.sandboxes.get(sandboxId)?.status, "terminated");
+  assert.equal(fake.sandboxes.get(sandboxId)?.status, "suspended");
   assert.deepEqual(
     errors.map((error) => error.code),
     ["orphan_list_failed"],
@@ -1165,19 +1163,6 @@ test("Render checkpoints at teardown once per interval and skips an unused compu
   assert.ok((await store.get(scope))!.lastSnapshotMs! > stale);
 });
 
-test("Render replaces an idle computer near the end of its lifetime at turn start", async (t) => {
-  const { make, fake, store, scope } = setup(t);
-  const sandbox = make();
-  const handle = await sandbox.provision(scope);
-  await sandbox.writeFile(handle, "kept", "work");
-  const first = (await store.get(scope))!.sandboxId;
-  fake.sandboxes.get(first)!.expiresAtMs = Date.now() + 60_000;
-  const next = await sandbox.provision(scope);
-  assert.notEqual((await store.get(scope))!.sandboxId, first);
-  assert.equal(fake.sandboxes.get(first)?.status, "terminated");
-  assert.equal(await sandbox.readFile(next, "kept"), "work");
-});
-
 test("Render tells a turn that its sandbox ended and restores it on the next turn", async (t) => {
   const { make, fake, store, scope, errors } = setup(t);
   const sandbox = make();
@@ -1189,26 +1174,10 @@ test("Render tells a turn that its sandbox ended and restores it on the next tur
   await fake.client.terminate((await store.get(scope))!.sandboxId);
   await assert.rejects(sandbox.run(handle, "true"), /has stopped; the next turn restores it from its last checkpoint/);
   assert.equal((await store.get(scope))!.stopped, true);
-  await store.merge(scope, { expiresAtMs: Date.now() - 1 });
   await sandbox.reapDeepIdle!(3600_000);
   const restored = await sandbox.provision(scope);
   assert.notEqual((await store.get(scope))!.sandboxId, first);
   assert.equal(await sandbox.readFile(restored, "kept"), "work");
-  assert.deepEqual(
-    errors.filter((error) => error.code === "computer_ended"),
-    [],
-  );
-});
-
-test("Render marks a computer that reached its lifetime stopped without reporting it as ended", async (t) => {
-  const { make, fake, store, scope, errors } = setup(t);
-  const sandbox = make();
-  await sandbox.provision(scope);
-  const stored = (await store.get(scope))!;
-  await fake.client.terminate(stored.sandboxId);
-  await store.merge(scope, { expiresAtMs: Date.now() - 1000 });
-  await sandbox.reapDeepIdle!(3600_000);
-  assert.equal((await store.get(scope))!.stopped, true);
   assert.deepEqual(
     errors.filter((error) => error.code === "computer_ended"),
     [],
