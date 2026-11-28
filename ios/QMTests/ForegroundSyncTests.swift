@@ -139,6 +139,9 @@ final class ForegroundSyncTests: XCTestCase {
     let client = try XCTUnwrap(model.client)
     try client.saveSession("test")
     defer { model.signOut() }
+    // Already agreed to share data with AI providers, so the app opens past the consent screen.
+    UserDefaults.standard.set(client.baseURL.absoluteString, forKey: AIConsent.key)
+    defer { UserDefaults.standard.removeObject(forKey: AIConsent.key) }
     let identityKey = client.url("me").absoluteString
     ForegroundSyncProtocol.statusCodes.withLock { $0[identityKey] = [1: 503] }
 
