@@ -5439,3 +5439,5 @@ REVOKE ALL ON FUNCTION public.qm_self_serve_tenant(issuer text, org text, brand 
 
 INSERT INTO public.tenants DEFAULT VALUES;
 INSERT INTO public.qm_schema_migrations(id, checksum) VALUES ('migrations/0001-mark-earlier-links', 'a6a108bdf7d224393a5fa175ff5416e14e22303e3d76503d8559ac96f145425f');
+INSERT INTO public.qm_schema_migrations(id, checksum) VALUES ('migrations/0002-catch-up-replaced-functions', '053a7f63a35b2b35001e2522ff6f7f81e4bcafdc36cf14cf343f7dfe5126be7c');
+INSERT INTO public.qm_schema_migrations(id, checksum) VALUES ('migrations/0003-personal-scopes-by-user-id', '57aa6d58d8203c1094fa18ed41eb280e6667d0f126352e840edba5fd7c48b413');
