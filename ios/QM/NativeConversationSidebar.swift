@@ -91,6 +91,9 @@ struct NativeConversationRow: View {
           .frame(width: 14, height: 14)
           .foregroundStyle(.secondary)
       }
+      if conversation.personaId != nil {
+        BotGlyph(size: 14).foregroundStyle(.secondary)
+      }
       Text(conversation.label)
         .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
         .fixedSize(horizontal: false, vertical: true)

@@ -4,18 +4,24 @@ struct WorkspaceDestination: Identifiable {
   let id: String
   let title: String
   let icon: String
+  var asset = false
   var section: String {
     switch id {
-    case "inbox", "calendar", "voice.html", "contexts", "files": "Your work"
+    case "inbox", "calendar", "voice.html", "contexts", "bots", "files": "Your work"
     case "crons", "webhooks", "loops": "Automations"
     default: "Tools and settings"
     }
   }
 
-  static func available(to identity: Identity) -> [Self] {
+  static func available(to identity: Identity, bots: Bool = false) -> [Self] {
     var destinations: [Self] = [
       .init(id: "voice.html", title: "Talk to QM", icon: "waveform"),
       .init(id: "contexts", title: "Projects", icon: "folder"),
+    ]
+    if bots {
+      destinations.append(.init(id: "bots", title: "Bots", icon: "Activity-bot", asset: true))
+    }
+    destinations += [
       .init(id: "files", title: "Files", icon: "doc.on.doc"),
       .init(id: "crons", title: "Crons", icon: "clock"),
       .init(id: "webhooks", title: "Webhooks", icon: "bolt.horizontal"),
@@ -39,8 +45,8 @@ struct WorkspaceDestination: Identifiable {
   }
 
   /// The destinations someone can open, grouped under their section titles in display order.
-  static func sections(for identity: Identity) -> [WorkspaceSection] {
-    let destinations = available(to: identity)
+  static func sections(for identity: Identity, bots: Bool = false) -> [WorkspaceSection] {
+    let destinations = available(to: identity, bots: bots)
     return ["Your work", "Automations", "Tools and settings"].map { title in
       WorkspaceSection(title: title, destinations: destinations.filter { $0.section == title })
     }
@@ -61,6 +67,7 @@ struct WorkspaceDestinationView: View {
   var body: some View {
     switch id {
     case "contexts": ProjectsView(client: client, identity: identity)
+    case "bots": NativeBotsView(client: client, identity: identity)
     case "files": NativeFileLibrary(client: client)
     case "crons": NativeCronsView(client: client, user: identity.user)
     case "webhooks": NativeWebhooksView(client: client, user: identity.user)
@@ -86,6 +93,7 @@ struct WorkspaceDestinationView: View {
 struct MoreGrid: View {
   let identity: Identity
   let client: APIClient
+  @State private var botsEnabled = false
 
   var body: some View {
     ScrollView {
@@ -93,7 +101,7 @@ struct MoreGrid: View {
         columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)],
         alignment: .leading, spacing: 12
       ) {
-        ForEach(WorkspaceDestination.sections(for: identity)) { section in
+        ForEach(WorkspaceDestination.sections(for: identity, bots: botsEnabled)) { section in
           Section {
             ForEach(section.destinations) { tile($0) }
           } header: {
@@ -107,6 +115,11 @@ struct MoreGrid: View {
     .background(QMTheme.paper)
     .navigationTitle("Your Workspace")
     .navigationBarTitleDisplayMode(.inline)
+    .task {
+      let bots = BotsModel(client: client, user: identity.user)
+      await bots.load()
+      botsEnabled = bots.enabled
+    }
   }
 
   private func tile(_ destination: WorkspaceDestination) -> some View {
@@ -116,7 +129,12 @@ struct MoreGrid: View {
       VStack(alignment: .leading, spacing: 0) {
         Text(destination.title).font(.title3)
         Spacer(minLength: 20)
-        Image(systemName: destination.icon).font(.system(size: 17, weight: .medium))
+        if destination.asset {
+          Image(destination.icon).resizable().renderingMode(.template).scaledToFit()
+            .frame(width: 17, height: 17)
+        } else {
+          Image(systemName: destination.icon).font(.system(size: 17, weight: .medium))
+        }
       }
       .foregroundStyle(QMTheme.ink)
       .padding(18)
