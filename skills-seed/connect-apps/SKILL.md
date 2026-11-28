@@ -56,3 +56,5 @@ Creating persona Slack apps in one click requires a workspace **App Configuratio
 1. Call `POST /v1/personas/:id/slack/create` (empty body `{}` uses the saved org config token, or pass `{"refreshToken":"…"}` / `{"configToken":"…"}` for a one-off token; add `"orgDeploy":true` only for Enterprise Grid org-wide apps).
 2. The response returns `oauthAuthorizeUrl` (`status: "pending_install"`). Give the user that exact link — one click on **Allow** in Slack completes OAuth, saves the bot token, and starts the persona's Slack bot automatically.
 3. To remove it later, call `DELETE /v1/personas/:id/slack` (pass `{"deleteRemote":true}` to also delete the app in Slack).
+
+Creating the app, changing the persona's icon and restoring a version each apply an image or custom emoji icon to the Slack app. When Slack refuses it, the reply carries `slackIconWarning`, which gives Slack's error and what it needs. The fix is an `{"kind":"image","url":…}` icon at a public https URL that meets it, such as a larger original or an enlarged copy of the emoji.

@@ -141,6 +141,7 @@ describe("unified slackInstallationStore provisioning", () => {
         if (url.endsWith("/apps.icon.set")) {
           const parsed = JSON.parse(bodyStr ?? "{}") as { url?: string };
           if (parsed.url?.includes("too-small")) return Response.json({ ok: false, error: "invalid_icon_size" });
+          if (parsed.url?.includes("private")) return Response.json({ ok: false, error: "icon_not_accessible" });
           return Response.json({ ok: true });
         }
         if (url.endsWith("/apps.manifest.delete")) {
@@ -177,30 +178,19 @@ describe("unified slackInstallationStore provisioning", () => {
         app_id: "A0APP2",
         url: "https://cdn.example.com/bosun.png",
       });
-      assert.deepEqual(
-        await store.setAppIcon({
-          personaId: "p-1",
-          iconUrl: "https://cdn.example.com/bosun-v2.png",
-          updatedBy: "owner-1",
-        }),
-        { ok: true },
-      );
-      assert.deepEqual(
-        await store.setAppIcon({
-          personaId: "p-1",
-          iconUrl: "https://cdn.example.com/too-small.png",
-          updatedBy: "owner-1",
-        }),
-        { ok: false, error: "apps.icon.set: invalid_icon_size" },
-      );
-      assert.equal(
-        await store.setAppIcon({
-          personaId: "missing",
-          iconUrl: "https://cdn.example.com/bosun.png",
-          updatedBy: "owner-1",
-        }),
-        null,
-      );
+      const setIcon = (name: string, personaId = "p-1") =>
+        store.setAppIcon({ personaId, iconUrl: `https://cdn.example.com/${name}.png`, updatedBy: "owner-1" });
+      assert.deepEqual(await setIcon("bosun-v2"), { ok: true });
+      assert.deepEqual(await setIcon("too-small"), {
+        ok: false,
+        error:
+          "Slack app icon not set (apps.icon.set: invalid_icon_size). Slack app icons must be a public image between 512x512 and 2000x2000 pixels, which rules out custom emoji. Set an image icon in that range.",
+      });
+      assert.deepEqual(await setIcon("private"), {
+        ok: false,
+        error: "Slack app icon not set (apps.icon.set: icon_not_accessible).",
+      });
+      assert.equal(await setIcon("bosun", "missing"), null);
       assert.equal(personaCreated.appId, "A0APP2");
       const personaState = new URL(personaCreated.oauthAuthorizeUrl).searchParams.get("state")!;
       const personaDone = await store.completeOAuth({ code: "code-p1", state: personaState });

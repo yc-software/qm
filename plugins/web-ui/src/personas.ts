@@ -326,10 +326,22 @@ function chatWithPersona(persona: PersonaView): Promise<void> {
   );
 }
 
-function forkPersona(persona: PersonaView): void {
-  saveDraft(newChatDraftKey(appState.me?.user), `Fork the ${persona.name} bot for me.`);
+function askQm(prompt: string): void {
+  saveDraft(newChatDraftKey(appState.me?.user), prompt);
   switchView("chats");
   startNewChat();
+}
+
+function forkPersona(persona: PersonaView): void {
+  askQm(`Fork the ${persona.name} bot for me.`);
+}
+
+type Flash = string | TemplateResult;
+
+function iconNotice(done: string, persona: PersonaView, warning?: string): Flash {
+  if (!warning) return done;
+  const ask = () => askQm(`Fix the Slack app icon for the ${persona.name} bot. ${warning}`);
+  return html`${done} ${warning} ${rowAction("Ask QM", Sparkles, ask)}`;
 }
 
 function paneHost(personaId = ""): HTMLElement | null {
@@ -368,7 +380,7 @@ async function fetchPersona(id: string): Promise<PersonaDetail> {
   return (await api<{ persona: PersonaDetail }>(`/api/personas/${encodeURIComponent(id)}`)).persona;
 }
 
-async function openPersona(id: string, flash = "", opts: { push?: boolean } = {}): Promise<void> {
+async function openPersona(id: string, flash: Flash = "", opts: { push?: boolean } = {}): Promise<void> {
   if (appState.currentView !== "personas") return;
   const host = paneHost(id);
   if (host && !host.firstChild)
@@ -624,7 +636,7 @@ function accessSection(persona: PersonaDetail): TemplateResult {
   );
 }
 
-function personaFactsTpl(persona: PersonaDetail, reload: (flash: string) => void, redraw: () => void): TemplateResult {
+function personaFactsTpl(persona: PersonaDetail, reload: (flash: Flash) => void, redraw: () => void): TemplateResult {
   return html`
     ${skillsSection(persona)} ${cronsSection(persona)} ${credentialsSection(persona, reload)}
     ${channelsSection(persona)} ${accessSection(persona)}
@@ -633,10 +645,10 @@ function personaFactsTpl(persona: PersonaDetail, reload: (flash: string) => void
       canEdit: canEditPersona(persona.role),
       action: rowAction,
       redraw,
-      restored: (updated, flash) => {
+      restored: (updated, flash, slackIconWarning) => {
         const view = updated as PersonaView;
         setPersonaList([...personasState.list.filter((p) => p.id !== view.id), view]);
-        reload(flash);
+        reload(iconNotice(flash, view, slackIconWarning));
       },
       failed: showActionError,
     })}
@@ -1012,12 +1024,12 @@ function personaFormTpl(persona: PersonaDetail | null, state: FormState, redraw:
     state.error = "";
     redraw();
     try {
-      const saved = await api<{ persona: PersonaView }>(
+      const saved = await api<{ persona: PersonaView; slackIconWarning?: string }>(
         persona ? `/api/personas/${encodeURIComponent(persona.id)}` : "/api/personas",
         { method: persona ? "PATCH" : "POST", body: JSON.stringify(body) },
       );
       setPersonaList([...personasState.list.filter((p) => p.id !== saved.persona.id), saved.persona]);
-      await openPersona(saved.persona.id, persona ? "Saved." : "");
+      await openPersona(saved.persona.id, persona ? iconNotice("Saved.", saved.persona, saved.slackIconWarning) : "");
     } catch (err) {
       state.error = errMessage(err, "Couldn't save this bot.");
       state.saving = false;
@@ -1089,7 +1101,7 @@ function showNewPersonaForm(): void {
   host.querySelector<HTMLInputElement>('input[name="name"]')?.focus();
 }
 
-function showPersonaDetail(persona: PersonaDetail, flash: string, push = false): void {
+function showPersonaDetail(persona: PersonaDetail, flash: Flash, push = false): void {
   const host = paneHost(persona.id);
   if (!host) return;
   syncPersonaUrl(persona.id, push);
@@ -1130,7 +1142,7 @@ function showPersonaDetail(persona: PersonaDetail, flash: string, push = false):
               `
         }
         ${editable ? contextModelSection(`persona:${persona.id}`) : nothing}
-        ${canManageSlack ? personaSlackSection(persona.id, draw) : nothing}
+        ${canManageSlack ? personaSlackSection(persona.id, draw, (done, warning) => iconNotice(done, persona, warning)) : nothing}
         ${personaFactsTpl(persona, (message) => void openPersona(persona.id, message), draw)}
       </div>`,
       host,
