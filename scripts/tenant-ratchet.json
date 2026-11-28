@@ -2,5 +2,6 @@
   "mintSites": 28,
   "implicitQueries": 317,
   "ambientReads": 69,
-  "ambientCaches": 35
+  "ambientCaches": 35,
+  "bootReads": 24
 }

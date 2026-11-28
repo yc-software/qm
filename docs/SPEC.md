@@ -10,6 +10,25 @@
 4. **Agent UX = human UX.** Tools, errors, hints and prompts are the agent's interface, so they get the same care as the web UI. Spend every context token on purpose.
 5. **Delete before you add.** Via negativa. This codebase is already way too flabby. Always try the solution that simplifies or removes code before adding anything.
 
+## Deployment shapes
+
+QM has no single production, and no setting tells core which kind of deployment it is running in: a shape is only the sum of ordinary settings. Code reads those settings one at a time, with one exception: it must not ask how many tenants exist. A single-organization install is a deployment with one tenant. `bootTenant()` (`src/tenants/boot.ts`), which answers only when `tenants` holds exactly one row, is legacy and gets no new callers: CI's tenant ratchet lets their count only fall. Four shapes exist, and a change to `main` lands on all of them.
+
+| Shape               | Takes this repository as                                                                        | Runs on                                                                                     |
+| ------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| **Package**         | a `@yc-software/qm` npm release and the image digests it pins                                   | the operator's own AWS or Fly account, or one Docker host                                   |
+| **Platform-hosted** | the head of a Git branch, built by the platform on each `qm up`                                 | a platform that runs the services, Postgres, object storage and sandboxes (target `render`) |
+| **Source-built**    | a source checkout or [source fork](../README.md#customize-your-instance), built by its operator | the same targets as a package deployment, or Kubernetes (the Helm chart, Porter)            |
+| **Multi-tenant**    | the same code; each organization is a row in `tenants`                                          | only sandbox backends that keep tenants apart                                               |
+
+Package deployments get `main` only when a release is cut by hand and the operator upgrades, so they cross many commits at once, and a new required setting breaks each one whose operator has not set it. Source-built deployments build a commit of `main` their operator picks, released or not, so every commit on `main` must be fit to run, not only those that become a release. A per-organization value read only from env, or state keyed by org or by process, works for one organization and is wrong with many tenants: key it by tenant ([tenant tokens](./tenant-tokens.md)).
+
+## Core and optional
+
+Every deployment has core (the API, turn workers, the scheduler and the front door that serves sign-in and the web UI), Postgres, the Pi harness, a sandbox backend and the built-in skills. Anything else may be off, or absent, in a given deployment, and code must work without it. Its routes, tools and skills usually ship in every build regardless, so finding one in the source says nothing about whether a deployment has it.
+
+The ones most often assumed: Slack; app connections, which work only where a [Composio](./composio.md) key exists; a [model gateway](./model-gateway.md), or any one model id; S3, without which files stay on local disk; any one sandbox or deploy provider; an external sign-in provider; the egress proxy and content screening. The smallest deployment `qm init` scaffolds (target `docker`) is web UI only: email sign-in from the built-in broker, one model provider key, local disk.
+
 ## Subsystems, most central first
 
 **Agent turns.** The system revolves around durable execution against a central write-ahead log: the session's item log, stored in the `items` table. To execute an agent turn, a worker claims a queued run from the run queue; that run claim is the session's only turn lock and fences the turn's writes. The _orchestrator_ assembles context and drives a harness, which fulfills tool calls, and the result is committed to the item log. The system should be robust to interruption at any time, end to end, and scale to swarms that are millions of agents strong.

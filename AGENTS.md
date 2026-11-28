@@ -8,6 +8,13 @@ To run and test, see [`README.md`](./README.md).
 
 Two habits that keep task-focused changes from scarring the rest of the repo:
 
+- **Know which deployments your change reaches.** QM has no single production: package,
+  platform-hosted, source-built and multi-tenant deployments all take their code from
+  `main`, each with different integrations switched on (see
+  [Deployment shapes](./docs/SPEC.md#deployment-shapes)). Before relying on Slack, app
+  connections (Composio), a model gateway, S3, one sandbox or deploy provider, or one
+  organization per database, check [Core and optional](./docs/SPEC.md#core-and-optional):
+  each is optional or differs between deployments, and the code must work without it.
 - **Do not add AI authorship attribution to commits or pull requests.** Omit
   `Co-authored-by` trailers for Codex, Claude, or other AI tools, and omit
   tool-generated attribution footers such as `Generated with Codex`. Preserve
