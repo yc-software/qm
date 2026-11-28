@@ -250,7 +250,7 @@ function drawPersonasPage(): void {
 }
 
 function rowAction(label: string, glyph: Parameters<typeof icon>[0], run: () => void): TemplateResult {
-  return html`<button class="btn persona-action" type="button" ?disabled=${busyId !== null} @click=${run}>
+  return html`<button class="btn persona-action" type="button" @click=${run}>
     ${icon(glyph, 14)}<span>${label}</span>
   </button>`;
 }
@@ -289,7 +289,6 @@ function personaRow(persona: PersonaView): TemplateResult {
 async function busy(persona: PersonaView, work: () => Promise<void>, fallback: string): Promise<void> {
   if (busyId) return;
   busyId = persona.id;
-  if (pageHost?.isConnected) drawPersonasPage();
   try {
     await work();
   } catch (e) {
@@ -370,6 +369,16 @@ async function fetchPersona(id: string): Promise<PersonaDetail> {
 }
 
 async function openPersona(id: string, flash = "", opts: { push?: boolean } = {}): Promise<void> {
+  if (appState.currentView !== "personas") return;
+  const host = paneHost(id);
+  if (host && !host.firstChild)
+    render(
+      html`<div class="resource-detail persona-detail">
+        ${listBackLink("Bots", backToList)}
+        <p class="hint" role="status">Loading…</p>
+      </div>`,
+      host,
+    );
   const seq = ++viewSeq;
   try {
     const persona = await fetchPersona(id);
