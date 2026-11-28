@@ -8,7 +8,6 @@ import { createMemoryEventBus } from "../src/util/event-bus.ts";
 import { createWorker } from "../src/runs/worker.ts";
 import type { Orchestrator, OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { seedTestTenant } from "./support/test-tenant.ts";
 
 const actor = { id: "internal:U1", type: "internal" as const };
 const request: OrchestratorInput = {
@@ -26,21 +25,10 @@ async function until(predicate: () => boolean | Promise<boolean>): Promise<void>
 }
 
 async function isolatedPostgres(): Promise<{ url: string; admin: pg.Pool; cleanup(): Promise<void> }> {
-  const admin = new pg.Pool({ connectionString: process.env.DATABASE_URL! });
-  const schema = `run_availability_${randomUUID().replaceAll("-", "")}`;
-  await admin.query(`CREATE SCHEMA ${schema}`);
-  const url = new URL(process.env.DATABASE_URL!);
-  url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
-  url.searchParams.set("application_name", schema);
-  await seedTestTenant(url.toString());
-  return {
-    url: url.toString(),
-    admin,
-    async cleanup() {
-      await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-      await admin.end();
-    },
-  };
+  const url = new URL(testDatabaseUrl());
+  url.searchParams.set("application_name", `run_availability_${randomUUID().replaceAll("-", "")}`);
+  const admin = new pg.Pool({ connectionString: url.toString() });
+  return { url: url.toString(), admin, cleanup: () => admin.end() };
 }
 
 for (const duringClaim of [false, true]) {

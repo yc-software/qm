@@ -7,7 +7,6 @@ import { testConfig } from "./support/test-config.ts";
 import { runNowSettled } from "./support/settle.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { createServer } from "../src/api/server.ts";
-import { serverDeps } from "../src/wiring.ts";
 import type { Agent, RuntimeChoice } from "../src/agent/agent.ts";
 import type { RuntimeResult } from "../src/agent/runtime-types.ts";
 import { scopeId } from "../src/types.ts";
@@ -37,13 +36,14 @@ test("a cron a Slack bot's turn creates runs as the bot's work, with a bot turn'
     token = opts?.env?.AGENT_API_TOKEN ?? token;
     return provision(owner, opts);
   };
-  const server = createServer(built.app, serverDeps(config, built));
+  const server = createServer(built.app, built);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => server.close());
   const cronBy = async (botActor: boolean) => {
     await selectDefaultSandbox(built, "U1", scopeId("personal", "U1"));
     const conversation = { kind: "dm" as const, threadRef: `dm:U1:${botActor}` };
-    await built.app.turn({ surface: "test", actor: { externalId: "U1" }, conversation, text: "mint", botActor });
+    const turn = { surface: "test", actor: { externalId: "U1" }, conversation, text: "mint", botActor };
+    await built.app.turn(botActor ? { ...turn, origin: { kind: "automation" } } : turn);
     const headers = { "x-agent-capability": token, "content-type": "application/json" };
     const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/crons`;
     const api = (method: string, path: string, body = {}) =>
@@ -59,7 +59,7 @@ test("a cron a Slack bot's turn creates runs as the bot's work, with a bot turn'
   assert.deepEqual([person.botActor, bot.botActor], [undefined, true], "the bot's cron fires as bot work");
   assert.deepEqual(
     runtimes.map((result) => (result.ok ? "ok" : result.error)),
-    ["ok", "live_actor_required"],
+    ["ok", "authority_required"],
     "a person's cron may pick its own model for the fire; a bot's cron may not",
   );
   const manage = async (id: string) => [

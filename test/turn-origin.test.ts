@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { desktopClientForTurn, introducesUser } from "../src/core/turn-origin.ts";
+import {
+  desktopClientForTurn,
+  introducesUser,
+  mayDriveDesktop,
+  runStarter,
+  sessionTurnOrigin,
+} from "../src/core/turn-origin.ts";
 
 test("desktop execution requires a human web turn with a live desktop binding", () => {
   const human = { origin: { kind: "human" as const }, surface: "web", desktopClientId: "desktop-turn" };
@@ -31,4 +37,32 @@ test("only a person's own message introduces them to the roster", () => {
     false,
     "someone from another Slack workspace is not one of ours",
   );
+});
+
+test("only messages a person sent may drive their desktop, from any client", () => {
+  assert.equal(mayDriveDesktop({ origin: { kind: "human" } }), true);
+  for (const kind of ["direct", "ambient", "automation"] as const)
+    assert.equal(mayDriveDesktop({ origin: { kind } }), false);
+  for (const patch of [{ botActor: true }, { proactiveOpener: true }, { surfaceOrigin: { audience: "external" } }])
+    assert.equal(mayDriveDesktop({ origin: { kind: "human" }, ...patch } as never), false);
+});
+
+test("a session message from a fire does not carry the fire marker", () => {
+  assert.deepEqual(sessionTurnOrigin({ kind: "automation", fire: true }, "hi"), {
+    kind: "automation",
+    screenData: "hi",
+  });
+});
+
+test("a run says whether a person, its parent session or another session started it", () => {
+  assert.equal(runStarter({ origin: { kind: "human" } }, false), "person");
+  assert.equal(
+    runStarter({ origin: { kind: "human" }, sessionSenderId: "parent", delegatingRunId: "r1" }, true),
+    "subagent",
+  );
+  assert.equal(
+    runStarter({ origin: { kind: "human" }, sessionSenderId: "child", delegatingRunId: "r0" }, false),
+    "wake",
+  );
+  assert.equal(runStarter({ origin: { kind: "automation" } }, false), undefined);
 });

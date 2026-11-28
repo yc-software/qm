@@ -88,7 +88,7 @@ test("large channel turns apply the compression rollout setting to every sandbox
   }
 });
 
-test("live bot attestation reaches control, OAuth, and egress capabilities", async () => {
+test("bot attestation reaches control, OAuth, and egress capabilities without a person's authority", async () => {
   const config = signedConfig();
   const { app, sandbox } = buildApp(config);
   const captured = captureProvision(sandbox);
@@ -116,7 +116,7 @@ test("live bot attestation reaches control, OAuth, and egress capabilities", asy
     ]) {
       const claims = await verifyCapabilityToken(token!, TEST_CAPABILITY_SECRET);
       assert.equal(claims?.botActor, true);
-      assert.equal(claims?.liveActor, true);
+      assert.equal(claims?.personAuthority, undefined);
       assert.deepEqual(claims?.members, [{ id: actor.externalId, type: "internal" }]);
       assert.equal(claims?.memory?.orgWrite, undefined);
     }

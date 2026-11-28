@@ -93,7 +93,7 @@ test("a sent email draft saves and sends into the original Gmail thread exactly 
     },
     deps: {
       loops: { store, items, outputs: createLoopOutputStore(testMap()) },
-      loopSourceTokens: { connectorAccessToken: async () => "test-token" },
+      keychain: { connectorAccessToken: async () => "test-token" },
       featureFlags: { enabled: async () => true },
     },
     app: {

@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AddressInfo } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
-import { serverDeps } from "../src/wiring.ts";
 import { buildApp } from "./support/build-app.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { ServerDeps } from "../src/api/deps.ts";
@@ -15,7 +14,7 @@ const ADMIN = { "x-admin-actor": "admin-alice@default-org" };
 function start(overrides: Partial<ServerDeps> = {}) {
   const config = testConfig();
   const built = buildApp(config);
-  const deps = { ...serverDeps(config, built), ...overrides };
+  const deps = { ...built, ...overrides };
   const server = createInsecureTestServer(built.app, deps);
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;

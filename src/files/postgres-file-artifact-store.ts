@@ -16,34 +16,6 @@ import {
   type FileSource,
   type ListOwnedOptions,
 } from "./file-artifact-store.ts";
-import { tenantTables } from "../tenants/migrations.ts";
-
-const SCHEMA = [
-  `CREATE TABLE IF NOT EXISTS file_artifacts(
-    id               TEXT PRIMARY KEY,
-    kind             TEXT NOT NULL DEFAULT 'file',
-    owner_scope_id   TEXT NOT NULL,
-    path             TEXT NOT NULL,
-    name             TEXT NOT NULL,
-    mimetype         TEXT NOT NULL,
-    size_bytes       BIGINT NOT NULL,
-    blob_key         TEXT,
-    sha256           TEXT,
-    direction        TEXT NOT NULL,
-    created_by       TEXT NOT NULL,
-    created_in_scope TEXT,
-    created_at       BIGINT NOT NULL,
-    updated_at       BIGINT NOT NULL,
-    enabled          BOOLEAN NOT NULL DEFAULT TRUE,
-    source           TEXT NOT NULL DEFAULT 'live'
-  )`,
-  `CREATE INDEX IF NOT EXISTS file_artifacts_owner_created
-    ON file_artifacts (owner_scope_id, created_at DESC, id DESC)`,
-  `CREATE INDEX IF NOT EXISTS file_artifacts_owner_path
-    ON file_artifacts (owner_scope_id, path)`,
-  `CREATE INDEX IF NOT EXISTS file_artifacts_scope_created
-    ON file_artifacts (created_in_scope, created_at DESC, id DESC) WHERE enabled = TRUE`,
-];
 
 function storedMimetype(mimetype: string): string {
   try {
@@ -77,19 +49,7 @@ export function createPostgresFileArtifactStore(
   connectionString: string,
   byteStore: DurableByteStore,
 ): FileArtifactStore {
-  const { q, query, pool } = createPgPool(connectionString, [
-    { id: "files/artifacts/0001", statements: SCHEMA },
-    {
-      id: "files/artifacts/0002",
-      statements: [
-        "CREATE TABLE IF NOT EXISTS file_artifact_deletions(id TEXT PRIMARY KEY, deleted_at BIGINT NOT NULL)",
-      ],
-    },
-    ...tenantTables("files/artifacts/0003-tenants", [
-      { table: "file_artifacts", primaryKey: "id" },
-      { table: "file_artifact_deletions", primaryKey: "id" },
-    ]),
-  ]);
+  const { q, query, pool } = createPgPool(connectionString);
 
   async function getRow(id: string): Promise<FileArtifact | null> {
     const rows = await q("SELECT * FROM file_artifacts WHERE id = $1", [id]);
@@ -215,10 +175,10 @@ export function createPostgresFileArtifactStore(
       return r;
     },
 
-    async open(id) {
+    async open(id, range) {
       const r = await getRow(id);
       if (!r || !r.enabled || !r.blobKey) return null;
-      const bytes = await byteStore.open(r.blobKey);
+      const bytes = await byteStore.open(r.blobKey, range);
       if (!bytes) return null;
       return { artifact: r, sizeBytes: bytes.sizeBytes, stream: bytes.stream };
     },

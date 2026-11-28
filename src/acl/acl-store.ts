@@ -21,6 +21,10 @@ function audienceScopes(
 
 const union = (sets: readonly Set<ScopeId>[]): ScopeId[] => [...new Set(sets.flatMap((s) => [...s]))];
 
+export function grantedToEvery(scopes: readonly ReadonlySet<ScopeId>[]): (g: Grant) => boolean {
+  return (g) => scopes.every((s) => s.has(g.granteeScopeId));
+}
+
 function audienceReaches(scopes: readonly Set<ScopeId>[]): (g: Grant) => boolean {
   return (g) =>
     scopes.some((s) => s.has(g.granteeScopeId)) &&
@@ -217,7 +221,7 @@ export function createAclStore(persist: GrantPersistence, opts: AclStoreOptions 
       if (audience.length === 0) return [];
       const scopes = audienceScopes(audience, sessionScopeId, orgScopeId, entitled);
       return (await persist.find(tenant, { ownerScopeId: orgScopeId, kind, granteeScopeIds: union(scopes) })).filter(
-        (g) => scopes.every((s) => s.has(g.granteeScopeId)),
+        grantedToEvery(scopes),
       );
     },
     async sharedOfKindForAudience(tenant, kind, audience, sessionScopeId, orgScopeId, entitled) {

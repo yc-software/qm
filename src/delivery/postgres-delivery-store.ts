@@ -4,8 +4,7 @@ import { createPgPool } from "../persistence/pg-pool.ts";
 import type { Delivery, DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { DELIVERY_MAX_AGE_MS, logDeliveryExpiry, type DeliveryStore } from "./delivery-store.ts";
 import { pgTextSafe } from "../util/text.ts";
-import { tenantTables } from "../tenants/migrations.ts";
-import { claimFunction, claimRows, claimThenLoad, servingTenant } from "../tenants/claim.ts";
+import { claimRows, claimThenLoad } from "../tenants/claim.ts";
 
 const NOW_MS_SQL = "(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT";
 const CLAIMABLE = `delivered_at IS NULL AND expired_at IS NULL AND NOT shadow
@@ -33,169 +32,9 @@ function rowToDelivery(r: Record<string, unknown>): Delivery {
   };
 }
 
-const claimDeliveries = (gate: (column: string) => string) =>
-  claimFunction(
-    "claim_deliveries",
-    "text, bigint",
-    `SELECT pg_advisory_xact_lock(hashtext('deliveries:claim:' || $1));
-          UPDATE deliveries SET claim_expires_at = ${NOW_MS_SQL} + $2
-            WHERE (tenant_id, id) IN (
-              SELECT tenant_id, id FROM deliveries d
-               WHERE ${CLAIMABLE} AND destination->>'type' = $1${gate("d.tenant_id")}
-                 AND NOT EXISTS (
-                   SELECT 1 FROM deliveries o
-                    WHERE o.tenant_id = d.tenant_id AND o.destination->>'type' = $1
-                      AND o.destination->>'target' = d.destination->>'target'
-                      AND o.delivered_at IS NULL AND o.expired_at IS NULL AND NOT o.shadow
-                      AND (o.claim_expires_at > ${NOW_MS_SQL} OR (o.created_at, o.id) < (d.created_at, d.id)))
-               ORDER BY created_at
-               FOR UPDATE SKIP LOCKED)
-            RETURNING tenant_id, id::text`,
-  );
-
-const undeliveredTenants = (gate: (column: string) => string) =>
-  claimFunction(
-    "undelivered_delivery_tenants",
-    "text",
-    `SELECT DISTINCT tenant_id, $1 FROM deliveries
-            WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1${gate("tenant_id")}`,
-  );
-
 export function createPostgresDeliveryStore(connectionString: string, opts?: { maxAgeMs?: number }): DeliveryStore {
   const maxAgeMs = opts?.maxAgeMs ?? DELIVERY_MAX_AGE_MS;
-  const pg = createPgPool(connectionString, [
-    {
-      id: "delivery/store/0001",
-      statements: [
-        `CREATE TABLE IF NOT EXISTS deliveries(
-        id TEXT PRIMARY KEY,
-        idempotency_key TEXT NOT NULL UNIQUE,
-        destination JSONB NOT NULL,
-        text TEXT NOT NULL,
-        created_at BIGINT NOT NULL,
-        delivered_at BIGINT
-      )`,
-        `CREATE INDEX IF NOT EXISTS idx_deliveries_pending
-        ON deliveries ((destination->>'type'), created_at) WHERE delivered_at IS NULL`,
-        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS attachments JSONB`,
-        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS provenance JSONB`,
-        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS recipient_thread_ref TEXT`,
-        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS shadow BOOLEAN NOT NULL DEFAULT FALSE`,
-        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS deliver_latency_ms INT`,
-        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS slack_api_ms INT`,
-        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS claim_expires_at BIGINT`,
-        `CREATE INDEX IF NOT EXISTS idx_deliveries_recipient_thread
-        ON deliveries (recipient_thread_ref, created_at) WHERE recipient_thread_ref IS NOT NULL`,
-        `CREATE INDEX IF NOT EXISTS idx_deliveries_shadow
-        ON deliveries (created_at) WHERE shadow AND delivered_at IS NULL`,
-        `CREATE INDEX IF NOT EXISTS idx_deliveries_source_session
-        ON deliveries ((provenance->>'sourceSessionId'), created_at) WHERE provenance IS NOT NULL`,
-        `CREATE INDEX IF NOT EXISTS idx_deliveries_source_thread
-        ON deliveries ((provenance->>'sourceThreadRef'), created_at) WHERE provenance IS NOT NULL`,
-      ],
-    },
-    {
-      id: "delivery/store/0004",
-      statements: [`ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS expired_at BIGINT`],
-    },
-    {
-      id: "delivery/store/0005",
-      statements: [
-        `CREATE INDEX IF NOT EXISTS idx_deliveries_pending_live
-        ON deliveries ((destination->>'type'), created_at) WHERE delivered_at IS NULL AND expired_at IS NULL`,
-      ],
-    },
-    {
-      id: "delivery/store/0006",
-      statements: [
-        `SET LOCAL lock_timeout = '3s'`,
-        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS source_cron_id TEXT`,
-      ],
-    },
-    {
-      id: "delivery/store/0007",
-      statements: [
-        `SET LOCAL lock_timeout = '3s'`,
-        `ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS failed_reason TEXT`,
-      ],
-    },
-    ...tenantTables("delivery/store/0008-tenants", [
-      {
-        table: "deliveries",
-        primaryKey: "id",
-        unique: [{ name: "deliveries_idempotency_key_key", columns: "idempotency_key", constraint: true }],
-      },
-    ]),
-    {
-      id: "delivery/store/0009-claims",
-      statements: [
-        claimFunction(
-          "expire_deliveries",
-          "bigint",
-          `UPDATE deliveries SET expired_at = ${NOW_MS_SQL}
-            WHERE (tenant_id, id) IN (SELECT tenant_id, id FROM deliveries WHERE ${OVERAGED} FOR UPDATE SKIP LOCKED)
-            RETURNING tenant_id, id::text`,
-        ),
-        claimDeliveries(() => ""),
-      ],
-    },
-    {
-      id: "delivery/store/0010-undelivered-claims",
-      statements: [
-        claimFunction(
-          "undelivered_deliveries",
-          "text",
-          `SELECT tenant_id, id::text FROM deliveries
-            WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
-            ORDER BY created_at LIMIT 200`,
-        ),
-      ],
-    },
-    {
-      id: "delivery/store/0011-undelivered-uncapped",
-      statements: [
-        claimFunction(
-          "undelivered_deliveries",
-          "text",
-          `SELECT tenant_id, id::text FROM deliveries
-            WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
-            ORDER BY created_at`,
-        ),
-      ],
-    },
-    {
-      id: "delivery/store/0012-undelivered-tenants",
-      statements: ["DROP FUNCTION IF EXISTS undelivered_deliveries(text)", undeliveredTenants(() => "")],
-    },
-    {
-      id: "delivery/store/0013-serving-claims",
-      statements: [claimDeliveries(servingTenant), undeliveredTenants(servingTenant)],
-    },
-    {
-      id: "delivery/store/0014-pending-heads",
-      statements: [
-        `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_deliveries_pending_heads
-        ON deliveries (tenant_id, (destination->>'type'), (destination->>'target'), created_at, id)
-        WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow`,
-      ],
-    },
-    {
-      id: "delivery/store/0015-pending-head-claims",
-      statements: [
-        claimFunction(
-          "pending_delivery_heads",
-          "text[]",
-          `SELECT DISTINCT tenant_id, jsonb_build_array(destination->>'type', destination->>'target')::text
-             FROM deliveries
-            WHERE ${PENDING} AND destination->>'type' = ANY($1)${servingTenant("tenant_id")}`,
-        ),
-      ],
-    },
-    {
-      id: "delivery/store/0016-message-ts",
-      statements: [`ALTER TABLE deliveries ADD COLUMN IF NOT EXISTS message_ts TEXT`],
-    },
-  ]);
+  const pg = createPgPool(connectionString);
   const { q, query } = pg;
 
   const enqueueListeners = tenantListeners<[string, string, string]>("delivery enqueue");
@@ -233,6 +72,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
                attachments = EXCLUDED.attachments,
                provenance = EXCLUDED.provenance,
                created_at = EXCLUDED.created_at,
+               seq = DEFAULT,
                shadow = EXCLUDED.shadow,
                expired_at = NULL,
                claim_expires_at = NULL
@@ -264,7 +104,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         `SELECT * FROM deliveries
           WHERE delivered_at IS NULL AND expired_at IS NULL AND NOT shadow AND destination->>'type' = $1
             AND ($2::text IS NULL OR provenance->>'sourceThreadRef' = $2)
-          ORDER BY created_at`,
+          ORDER BY created_at, seq, id`,
         [type, sourceThreadRef ?? null],
       );
       return rows.map(rowToDelivery);
@@ -272,14 +112,16 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     async claimPending(type, ttlMs) {
       await expireOveraged();
       const rows = await q(
-        `UPDATE deliveries SET claim_expires_at = ${NOW_MS_SQL} + $2
-          WHERE id IN (
-            SELECT id FROM deliveries WHERE ${CLAIMABLE} AND destination->>'type' = $1
-             ORDER BY created_at FOR UPDATE SKIP LOCKED)
-          RETURNING *`,
+        `WITH claimed AS (
+           UPDATE deliveries SET claim_expires_at = ${NOW_MS_SQL} + $2
+            WHERE id IN (
+              SELECT id FROM deliveries WHERE ${CLAIMABLE} AND destination->>'type' = $1
+               ORDER BY created_at, seq, id FOR UPDATE SKIP LOCKED)
+            RETURNING *)
+         SELECT * FROM claimed ORDER BY created_at, seq, id`,
         [type, ttlMs],
       );
-      return rows.map(rowToDelivery).sort((a, b) => a.createdAt - b.createdAt);
+      return rows.map(rowToDelivery);
     },
     async claimDue(type, ttlMs) {
       for (const d of await claimThenLoad(() => claimRows(pg, "expire_deliveries", [maxAgeMs]), load))
@@ -292,7 +134,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
         `WITH head AS (
            SELECT id, claim_expires_at FROM deliveries
             WHERE tenant_id = $1 AND ${PENDING} AND destination->>'type' = $2 AND destination->>'target' = $3
-            ORDER BY created_at, id LIMIT 1 FOR UPDATE)
+            ORDER BY created_at, seq, id LIMIT 1 FOR UPDATE)
          UPDATE deliveries d
             SET claim_expires_at = CASE WHEN head.claim_expires_at > ${NOW_MS_SQL}
               THEN head.claim_expires_at ELSE ${NOW_MS_SQL} + $4 END
@@ -322,7 +164,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
     async listShadow(opts) {
       const limit = Math.max(1, opts?.limit ?? 100);
       const rows = await q(
-        "SELECT * FROM deliveries WHERE shadow AND delivered_at IS NULL ORDER BY created_at DESC LIMIT $1",
+        "SELECT * FROM deliveries WHERE shadow AND delivered_at IS NULL ORDER BY created_at DESC, seq DESC LIMIT $1",
         [limit],
       );
       return rows.map(rowToDelivery);
@@ -392,7 +234,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       const rows = await q(
         `SELECT * FROM deliveries
           WHERE recipient_thread_ref = $1 AND destination->>'type' = 'principal'
-          ORDER BY created_at DESC
+          ORDER BY created_at DESC, seq DESC
           LIMIT $2`,
         [recipientThreadRef, limit],
       );
@@ -403,7 +245,7 @@ export function createPostgresDeliveryStore(connectionString: string, opts?: { m
       const rows = await q(
         `SELECT * FROM deliveries
           WHERE provenance->>'sourceSessionId' = $1 OR provenance->>'sourceThreadRef' = $2
-          ORDER BY created_at DESC
+          ORDER BY created_at DESC, seq DESC
           LIMIT $3`,
         [sourceSessionId, sourceThreadRef, limit],
       );

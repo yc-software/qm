@@ -29,6 +29,7 @@ export interface BaseCtx {
   tenant?: Tenant;
   capability?: CapabilityClaims | null;
   upgrade?: UpgradeTarget;
+  adminAccess?: AdminAccess;
 }
 
 export interface ApiCtx extends BaseCtx {
@@ -50,6 +51,7 @@ export type RouteActor = "person" | "system" | `${"query" | "body"}.${string}`;
 export interface AdminAccess {
   agent?: "anyone" | { portalOnly: string };
   privateRead?: "always" | "unless-org-scope";
+  owner?: true;
 }
 
 export type Route<C extends BaseCtx = ApiCtx> = {
@@ -79,6 +81,7 @@ export function withAdmin<C extends BaseCtx>(routes: Route<C>[]): Route<C>[] {
 
 export async function run<C extends BaseCtx>(route: Route<C>, params: Record<string, string>, ctx: C): Promise<void> {
   ctx.params = params;
+  if (route.admin) ctx.adminAccess = route.admin;
   await withModelRequestContext(ctx.capability ?? {}, () => route.handle(ctx));
 }
 

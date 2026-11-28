@@ -26,6 +26,7 @@ import { testAdvisoryLock, testCountedAdvisoryLock, testDatabaseUrl, testMap } f
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { probedCommand } from "./support/probed-command.ts";
 import { startedBy } from "./support/live-run.ts";
+import { sleep } from "../src/util/async.ts";
 
 async function jobComputers(resources: SandboxResources): Promise<SandboxResource[]> {
   const found: SandboxResource[] = [];
@@ -272,7 +273,9 @@ const sizedBackend = (sizes: Array<number | undefined>) => (backend: Sandbox) =>
 test("a computer's memory size is stored and reaches every later provision and restart", async () => {
   const sizes: Array<number | undefined> = [];
   const { resources, router } = fixture(sizedBackend(sizes));
-  const computer = await resources.create("alice", "personal:alice", "local", "big", undefined, undefined, 6);
+  const computer = await resources.create("alice", "personal:alice", "local", "big", undefined, undefined, {
+    memoryGb: 6,
+  });
   await resources.setDefault("alice", "personal:alice", computer.id);
   await router.provision("personal:alice");
   await router.restartComputer!("personal:alice");
@@ -291,17 +294,48 @@ test("a resize the backend refuses keeps the computer's old size", async () => {
       throw new Error("memory must not exceed 1Ti");
     };
   });
-  const computer = await resources.create("alice", "personal:alice", "local", "big", undefined, undefined, 6);
+  const computer = await resources.create("alice", "personal:alice", "local", "big", undefined, undefined, {
+    memoryGb: 6,
+  });
   await resources.setDefault("alice", "personal:alice", computer.id);
   await assert.rejects(resources.restart("alice", computer.id, 2000), /must not exceed 1Ti/);
   await router.provision("personal:alice");
   assert.deepEqual(sizes, [6, 2000, 6]);
 });
 
+test("a named image is stored on the computer, resolved for its provider, and refused where it is not set up", async () => {
+  const { options, backend } = fixture();
+  const sprites = { ...backend, profile: { ...backend.profile, backend: "sprites" } };
+  const resources = createSandboxResources({
+    ...options,
+    images: { toolchain: { local: "registry/toolchain:1", e2b: "toolchain" }, gpu: { e2b: "gpu" } },
+    backends: { local: backend, sprites },
+  });
+  const create = (backendName: string, image: string) =>
+    resources.create("alice", "personal:alice", backendName, "dev", undefined, undefined, { image });
+  const computer = await create("local", "toolchain");
+  assert.equal(computer.image, "toolchain");
+  assert.equal(await resources.imageFor(computer.backingScopeId), "registry/toolchain:1");
+  assert.equal(await resources.imageFor("sandbox-unknown"), undefined);
+  assert.deepEqual(
+    (await resources.list("alice", "personal:alice")).providers.map((p) => [p.name, p.images]),
+    [
+      ["local", ["toolchain"]],
+      ["sprites", undefined],
+    ],
+  );
+  await assert.rejects(
+    create("sprites", "toolchain"),
+    /^Error: image toolchain is not set up for sprites; it is available on local$/,
+  );
+  await assert.rejects(create("local", "gpu"), /^Error: image gpu is not set up for local$/);
+  await assert.rejects(create("local", "nope"), /^Error: unknown image nope; configured images: toolchain, gpu$/);
+});
+
 test("a memory size is refused on a backend that takes none", async () => {
   const { resources, records } = fixture();
   await assert.rejects(
-    resources.create("alice", "personal:alice", "local", "big", undefined, undefined, 4),
+    resources.create("alice", "personal:alice", "local", "big", undefined, undefined, { memoryGb: 4 }),
     /local computers take no memory size/,
   );
   assert.equal(
@@ -708,7 +742,11 @@ test("retirement waits for background startup to commit its live registry row", 
     destroyed = true;
   };
   const retiring = assert.rejects(resources.retire("alice", record.id), /live background work/);
-  release.resolve();
+  try {
+    assert.equal(await Promise.race([retiring.then(() => "retired"), sleep(100).then(() => "waiting")]), "waiting");
+  } finally {
+    release.resolve();
+  }
   await Promise.all([starting, retiring]);
   assert.equal(destroyed, false);
   assert.equal((await registry.get("job"))?.sandboxId, record.id);
@@ -951,7 +989,7 @@ test("concurrent routed commands hold no Postgres session connection while they 
   }
 });
 
-test("a verified live turn can create only its own new scope computer without directory mutations", async () => {
+test("a verified speaker's current turn can create only its own new scope computer without directory mutations", async () => {
   const { resources, router } = fixture(undefined, []);
   const scope = "channel:external-slack:T1:policy:C1";
   await resources.initialize();
@@ -1180,7 +1218,7 @@ test("every resource-bound command reports the computer's load without disturbin
 
 test("a computer without an io pressure gauge reports it unavailable rather than a number", async () => {
   const { router } = fixture((backend) =>
-    shellRun(backend, () => "out\n\n__QM_LOAD__ - 0.42 2048 8192 10485760 104857600\n"),
+    shellRun(backend, () => "out\n\n__QM_LOAD__ - 0.42 2048 8192 10485760 104857600 - -\n"),
   );
   const r = await router.run(await router.provision("personal:alice"), "true");
   assert.equal(r.stdout, "out\n");
@@ -1214,7 +1252,7 @@ test("output a background job prints after the load line, and an unterminated he
 });
 
 test("load samples are written at most once per ten seconds per computer", async (t) => {
-  const { router, options } = fixture((backend) => shellRun(backend, () => "\n__QM_LOAD__ 1 1 1 2 1 2\n"));
+  const { router, options } = fixture((backend) => shellRun(backend, () => "\n__QM_LOAD__ 1 1 1 2 1 2 - -\n"));
   const handle = await router.provision("personal:alice");
   const puts: number[] = [];
   const put = options.loads.put.bind(options.loads);
@@ -1234,7 +1272,7 @@ test("load samples are written at most once per ten seconds per computer", async
 test("sustained io pressure is reported once per episode, then re-arms after it clears", async () => {
   let io = "88";
   const events: string[] = [];
-  const f = fixture((backend) => shellRun(backend, () => `\n__QM_LOAD__ ${io} 25 1 2 1 2\n`));
+  const f = fixture((backend) => shellRun(backend, () => `\n__QM_LOAD__ ${io} 25 1 2 1 2 - -\n`));
   const router = createSandboxRouter({
     backends: { local: f.backend },
     defaultBackend: "local",
@@ -1254,7 +1292,7 @@ test("sustained io pressure is reported once per episode, then re-arms after it 
 
 test("the Sandboxes line counts the asking turn plus the runs holding the default and stays quiet when nothing is notable", async () => {
   const { router, resources, options } = fixture((backend) =>
-    shellRun(backend, () => "\n__QM_LOAD__ 62.4 7.5 3072 8192 52428800 104857600\n"),
+    shellRun(backend, () => "\n__QM_LOAD__ 62.4 7.5 3072 8192 52428800 104857600 - -\n"),
   );
   const handle = await router.provision("personal:alice");
   const id = handle.resourceId!;
@@ -1297,7 +1335,7 @@ test("a single session still sees the line when the disk is nearly full, without
 });
 
 test("the recorded load sample takes mem and disk totals from the created size, falling back to the kernel's", async () => {
-  const hostLine = "\n__QM_LOAD__ - 0.00 1540 463713 1048584 536870912\n";
+  const hostLine = "\n__QM_LOAD__ - 0.00 1540 463713 1048584 536870912 - -\n";
   const kernel = fixture((backend) => shellRun(backend, () => hostLine));
   const bare = await kernel.router.provision("personal:alice");
   await kernel.router.run(bare, "true");

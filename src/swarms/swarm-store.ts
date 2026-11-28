@@ -21,62 +21,6 @@ export const SWARM_LIMITS = {
   provisionMs: 10_000,
 } as const;
 
-export const STAMP_SWARM_COMPUTERS_MIGRATION = {
-  id: "durable-map/swarms/0040-stamp-computers",
-  statements: [
-    `DO $$
-    BEGIN
-      IF to_regclass('swarms') IS NOT NULL AND to_regclass('sandbox_resources') IS NOT NULL THEN
-        UPDATE durable_map_versions SET v = v + 1 WHERE tbl = 'sandbox_resources';
-        UPDATE sandbox_resources r SET json = r.json || jsonb_build_object('swarmId', c.swarm_id)
-        FROM (
-          SELECT tenant_id, id AS swarm_id, json #>> '{board,sandboxId}' AS sandbox_id FROM swarms
-          UNION ALL
-          SELECT s.tenant_id, s.id, member ->> 'sandboxId'
-          FROM swarms s, jsonb_array_elements(s.json -> 'members') AS member
-        ) c
-        WHERE r.tenant_id = c.tenant_id AND r.id = c.sandbox_id AND NOT r.json ? 'swarmId';
-      END IF;
-    END $$`,
-  ],
-};
-
-export const MARK_SWARM_FORUMS_PERSON_USED_MIGRATION = {
-  id: "durable-map/swarms/0041-mark-forums-person-used",
-  statements: [
-    `DO $$
-    BEGIN
-      IF to_regclass('swarms') IS NOT NULL AND to_regclass('sandbox_resources') IS NOT NULL THEN
-        UPDATE durable_map_versions SET v = v + 1 WHERE tbl IN ('sandbox_resources', 'swarms');
-        WITH forums AS (
-          SELECT s.tenant_id, member ->> 'forumSandboxId' AS sandbox_id
-          FROM swarms s, jsonb_array_elements(s.json -> 'members') AS member
-          WHERE member ? 'forumSandboxId'
-            AND member ->> 'forumSandboxId' IS DISTINCT FROM s.json #>> '{board,sandboxId}'
-            AND member ->> 'state' = 'ready'
-            AND (
-              s.json #>> '{template,botActor}' IS DISTINCT FROM 'true'
-              OR (
-                SELECT message ->> 'actorId' FROM jsonb_array_elements(s.json -> 'messages') AS message
-                WHERE message -> 'audience' ? (member ->> 'id')
-                ORDER BY (message ->> 'seq')::int
-                LIMIT 1
-              ) <> s.json #>> '{template,actor,id}'
-            )
-        ), marked AS (
-          UPDATE sandbox_resources r SET json = r.json || '{"personUsed": true}'::jsonb
-          FROM forums f
-          WHERE r.tenant_id = f.tenant_id AND r.id = f.sandbox_id AND NOT r.json ? 'personUsed'
-        )
-        UPDATE swarms b SET json = b.json || '{"personUsedComputers": true}'::jsonb
-        FROM forums f JOIN sandbox_resources r ON r.tenant_id = f.tenant_id AND r.id = f.sandbox_id
-        WHERE b.tenant_id = r.tenant_id AND b.id = r.json ->> 'swarmId'
-          AND b.json #>> '{template,botActor}' = 'true' AND NOT b.json ? 'personUsedComputers';
-      END IF;
-    END $$`,
-  ],
-};
-
 export interface SwarmMember {
   id: string;
   sessionId?: string;

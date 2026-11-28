@@ -1,8 +1,8 @@
 import { canAdministerLoop } from "../loop-administration.ts";
 import { LOOP_ICON_ERROR, validLoopIcon } from "../../loops/loop-store.ts";
 import { boundLoopCron } from "../../loops/authority.ts";
-import { authoredNow, reauthored } from "../../cron/authority.ts";
-import { personAtKeyboard } from "../artifact-share.ts";
+import { actionApproved } from "../action-approval.ts";
+import { carriesPersonAuthority } from "../artifact-share.ts";
 import type { AdvisoryLock } from "../../persistence/advisory-lock.ts";
 import type { Loop, LoopState, LoopTriageConfig } from "../../loops/types.ts";
 import { scopeId, type ScopeId } from "../../types.ts";
@@ -20,7 +20,7 @@ import type { CronStore } from "../../cron/cron-store.ts";
 import { DEFAULT_CRON_TIMEZONE, userScheduleFromBody, validateUserSchedule } from "../../cron/schedule.ts";
 import type { ScopedConfigStore } from "../../resolution/config-store.ts";
 import { errMessage, reportFailure, swallow } from "../../util/errors.ts";
-import { PERSON_REQUIRED, refuseImpersonated, sendJson } from "../http.ts";
+import { refuseImpersonated, sendJson } from "../http.ts";
 import { isObj, resolveCapabilityDestination } from "./shared.ts";
 import { withActor, type ApiCtx, type Route } from "./route.ts";
 
@@ -30,24 +30,19 @@ export interface LoopServiceDeps {
   items: LoopItemLedger;
   outputs: LoopOutputStore;
   grants: ShipGrantStore;
-  fire?: LoopFireService;
-  crons?: CronStore;
+  fire: LoopFireService;
+  crons: CronStore;
   config: ScopedConfigStore;
-}
-
-export function loopDeps(ctx: ApiCtx): LoopServiceDeps | null {
-  return ctx.deps.loops ?? null;
 }
 
 interface ActingPrincipal {
   actorId: string;
   scopeId?: ScopeId;
   capability?: CapabilityClaims;
-  liveHuman: () => Promise<boolean>;
 }
 
 export async function inboxPreviewEnabled(deps: ApiCtx["deps"], principalId: string): Promise<boolean> {
-  return (await deps.featureFlags?.enabled("inbox_loops", scopeId("personal", principalId))) === true;
+  return (await deps.featureFlags.enabled("inbox_loops", scopeId("personal", principalId))) === true;
 }
 
 export function forInboxLoopsPeople(routes: Route<ApiCtx>[]): Route<ApiCtx>[] {
@@ -63,40 +58,33 @@ export function forInboxLoopsPeople(routes: Route<ApiCtx>[]): Route<ApiCtx>[] {
 }
 
 export function actingPrincipal(ctx: ApiCtx): ActingPrincipal | null {
-  if (ctx.capability) {
-    const atKeyboard = ctx.capability.liveActor === true && personAtKeyboard(ctx.capability);
-    return {
-      actorId: ctx.capability.actorId,
-      scopeId: ctx.capability.scopeId as ScopeId,
-      capability: ctx.capability,
-      liveHuman: async () => atKeyboard,
-    };
-  }
-  if (ctx.actor?.p) {
-    const live = !ctx.actor.imp;
-    return { actorId: ctx.actor.p, liveHuman: async () => live };
-  }
+  if (ctx.capability)
+    return { actorId: ctx.capability.actorId, scopeId: ctx.capability.scopeId as ScopeId, capability: ctx.capability };
+  if (ctx.actor?.p) return { actorId: ctx.actor.p };
   const principalId = (ctx.url.searchParams.get("principalId") ?? "").trim();
-  if (principalId) return { actorId: principalId, liveHuman: async () => false };
+  if (principalId) return { actorId: principalId };
   sendJson(ctx.res, 403, { error: "forbidden", message: "loops need an agent capability or a principalId" });
   return null;
 }
 
-export async function requireLiveHuman(ctx: ApiCtx, acting: ActingPrincipal): Promise<boolean> {
-  if (await acting.liveHuman()) return true;
-  if (ctx.actor?.imp) refuseImpersonated(ctx.res);
-  else sendJson(ctx.res, 403, { error: "human_required", message: PERSON_REQUIRED });
+export async function requireSignOff(ctx: ApiCtx, summary: string, personMay = false): Promise<boolean> {
+  if (ctx.actor?.imp) {
+    refuseImpersonated(ctx.res);
+    return false;
+  }
+  if (ctx.capability) return (personMay && carriesPersonAuthority(ctx.capability)) || actionApproved(ctx, { summary });
+  if (ctx.actor?.p) return true;
+  sendJson(ctx.res, 403, {
+    error: "approval_unavailable",
+    message: "This step needs a signed-in person or an agent run.",
+  });
   return false;
 }
 
 export async function loadAdministrable(
   ctx: ApiCtx,
 ): Promise<{ deps: LoopServiceDeps; loop: Loop; acting: ActingPrincipal } | null> {
-  const deps = loopDeps(ctx);
-  if (!deps) {
-    sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
-    return null;
-  }
+  const deps = ctx.deps.loops;
   const acting = actingPrincipal(ctx);
   if (!acting) return null;
   const loop = await deps.store.get(ctx.params.id ?? "");
@@ -203,8 +191,7 @@ function triageFromBody(value: unknown): LoopTriageConfig | null | undefined {
 }
 
 async function createLoop(ctx: ApiCtx): Promise<void> {
-  const deps = loopDeps(ctx);
-  if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
+  const deps = ctx.deps.loops;
   const acting = actingPrincipal(ctx);
   if (!acting) return;
   const b = isObj(ctx.body) ? ctx.body : {};
@@ -225,7 +212,11 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
       error: "bad_request",
       message: 'shipActions must be [{action, gate: "auto"|"hold"}]',
     });
-  if (shipActions.some((policy) => policy.gate === "auto") && !(await requireLiveHuman(ctx, acting))) return;
+  if (
+    shipActions.some((policy) => policy.gate === "auto") &&
+    !(await requireSignOff(ctx, "Create a loop that ships without holding for review"))
+  )
+    return;
   const capsResult = capsFromBody(b.caps);
   if (capsResult.invalidField)
     return sendJson(ctx.res, 400, {
@@ -264,7 +255,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
     const resolved = resolveCapabilityDestination(ctx.capability, b.destinationKey);
     if (!resolved.ok || !resolved.destination)
       return sendJson(ctx.res, 400, { error: "bad_request", message: "destinationKey is not available" });
-    if (!(await requireLiveHuman(ctx, acting))) return;
+    if (!(await requireSignOff(ctx, "Create a loop that posts to a chosen destination", true))) return;
     destination = resolved.destination;
   }
   const ownerScopeId: ScopeId = scopeId("personal", acting.actorId);
@@ -273,7 +264,6 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
     createdBy: acting.actorId,
     ownerScopeId,
     ...(ctx.capability?.botActor ? { botActor: true } : {}),
-    ...authoredNow(await acting.liveHuman()),
     name: b.name,
     ...(b.icon !== undefined ? { icon: b.icon as string | null } : {}),
     playbook: b.playbook,
@@ -295,7 +285,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
   } catch (e) {
     return sendJson(ctx.res, 400, { error: "loop_create_failed", message: errMessage(e) });
   }
-  if (created && schedule && deps.crons) {
+  if (created && schedule) {
     let cronId: string | undefined;
     try {
       const cron = await deps.crons.create({
@@ -307,7 +297,6 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
         title: `Loop: ${loop.name}`,
         action: `fire loop ${loop.id}`,
         loopId: loop.id,
-        ownerConsentedAt: Date.now(),
       });
       cronId = cron.id;
       loop = (await deps.store.update(loop.id, { cronId: cron.id })) ?? loop;
@@ -321,8 +310,7 @@ async function createLoop(ctx: ApiCtx): Promise<void> {
 }
 
 async function listLoops(ctx: ApiCtx): Promise<void> {
-  const deps = loopDeps(ctx);
-  if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
+  const deps = ctx.deps.loops;
   const acting = actingPrincipal(ctx);
   if (!acting) return;
   const all = await deps.store.list();
@@ -332,7 +320,7 @@ async function listLoops(ctx: ApiCtx): Promise<void> {
 }
 
 async function triageAvailable(ctx: ApiCtx, loop: Loop): Promise<boolean> {
-  return (await ctx.deps.featureFlags?.enabled("loop_triage", scopeId("personal", loop.owner))) === true;
+  return (await ctx.deps.featureFlags.enabled("loop_triage", scopeId("personal", loop.owner))) === true;
 }
 
 async function getLoop(ctx: ApiCtx): Promise<void> {
@@ -394,7 +382,7 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
       });
     patch.state = b.state as LoopState;
     if (patch.state === "enabled" && (loop.state === "quarantined" || loop.state === "archived")) {
-      if (!(await requireLiveHuman(ctx, acting))) return;
+      if (!(await requireSignOff(ctx, `Re-enable loop "${loop.name}"`))) return;
       if (loop.state === "quarantined") {
         patch.quarantineClearedBy = acting.actorId;
         patch.quarantineClearedAt = Date.now();
@@ -431,12 +419,10 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
   const existingGates = new Map(loop.shipActions.map((policy) => [policy.action, policy.gate]));
   if (
     shipActions.some((policy) => policy.gate === "auto" && existingGates.get(policy.action) !== "auto") &&
-    !(await requireLiveHuman(ctx, acting))
+    !(await requireSignOff(ctx, `Let loop "${loop.name}" ship without holding for review`))
   )
     return;
   if (b.shipActions !== undefined) patch.shipActions = shipActions;
-  if (patch.playbookEdit || patch.successCondition || patch.successChecks || patch.shipActions)
-    Object.assign(patch, reauthored(await acting.liveHuman(), loop));
   const capsResult = capsFromBody(b.caps);
   if (capsResult.invalidField)
     return sendJson(ctx.res, 400, {
@@ -458,7 +444,7 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
         error: "forbidden",
         message: "loop triage is not enabled for this loop's owner",
       });
-    if (!(await requireLiveHuman(ctx, acting))) return;
+    if (!(await requireSignOff(ctx, `Change triage for loop "${loop.name}"`, true))) return;
     patch.triage = triage;
   }
   if (b.destinationKey !== undefined) {
@@ -466,7 +452,7 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
       return sendJson(ctx.res, 400, { error: "bad_request", message: "destinationKey must be a string or null" });
     if (!ctx.capability)
       return sendJson(ctx.res, 400, { error: "bad_request", message: "destinationKey requires an agent capability" });
-    if (!(await requireLiveHuman(ctx, acting))) return;
+    if (!(await requireSignOff(ctx, `Change where loop "${loop.name}" posts`, true))) return;
     if (b.destinationKey === null) {
       patch.destination = null;
     } else {
@@ -489,7 +475,7 @@ async function patchLoop(ctx: ApiCtx): Promise<void> {
 }
 
 export async function syncLoopSchedule(deps: LoopServiceDeps, loop: Loop, state: LoopState): Promise<void> {
-  if (!loop.cronId || !deps.crons) return;
+  if (!loop.cronId) return;
   try {
     await deps.crons.setEnabled(loop.cronId, state === "enabled");
   } catch (e) {
@@ -516,9 +502,9 @@ async function deleteLoop(ctx: ApiCtx): Promise<void> {
 async function previewLoopTriage(ctx: ApiCtx): Promise<void> {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return;
-  const { deps, loop, acting } = loaded;
+  const { deps, loop } = loaded;
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
-  if (!deps.fire || !(await triageAvailable(ctx, loop)))
+  if (!(await triageAvailable(ctx, loop)))
     return sendJson(ctx.res, 404, { error: "not_found", message: "loop triage is not available" });
   const triage = triageFromBody(isObj(ctx.body) ? ctx.body.triage : undefined);
   if (!triage)
@@ -526,7 +512,7 @@ async function previewLoopTriage(ctx: ApiCtx): Promise<void> {
       error: "bad_request",
       message: `triage must be {prioritize?, consolidate?: {enabled: boolean, instructions?: string up to ${TRIAGE_INSTRUCTIONS_MAX} chars}}`,
     });
-  if (!(await requireLiveHuman(ctx, acting))) return;
+  if (!(await requireSignOff(ctx, `Preview triage for loop "${loop.name}"`, true))) return;
   try {
     const items = await deps.fire.previewTriage(loop, { ...loop.triage, ...triage });
     return sendJson(ctx.res, 200, { items });
@@ -540,7 +526,6 @@ async function fireLoopNow(ctx: ApiCtx): Promise<void> {
   if (!loaded) return;
   const { deps, loop } = loaded;
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
-  if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   const fireKey = `loop:${loop.id}:manual:${Date.now()}`;
   void deps.fire
     .fire(loop.id, fireKey)
@@ -553,7 +538,7 @@ async function fireLoopNow(ctx: ApiCtx): Promise<void> {
 }
 
 async function decideOutput(ctx: ApiCtx): Promise<void> {
-  const lock = loopDeps(ctx)?.lock;
+  const lock = ctx.deps.loops.lock;
   if (lock && !ctx.capability)
     return lock.withLock(`loop-lifecycle:${ctx.params.id ?? ""}`, () => decideOutputLocked(ctx));
   return decideOutputLocked(ctx);
@@ -564,8 +549,7 @@ async function decideOutputLocked(ctx: ApiCtx): Promise<void> {
   if (!loaded) return;
   const { deps, loop, acting } = loaded;
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
-  if (!(await requireLiveHuman(ctx, acting))) return;
-  if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
+  if (!(await requireSignOff(ctx, `Decide a held output of loop "${loop.name}"`))) return;
   const b = isObj(ctx.body) ? ctx.body : {};
   const outputId = ctx.params.outputId ?? "";
   const note = typeof b.note === "string" && b.note.trim() ? b.note.trim() : undefined;
@@ -603,7 +587,7 @@ async function graduateShipAction(ctx: ApiCtx): Promise<void> {
   if (!loaded) return;
   const { deps, loop, acting } = loaded;
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
-  if (!(await requireLiveHuman(ctx, acting))) return;
+  if (!(await requireSignOff(ctx, `Let loop "${loop.name}" ship an action without review from now on`))) return;
   const b = isObj(ctx.body) ? ctx.body : {};
   if (typeof b.shipAction !== "string" || !b.shipAction.trim())
     return sendJson(ctx.res, 400, { error: "bad_request", message: "shipAction required" });
@@ -636,7 +620,7 @@ async function setAutopilot(ctx: ApiCtx): Promise<void> {
   if (typeof b.enabled !== "boolean")
     return sendJson(ctx.res, 400, { error: "bad_request", message: "enabled must be a boolean" });
   if (b.enabled) {
-    if (!(await requireLiveHuman(ctx, acting))) return;
+    if (!(await requireSignOff(ctx, `Turn on autopilot for loop "${loop.name}"`))) return;
     if (loop.state === "quarantined" || loop.state === "archived")
       return sendJson(ctx.res, 409, {
         error: "conflict",
@@ -687,7 +671,7 @@ async function revokeShipGrant(ctx: ApiCtx): Promise<void> {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return;
   const { deps, loop, acting } = loaded;
-  if (!(await requireLiveHuman(ctx, acting))) return;
+  if (!(await requireSignOff(ctx, `Revoke a ship grant on loop "${loop.name}"`, true))) return;
   const grantId = ctx.params.grantId ?? "";
   const grant = await deps.grants.get(grantId);
   if (!grant || grant.loopId !== loop.id)

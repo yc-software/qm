@@ -120,7 +120,7 @@ export function createLiveEdits(deps: LiveEditDeps) {
           const kept = saved.tree.filter((f) => paths.includes(f.path) && !written.some((w) => w.path === f.path));
           return [
             ...written.filter((f) => paths.includes(f.path)),
-            ...(await store.filesIn(id, kept)).map((f) => ({ path: f.path, data: bytes(f.data) })),
+            ...(await store.filesIn(id, kept)).map((f) => ({ ...f, data: bytes(f.data) })),
           ];
         },
         commit: () => store.commitDraft(id, [...written], saved.commit, [...deletedPaths]),
@@ -131,7 +131,7 @@ export function createLiveEdits(deps: LiveEditDeps) {
       return {
         tree,
         read: async (paths) =>
-          (await store.filesOf(id, source.commit, paths)).map((f) => ({ path: f.path, data: bytes(f.data) })),
+          (await store.filesOf(id, source.commit, paths)).map((f) => ({ ...f, data: bytes(f.data) })),
         commit: async () => {
           await store.keepCommit(id, source.commit);
           return source.commit;

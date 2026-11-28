@@ -40,6 +40,8 @@ import { directoryRoutes } from "./directory.ts";
 import { contextRoutes } from "./context.ts";
 import { pinRoutes } from "./pins.ts";
 import { uiCanvasRoutes } from "./ui-canvas.ts";
+import { desktopCallRoutes } from "./desktop-calls.ts";
+import { desktopDownloadRoutes } from "./desktop-download.ts";
 import { surfaceCacheRoutes } from "./surface-cache.ts";
 import { environmentRoutes } from "./environments.ts";
 import { emojiRoutes } from "./emoji.ts";
@@ -82,7 +84,7 @@ export const rawRoutes: ReadonlyArray<Route<BaseCtx>> = [
       });
       try {
         await Promise.race([
-          Promise.resolve().then(() => inBootTenant(bootTenant(), () => deps.checkReadiness?.(controller.signal))),
+          Promise.resolve().then(() => inBootTenant(bootTenant(), () => deps.checkReadiness(controller.signal))),
           deadline,
         ]);
         sendJson(res, 200, { ok: true });
@@ -144,9 +146,9 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...composioProxyRoutes,
   ...adminRoutes,
   ...skillPackRoutes,
+  ...fileUploadRoutes,
   ...fileContentRoutes,
   ...surfaceRoutes,
-  ...fileUploadRoutes,
   ...projectRoutes,
   ...contextPolicyRoutes,
   ...reachRoutes,
@@ -155,6 +157,8 @@ export const apiRoutes: ReadonlyArray<Route<ApiCtx>> = [
   ...contextRoutes,
   ...pinRoutes,
   ...uiCanvasRoutes,
+  ...desktopCallRoutes,
+  ...desktopDownloadRoutes,
   ...surfaceCacheRoutes,
   ...environmentRoutes,
   ...emojiRoutes,

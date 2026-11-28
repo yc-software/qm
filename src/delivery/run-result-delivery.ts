@@ -2,7 +2,7 @@ import { isSubagentThreadRef } from "../sessions/session-syscalls.ts";
 import type { DeliveryProvenance, Destination, OutgoingAttachment } from "../types.ts";
 import { waitForNoRunningRun, type Run, type RunStore } from "../runs/run-store.ts";
 import { turnDeliveryProvenance, type DeliveryStore } from "./delivery-store.ts";
-import { isSessionTurn } from "../core/turn-origin.ts";
+import { automationDestination, isSessionTurn } from "../core/turn-origin.ts";
 import { turnFailureItem } from "../core/turn-error.ts";
 import { standaloneFailureText, unfinishedTurnText, userFacingFailureClause } from "../core/failure-copy.ts";
 import { conversationScope } from "../resolution/resolution-service.ts";
@@ -41,13 +41,17 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor, notice?: 
   const surfaceOrigin = run.request.surfaceOrigin;
   const target = run.request.deliveryTarget;
   const surface = run.request.surface;
-  if (!target || !surface) return null;
+  const autoDest =
+    run.request.approval?.approved === true && !(origin.kind === "automation" && origin.fire)
+      ? automationDestination(run.request)
+      : undefined;
+  if (!autoDest && (!target || !surface)) return null;
   const editRef = run.deliveryState?.editRef;
   const failed = run.status === "failed";
-  const webTranscript = webTranscriptNote(run, surface, failed);
-  const destination: Destination = {
-    type: surface,
-    target,
+  const webTranscript = autoDest ? undefined : webTranscriptNote(run, surface!, failed);
+  const destination: Destination = autoDest ?? {
+    type: surface!,
+    target: target!,
     ...(surfaceOrigin
       ? {
           account: {
@@ -68,6 +72,7 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor, notice?: 
     sourceScopeId: conversationScope(run.request.conversation, run.request.actor.id),
     sourceThreadRef: run.request.conversation.threadRef,
     ...(run.result?.sessionId ? { sourceSessionId: run.result.sessionId } : {}),
+    sourceRunId: run.id,
     ...(run.result?.sourceUserSeq !== undefined ? { sourceUserSeq: run.result.sourceUserSeq } : {}),
     ...(run.result?.sourceAssistantEntrySeq !== undefined
       ? { sourceAssistantEntrySeq: run.result.sourceAssistantEntrySeq }

@@ -14,95 +14,9 @@ import {
   type ScopeMembershipFacts,
 } from "./directory-store.ts";
 import { createDirectorySync } from "./directory-sync.ts";
-import {
-  EMAIL_USER_TENANTS,
-  PRINCIPAL_ADMIN_TENANTS,
-  PRINCIPAL_TENANTS,
-  PRINCIPAL_USER_TENANTS,
-} from "../tenants/lookup.ts";
-import { tenantTables } from "../tenants/migrations.ts";
 import { withTenant } from "../tenants/context.ts";
 import { APP_HOSTS_KEY } from "../tenants/app-handle.ts";
 import { loadTenantSettings } from "../tenants/settings.ts";
-
-const PREVIOUS_SCHEMA = "directory/store/0005";
-
-const BASE_SCHEMA = `DO $base_schema$
-BEGIN
-  IF EXISTS (SELECT 1 FROM qm_schema_migrations WHERE id = '${PREVIOUS_SCHEMA}') THEN
-    RETURN;
-  END IF;
-  IF to_regclass('directory_members') IS NOT NULL THEN
-    RAISE EXCEPTION 'This database has directory tables from a release older than ${PREVIOUS_SCHEMA}. Start a release that applies ${PREVIOUS_SCHEMA} but predates the base schema, then upgrade.';
-  END IF;
-
-  CREATE TABLE directory_members(
-    org_id          TEXT NOT NULL,
-    principal_id    TEXT NOT NULL,
-    display_name    TEXT NOT NULL,
-    display_name_lc TEXT NOT NULL,
-    type            TEXT NOT NULL,
-    slack_id        TEXT,
-    avatar_url      TEXT,
-    PRIMARY KEY (org_id, principal_id)
-  );
-  CREATE INDEX directory_members_name ON directory_members (org_id, display_name_lc);
-  CREATE INDEX directory_members_lower_pid ON directory_members (org_id, lower(principal_id));
-
-  CREATE TABLE directory_channels(
-    org_id       TEXT NOT NULL,
-    channel_id   TEXT NOT NULL,
-    name         TEXT NOT NULL,
-    name_lc      TEXT NOT NULL,
-    is_private   BOOLEAN NOT NULL DEFAULT FALSE,
-    is_external  BOOLEAN NOT NULL DEFAULT FALSE,
-    roster_known BOOLEAN NOT NULL DEFAULT FALSE,
-    observed_at  BIGINT,
-    PRIMARY KEY (org_id, channel_id)
-  );
-  CREATE INDEX directory_channels_name ON directory_channels (org_id, name_lc);
-  CREATE INDEX directory_channels_lower_cid ON directory_channels (org_id, lower(channel_id));
-
-  CREATE TABLE directory_channel_members(
-    org_id       TEXT NOT NULL,
-    channel_id   TEXT NOT NULL,
-    principal_id TEXT NOT NULL,
-    PRIMARY KEY (org_id, channel_id, principal_id)
-  );
-
-  CREATE TABLE directory_groups(
-    org_id       TEXT NOT NULL,
-    group_id     TEXT NOT NULL,
-    roster_known BOOLEAN NOT NULL DEFAULT FALSE,
-    PRIMARY KEY (org_id, group_id)
-  );
-
-  CREATE TABLE directory_group_members(
-    org_id       TEXT NOT NULL,
-    group_id     TEXT NOT NULL,
-    principal_id TEXT NOT NULL,
-    PRIMARY KEY (org_id, group_id, principal_id)
-  );
-  CREATE INDEX directory_group_members_principal ON directory_group_members (org_id, principal_id, group_id);
-
-  CREATE TABLE directory_sync(
-    org_id             TEXT PRIMARY KEY,
-    members_hash       TEXT,
-    channels_hash      TEXT,
-    groups_hash        TEXT,
-    updated_at         BIGINT NOT NULL,
-    members_synced_at  BIGINT,
-    channels_synced_at BIGINT,
-    groups_synced_at   BIGINT
-  );
-
-  CREATE TABLE directory_meta(
-    org_id        TEXT PRIMARY KEY,
-    workspace_url TEXT,
-    updated_at    BIGINT NOT NULL
-  );
-END
-$base_schema$`;
 
 function memberRow(r: Record<string, unknown>): DirectoryMember {
   return {
@@ -124,81 +38,6 @@ function channelRow(r: Record<string, unknown>): DirectoryChannel {
   };
 }
 
-export const DIRECTORY_MIGRATIONS = [
-  {
-    id: "directory/store/0006-base-schema",
-    expectedChecksum: "e8dcd5c2a3a8fcba7b1c14db1d1aceb57ca7ef6e1c7366ace6df65043f731198",
-    statements: [BASE_SCHEMA],
-  },
-  ...tenantTables("directory/store/0007-tenants", [
-    { table: "directory_members", primaryKey: "org_id, principal_id" },
-    { table: "directory_channels", primaryKey: "org_id, channel_id" },
-    { table: "directory_channel_members", primaryKey: "org_id, channel_id, principal_id" },
-    { table: "directory_group_members", primaryKey: "org_id, group_id, principal_id" },
-    { table: "directory_groups", primaryKey: "org_id, group_id" },
-    { table: "directory_sync", primaryKey: "org_id" },
-    { table: "directory_meta", primaryKey: "org_id" },
-  ]),
-  {
-    id: "directory/store/0008-tenants-for-email",
-    statements: [
-      `DO $tenants_for_email$
-BEGIN
-  EXECUTE format(
-    $function$CREATE OR REPLACE FUNCTION qm_tenants_for_email(email text) RETURNS TABLE(tenant_id uuid)
-      LANGUAGE sql STABLE SECURITY DEFINER SET search_path = %I, pg_temp AS $body$
-      SELECT DISTINCT m.tenant_id FROM directory_members m
-       WHERE lower(m.principal_id) = lower(email) AND m.type = 'internal'
-    $body$$function$,
-    current_schema());
-END $tenants_for_email$`,
-    ],
-  },
-  PRINCIPAL_TENANTS,
-  PRINCIPAL_ADMIN_TENANTS,
-  {
-    id: "directory/store/0009-tenants-for-email-admins",
-    statements: [
-      `DO $tenants_for_email$
-BEGIN
-  EXECUTE format(
-    $function$CREATE OR REPLACE FUNCTION qm_tenants_for_email(email text) RETURNS TABLE(tenant_id uuid)
-      LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = %I, pg_temp AS $body$ BEGIN
-      RETURN QUERY
-        SELECT m.tenant_id FROM directory_members m
-         WHERE lower(m.principal_id) = lower(email) AND m.type = 'internal'
-        UNION
-        SELECT g.tenant_id FROM admin_grants g WHERE lower(g.principal_id) = lower(email);
-    END $body$$function$,
-    current_schema());
-END $tenants_for_email$`,
-    ],
-  },
-  PRINCIPAL_USER_TENANTS,
-  EMAIL_USER_TENANTS,
-  {
-    id: "directory/store/0011-group-surface",
-    statements: [
-      "ALTER TABLE directory_groups ADD COLUMN surface TEXT NOT NULL DEFAULT 'slack'",
-      "ALTER TABLE directory_groups ALTER COLUMN surface DROP DEFAULT",
-    ],
-  },
-  {
-    id: "directory/store/0012-member-is-bot",
-    statements: ["ALTER TABLE directory_members ADD COLUMN is_bot BOOLEAN"],
-  },
-  {
-    id: "directory/store/0013-member-slack-id-index",
-    statements: [
-      "CREATE INDEX CONCURRENTLY IF NOT EXISTS directory_members_slack_id ON directory_members (org_id, slack_id)",
-    ],
-  },
-  {
-    id: "directory/store/0014-meta-app-icon",
-    statements: ["ALTER TABLE directory_meta ADD COLUMN app_icon_url TEXT"],
-  },
-];
-
 const rosterCoversAudience = (channel: { is_external?: unknown }) => channel.is_external !== true;
 
 function channelMembershipOf(row: Record<string, unknown>): boolean | undefined {
@@ -214,7 +53,7 @@ function groupMembershipOf(row: Record<string, unknown>): boolean | undefined {
 
 export function createPostgresDirectoryStore(connectionString: string): DirectoryStore {
   const orgId = configOrgId();
-  const pg = createPgPool(connectionString, DIRECTORY_MIGRATIONS);
+  const pg = createPgPool(connectionString);
   const { q, pool } = pg;
 
   async function tenantFrom(lookup: "qm_tenant_for_app_handle" | "qm_tenant_for_app_host", key: string) {

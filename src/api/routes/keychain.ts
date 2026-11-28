@@ -2,13 +2,13 @@ import {
   connectorHandle,
   credentialHandle,
   KeychainError,
-  keychainService,
   renderAskNotice,
   type CredentialFieldInput,
   type CredentialFile,
   type GrantMode,
 } from "../../credentials/keychain.ts";
 import { parseScopeId } from "../../types.ts";
+import { actionApproved } from "../action-approval.ts";
 import { samePerson } from "../../directory/person.ts";
 import { approvalCardDestination } from "../../credentials/keychain-approval.ts";
 import { sendJson } from "../http.ts";
@@ -18,14 +18,13 @@ import { botWorkInPersonsName, type CapabilityClaims } from "../../auth/capabili
 import {
   audit,
   BOT_WORK_PERSON_CREDENTIAL,
-  livePersonTurn,
+  requirePersonAuthority,
   personalCapability,
   resolveCapabilityDestination,
 } from "./shared.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { cronIdOf } from "../../sessions/session-store.ts";
 import { connectorHostLabel } from "../../connectors/oauth.ts";
-import type { SecretDropResult } from "../../credentials/secret-drop.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
 
 async function resolveScopeNames(
@@ -37,7 +36,7 @@ async function resolveScopeNames(
   if (!wanted.length) return {};
   const names: Record<string, string> = {};
   const sessionScopes =
-    (await Promise.resolve(deps.sessions?.distinctScopes()).catch(swallowAs("keychain scope names: sessions", null))) ??
+    (await Promise.resolve(deps.sessions.distinctScopes()).catch(swallowAs("keychain scope names: sessions", null))) ??
     [];
   const byScope = new Map(sessionScopes.filter((s) => s.channelName).map((s) => [s.scopeId, s.channelName!]));
   let channelsById: Map<string, string> | null = null;
@@ -100,21 +99,7 @@ const keychainRoute =
     }
   };
 
-function loginTicketRefusal(
-  ticket: SecretDropResult,
-  ownerId: string,
-  service: string,
-  threadRef: string | undefined,
-): string | null {
-  if (!ticket.ok) return ticket.reason;
-  if (ticket.rec.kind !== "login") return "not a login ticket";
-  if (!samePerson(ticket.rec.ownerId, ownerId)) return "another person's ticket";
-  if (ticket.rec.service !== service) return `a ticket for ${ticket.rec.service}`;
-  if (ticket.rec.threadRef !== threadRef) return "a ticket from another conversation";
-  return null;
-}
-
-const saveCredential = keychainRoute(async (ctx, kc, { actorId, scopeId, threadRef }) => {
+const saveCredential = keychainRoute(async (ctx, kc, { actorId, scopeId, botActor }) => {
   const { res, deps, tenant, body } = ctx;
   const b = body as {
     service?: unknown;
@@ -127,7 +112,6 @@ const saveCredential = keychainRoute(async (ctx, kc, { actorId, scopeId, threadR
     accountLabel?: unknown;
     origin?: unknown;
     expiresAt?: unknown;
-    loginTicket?: unknown;
   };
   const expiresAt = normalizeInboundExpiresAt(b.expiresAt);
   if (!expiresAt.ok) return sendJson(res, 400, { error: "bad_request", message: expiresAt.message });
@@ -189,58 +173,26 @@ const saveCredential = keychainRoute(async (ctx, kc, { actorId, scopeId, threadR
     origin: typeof b.origin === "string" ? b.origin : `agent-session:${scopeId}`,
     ...(expiresAt.value !== undefined ? { expiresAt: expiresAt.value } : {}),
   };
-  const service = keychainService(b.service);
-  const ticketId = typeof b.loginTicket === "string" ? b.loginTicket : undefined;
-  const store = async () => {
-    const ticket = ticketId && deps.secretDrops ? await deps.secretDrops.peek(ticketId) : null;
-    const refusal = ticket && loginTicketRefusal(ticket, actorId, service, threadRef);
-    if (refusal) console.warn(`[keychain] loginTicket not used for ${service}: ${refusal}`);
-    const signedIn = ticket !== null && refusal === null;
-    let meta = await kc.create(input);
-    if (!meta) {
-      if (!signedIn && !livePersonTurn(ctx)) return;
-      meta = await kc.save(input);
-    }
-    if (signedIn) {
-      const spent = await deps.secretDrops!.redeem(ticketId!);
-      if (!spent.ok)
-        console.warn(`[keychain] loginTicket for ${service} was not spent after the save: ${spent.reason}`);
-    }
-    audit(
-      { deps, tenant },
-      {
-        principalId: actorId,
-        action: "keychain.save",
-        resource: `${meta.service}:${meta.id}`,
-        scopeLabel: scopeId,
-      },
-    );
-    return sendJson(res, 200, { credential: meta });
-  };
-  return ticketId ? kc.withLoginTicket(ticketId, store) : store();
-});
-
-const startLogin = keychainRoute(async (ctx, _kc, { actorId, scopeId, threadRef }) => {
-  const { res, deps, tenant, body } = ctx;
-  const { service } = body as { service?: unknown };
-  if (typeof service !== "string" || !service.trim())
-    return sendJson(res, 400, { error: "bad_request", message: "service required" });
-  if (!deps.secretDrops) return sendJson(res, 404, { error: "not_found" });
-  if (!livePersonTurn(ctx)) return;
-  const { dropId } = await deps.secretDrops.mint({
-    kind: "login",
-    ownerId: actorId,
-    service: keychainService(service),
-    purpose: "login",
-    requestedBy: actorId,
-    ...(threadRef ? { threadRef } : {}),
-    requiresToken: true,
-  });
+  let meta = await kc.create(input);
+  if (!meta) {
+    if (botActor === true)
+      return sendJson(res, 403, {
+        error: "forbidden",
+        message:
+          "work a bot started can't replace a saved login; its owner can sign in again from their own conversation",
+      });
+    meta = await kc.save(input);
+  }
   audit(
     { deps, tenant },
-    { principalId: actorId, action: "keychain.login.start", resource: keychainService(service), scopeLabel: scopeId },
+    {
+      principalId: actorId,
+      action: "keychain.save",
+      resource: `${meta.service}:${meta.id}`,
+      scopeLabel: scopeId,
+    },
   );
-  return sendJson(res, 200, { loginTicket: dropId });
+  return sendJson(res, 200, { credential: meta });
 });
 
 const claimWriter = keychainRoute(async ({ res, body, params }, kc, { actorId }) => {
@@ -279,8 +231,9 @@ const keychainOverview = keychainRoute(async ({ res, app, deps }, kc, { actorId 
 
 const deleteCredential = keychainRoute(async (ctx, kc, { actorId, scopeId }) => {
   const { res, params } = ctx;
-  if (!livePersonTurn(ctx)) return;
+  if (!requirePersonAuthority(ctx)) return;
   const id = params.id!;
+  if (!(await actionApproved(ctx, { summary: `Delete saved credential ${id}` }))) return;
   const ok = await kc.remove(actorId, id);
   if (ok) audit(ctx, { principalId: actorId, action: "keychain.delete", resource: id, scopeLabel: scopeId });
   return ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "not_found" });
@@ -295,7 +248,7 @@ const listGrants = keychainRoute(async ({ res }, kc, { actorId, scopeId }) => {
 
 const revokeGrant = keychainRoute(async (ctx, kc, { actorId, scopeId }) => {
   const { res, params } = ctx;
-  if (!livePersonTurn(ctx)) return;
+  if (!requirePersonAuthority(ctx)) return;
   const id = params.id!;
   const ok = await kc.revokeGrant(actorId, id);
   if (ok) audit(ctx, { principalId: actorId, action: "keychain.revoke", resource: id, scopeLabel: scopeId });
@@ -395,7 +348,7 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
   if (scope.kind !== "channel" && scope.kind !== "personal" && scope.kind !== "group") {
     return sendJson(res, 403, { error: "forbidden", message: "asks require a personal or shared conversation" });
   }
-  if (await botWorkInPersonsName(ctx.deps.admin?.users, capability))
+  if (await botWorkInPersonsName(ctx.deps.admin.users, capability))
     return sendJson(res, 403, { error: "forbidden", message: BOT_WORK_PERSON_CREDENTIAL });
   let credentialId = typeof b.credential === "string" ? b.credential : undefined;
   if (credentialId === undefined) {
@@ -423,7 +376,7 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
   const dest = resolveCapabilityDestination(capability, undefined);
   const requesterDestination =
     (dest.ok && dest.destination) || (cron?.ownerScopeId === capability.scopeId ? cron.destination : undefined);
-  const originRun = capability.runId ? await deps.runs?.get(capability.runId) : null;
+  const originRun = capability.runId ? await deps.runs.get(capability.runId) : null;
   const requesterSeq = originRun && originRun.sessionId === capability.threadRef ? originRun?.turnUserSeq : null;
   const runRequest = originRun && originRun.sessionId === capability.threadRef ? originRun.request : undefined;
   const humanOrigin = runRequest?.origin.kind === "human" ? runRequest.origin : undefined;
@@ -431,7 +384,6 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
   const ownerSurfaceUser =
     humanOrigin && samePerson(runRequest?.actor.id, cred.ownerId) ? runRequest?.surfaceOrigin?.author : undefined;
   const { ask, existing } = await kc.createAsk({
-    ...(capability.triggered ? { triggered: true } : {}),
     credentialId: cred.id,
     requesterId: actorId,
     requesterScopeId: capability.scopeId,
@@ -455,7 +407,7 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
   });
   const cardDestination = approvalCardDestination(ask);
   if (cardDestination)
-    await deps.deliveries?.enqueue({
+    await deps.deliveries.enqueue({
       destination: cardDestination,
       text: notice,
       idempotencyKey: `ask:${ask.id}:notice`,
@@ -502,7 +454,6 @@ async function handleApproval(ctx: ApiCtx): Promise<void> {
 
 export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
   { method: "POST", path: "/v1/keychain/credentials", actor: "system", auth: "either", handle: saveCredential },
-  { method: "POST", path: "/v1/keychain/login-tickets", actor: "system", auth: "either", handle: startLogin },
   {
     method: "POST",
     path: "/v1/keychain/credentials/:id/writer",

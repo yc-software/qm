@@ -6,7 +6,6 @@ import type { SharingPosture } from "../resolution/sharing-posture.ts";
 import type { Conversation, Principal, ScopeId } from "../types.ts";
 import { scopeId } from "../types.ts";
 import type { Tenant } from "../tenants/context.ts";
-import { tenantTables } from "../tenants/migrations.ts";
 
 interface Team {
   id: string;
@@ -44,59 +43,15 @@ export interface TeamStore {
   apply(tenant: Tenant, change: TeamChange, actorId: string): Promise<void>;
 }
 
-const SCHEMA = [
-  `CREATE TABLE IF NOT EXISTS teams(
-    team_id          TEXT    PRIMARY KEY,
-    name             TEXT    NOT NULL,
-    isolated_in_open BOOLEAN NOT NULL DEFAULT FALSE,
-    created_by       TEXT    NOT NULL,
-    created_at       BIGINT  NOT NULL
-  )`,
-  `CREATE TABLE IF NOT EXISTS team_members(
-    team_id      TEXT   NOT NULL REFERENCES teams(team_id) ON DELETE CASCADE,
-    principal_id TEXT   NOT NULL,
-    role         TEXT   NOT NULL CHECK (role IN ('member', 'admin')),
-    added_by     TEXT   NOT NULL,
-    added_at     BIGINT NOT NULL,
-    PRIMARY KEY (team_id, principal_id)
-  )`,
-  `CREATE INDEX IF NOT EXISTS team_members_principal ON team_members (principal_id)`,
-  `CREATE TABLE IF NOT EXISTS team_rooms(
-    team_id  TEXT NOT NULL REFERENCES teams(team_id) ON DELETE CASCADE,
-    scope_id TEXT NOT NULL,
-    PRIMARY KEY (team_id, scope_id)
-  )`,
-  `CREATE INDEX IF NOT EXISTS team_rooms_scope ON team_rooms (scope_id)`,
-];
-
 const keysOf = (id: string) => personIds(id).map(foldPrincipalId);
-const onTeam = (team: TurnTeam, principalId: string) => keysOf(principalId).some((k) => team.present.has(k));
+export const onTeam = (team: TurnTeam, principalId: string) => keysOf(principalId).some((k) => team.present.has(k));
 
 export function createPostgresTeamStore(
   connectionString: string,
   flags: Pick<FeatureFlagStore, "enabled">,
   orgScope: ScopeId,
 ): TeamStore {
-  const pg = createPgPool(connectionString, [
-    { id: "teams/0001", statements: SCHEMA },
-    ...tenantTables(
-      "teams/0002-tenants",
-      [
-        { table: "teams", primaryKey: "team_id" },
-        { table: "team_members", primaryKey: "team_id, principal_id" },
-        { table: "team_rooms", primaryKey: "team_id, scope_id" },
-      ],
-      {
-        references: ["team_members", "team_rooms"].map((table) => ({
-          table,
-          name: `${table}_team_id_fkey`,
-          columns: "team_id",
-          references: "teams(tenant_id, team_id)",
-          onDelete: "CASCADE" as const,
-        })),
-      },
-    ),
-  ]);
+  const pg = createPgPool(connectionString);
   const enabled = () => flags.enabled("team_scopes", orgScope);
   async function memberTeams(tenant: Tenant, principalId: string, teamIds: readonly string[]): Promise<Set<string>> {
     if (!teamIds.length || !(await enabled())) return new Set();

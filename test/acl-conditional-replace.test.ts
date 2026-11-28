@@ -5,6 +5,7 @@ import type { Grant } from "../src/types.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { personalScope } from "../src/types.ts";
 
 const owner = "org:default-org";
 const ref = "service-cred:k";
@@ -21,7 +22,7 @@ test("conditional grant compensation preserves a newer full-tuple write", async 
   const forward: Grant = {
     ownerScopeId: owner,
     ref,
-    granteeScopeId: "personal:alice",
+    granteeScopeId: personalScope("alice"),
     permission: "read",
     grantedBy: "editor",
   };

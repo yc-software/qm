@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { waitForClientResult } from "../../runs/run-signal-store.ts";
+import { relayToClient, signalClient } from "../../surfaces/client-relay.ts";
 import type { UiSignal } from "../../runs/session-state-bus.ts";
 import {
   readUiCanvas,
@@ -12,12 +12,11 @@ import {
 } from "../../surfaces/ui-canvas.ts";
 import { uiStateId, UI_STATE_MAX_BYTES } from "../../surfaces/ui-state.ts";
 import { scopeId } from "../../types.ts";
-import { personAtKeyboard } from "../artifact-share.ts";
 import { sendJson } from "../http.ts";
+import { carriesPersonAuthority } from "../artifact-share.ts";
 import { conversationRef } from "./pins.ts";
 import { samePerson } from "../../directory/person.ts";
 import { audit, isObj } from "./shared.ts";
-import { swallow } from "../../util/errors.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 const OBSERVE_TIMEOUT_MS = 15_000;
@@ -36,21 +35,17 @@ async function liveWebTurn(ctx: ApiCtx): Promise<UiTurn | null> {
   const threadRef = await conversationRef(ctx);
   if (!threadRef) return null;
   const cap = ctx.capability!;
-  if (!deps.uiState || !deps.sessions) {
-    sendJson(res, 404, { error: "not_available", message: "this deployment has no UI state store" });
-    return null;
-  }
-  if ((await deps.featureFlags?.enabled("ui_canvas", scopeId("personal", cap.actorId))) !== true) {
+  if ((await deps.featureFlags.enabled("ui_canvas", scopeId("personal", cap.actorId))) !== true) {
     sendJson(res, 403, {
       error: "feature_disabled",
       message: "The ui_canvas feature flag is off for this person. An org admin can enable it under feature flags.",
     });
     return null;
   }
-  if (cap.surface !== "web" || !cap.liveActor || !personAtKeyboard(cap)) {
+  if (cap.surface !== "web" || !carriesPersonAuthority(cap)) {
     sendJson(res, 403, {
-      error: "not_live_web_turn",
-      message: "Only available during a turn the person started from the web UI.",
+      error: "not_web_turn",
+      message: "Only available on a web UI turn.",
     });
     return null;
   }
@@ -69,14 +64,7 @@ async function liveWebTurn(ctx: ApiCtx): Promise<UiTurn | null> {
 }
 
 function signalBrowser(ctx: ApiCtx, turn: Pick<UiTurn, "actorId" | "sessionId" | "threadRef">, ui: UiSignal): void {
-  ctx.deps.sessionStateBus?.emit({
-    threadRef: turn.threadRef,
-    sessionId: turn.sessionId,
-    participants: [turn.actorId],
-    state: "ui",
-    at: Date.now(),
-    ui,
-  });
+  signalClient(ctx.deps.sessionStateBus, turn, ui);
 }
 
 function canvasSummary(canvas: UiCanvas | null): Record<string, unknown> | null {
@@ -176,27 +164,27 @@ async function observe(ctx: ApiCtx): Promise<void> {
       message: "UI observation is only available in the person's own web conversations, not shared ones.",
     });
   }
-  if (!deps.signals) return sendJson(res, 404, { error: "not_available", message: "run signals are unavailable" });
   const b = isObj(body) ? body : {};
   const selector = typeof b.selector === "string" && b.selector.trim() ? b.selector.trim() : undefined;
   if (selector && selector.length > MAX_SELECTOR_CHARS)
     return sendJson(res, 400, { error: "bad_request", message: "selector is too long" });
   const callId = randomUUID();
-  const pendingId = uiStateId(turn.actorId, uiObserveKey(callId));
-  await deps.uiState!.put(pendingId, { value: { runId: turn.runId }, updatedAt: Date.now() });
-  signalBrowser(ctx, turn, {
-    kind: "observe",
-    callId,
-    ...(selector ? { selector } : {}),
-    ...(b.css === true ? { css: true } : {}),
-    ...(b.screenshot === true ? { screenshot: true } : {}),
-  });
-  let outcome: Awaited<ReturnType<typeof waitForClientResult>>;
-  try {
-    outcome = await waitForClientResult(deps.signals, turn.runId, callId, { timeoutMs: OBSERVE_TIMEOUT_MS });
-  } finally {
-    await deps.uiState!.delete(pendingId).catch((error: unknown) => swallow("ui observe pending cleanup", error));
-  }
+  const { outcome } = await relayToClient(
+    { ...(deps.sessionStateBus ? { bus: deps.sessionStateBus } : {}), uiState: deps.uiState!, signals: deps.signals },
+    {
+      to: turn,
+      pendingId: uiStateId(turn.actorId, uiObserveKey(callId)),
+      pending: { runId: turn.runId },
+      ui: {
+        kind: "observe",
+        callId,
+        ...(selector ? { selector } : {}),
+        ...(b.css === true ? { css: true } : {}),
+        ...(b.screenshot === true ? { screenshot: true } : {}),
+      },
+      timeoutMs: OBSERVE_TIMEOUT_MS,
+    },
+  );
   audit(ctx, {
     principalId: turn.actorId,
     action: "ui.observe",
@@ -219,10 +207,9 @@ async function observeResult(ctx: ApiCtx): Promise<void> {
   const principalId = typeof b.principalId === "string" ? b.principalId : "";
   if (!principalId || !isObj(b.snapshot))
     return sendJson(res, 400, { error: "bad_request", message: "principalId and snapshot required" });
-  if (!deps.uiState || !deps.signals) return sendJson(res, 404, { error: "not_found" });
   const pending = await deps.uiState.take(uiStateId(principalId, uiObserveKey(params.callId!)));
   const runId = isObj(pending?.value) && typeof pending.value.runId === "string" ? pending.value.runId : null;
-  const run = runId ? await deps.runs?.get(runId) : null;
+  const run = runId ? await deps.runs.get(runId) : null;
   if (!run || !samePerson(run.request.actor.id, principalId)) return sendJson(res, 404, { error: "not_found" });
   await deps.signals.send(run.id, {
     kind: "client_result",
@@ -234,24 +221,26 @@ async function observeResult(ctx: ApiCtx): Promise<void> {
 }
 
 async function canvasEnabled(ctx: ApiCtx, principalId: string): Promise<boolean> {
-  return (await ctx.deps.featureFlags?.enabled("ui_canvas", scopeId("personal", principalId))) === true;
+  return (await ctx.deps.featureFlags.enabled("ui_canvas", scopeId("personal", principalId))) === true;
 }
 
-async function isCanvasTarget(ctx: ApiCtx, target: string): Promise<boolean> {
-  return target === ALWAYS_ON_CANVAS || Boolean(await ctx.deps.sessions?.get(target));
+async function rejectsCanvasRequest(ctx: ApiCtx, principalId: string, target: string): Promise<boolean> {
+  if (!principalId) {
+    sendJson(ctx.res, 400, { error: "bad_request", message: "principalId and a session id required" });
+    return true;
+  }
+  if (target === ALWAYS_ON_CANVAS || (await ctx.deps.sessions.get(target))) return false;
+  sendJson(ctx.res, 404, { error: "not_found" });
+  return true;
 }
 
 async function userCanvasOf(ctx: ApiCtx): Promise<UiCanvas | null> {
   const { res, deps, url, params } = ctx;
   const principalId = url.searchParams.get("principalId") ?? "";
-  if (!principalId || !(await isCanvasTarget(ctx, params.sessionId!))) {
-    sendJson(res, 400, { error: "bad_request", message: "principalId and a session id required" });
-    return null;
-  }
-  const canvas =
-    deps.uiState && (await canvasEnabled(ctx, principalId))
-      ? await readUiCanvas(deps.uiState, principalId, params.sessionId!)
-      : null;
+  if (await rejectsCanvasRequest(ctx, principalId, params.sessionId!)) return null;
+  const canvas = (await canvasEnabled(ctx, principalId))
+    ? await readUiCanvas(deps.uiState, principalId, params.sessionId!)
+    : null;
   if (!canvas) sendJson(res, 404, { error: "not_found" });
   return canvas;
 }
@@ -284,15 +273,14 @@ async function userCanvas(ctx: ApiCtx): Promise<void> {
   const b = isObj(body) ? body : {};
   const principalId = typeof b.principalId === "string" ? b.principalId : "";
   const sessionId = params.sessionId!;
-  if (!principalId || !(await isCanvasTarget(ctx, sessionId)))
-    return sendJson(res, 400, { error: "bad_request", message: "principalId and a session id required" });
-  if (!deps.uiState || !(await canvasEnabled(ctx, principalId))) return sendJson(res, 404, { error: "not_found" });
+  if (await rejectsCanvasRequest(ctx, principalId, sessionId)) return;
+  if (!(await canvasEnabled(ctx, principalId))) return sendJson(res, 404, { error: "not_found" });
   if (b.dismiss !== true && typeof b.pinned !== "boolean")
     return sendJson(res, 400, { error: "bad_request", message: "pass dismiss or pinned" });
   const patch = b.dismiss === true ? null : { pinned: b.pinned as boolean };
   const canvas = await writeUiCanvas(deps.uiState, principalId, sessionId, patch);
   if (patch && !canvas) return sendJson(res, 404, { error: "not_found" });
-  const session = await deps.sessions?.get(sessionId);
+  const session = await deps.sessions.get(sessionId);
   if (session)
     signalBrowser(ctx, { actorId: principalId, sessionId, threadRef: session.threadRef }, { kind: "canvas" });
   return sendJson(res, 200, { canvas: canvasSummary(canvas) });

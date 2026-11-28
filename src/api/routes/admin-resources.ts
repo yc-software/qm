@@ -6,7 +6,7 @@ import { orgId as configOrgId } from "../../config.ts";
 import type { ServerDeps } from "../deps.ts";
 import { tenantOf, type ApiCtx } from "./route.ts";
 import { parseCommandPolicy } from "../../policy/command-policy.ts";
-import { parseScopeId, scopeId, type CommandPolicy, type Grant, type ScopeId } from "../../types.ts";
+import { parseScopeId, scopeId, scopeLabel, type CommandPolicy, type Grant, type ScopeId } from "../../types.ts";
 import {
   defaultModel,
   fastModeModelIds,
@@ -17,7 +17,6 @@ import {
   embeddingModelCatalog,
   thinkingLevelsFor,
   selectableBaseModels,
-  ALL_PROVIDERS_AVAILABLE,
   HISTORY_BUDGET_DEFAULT_TOKENS,
 } from "../../model/pi-models.ts";
 import { resolveRuntimeChoice } from "../../agent/runtime-choice.ts";
@@ -112,21 +111,28 @@ function channelContainer(scope: string): string | undefined {
   return ref && (kind === "channel" || kind === "group") ? ref : undefined;
 }
 
+export const PURPOSE_RUNTIME_RESOURCES: readonly {
+  id: string;
+  purpose: Parameters<ScopedConfigStore["setPurposeRuntime"]>[0];
+  name: string;
+  label?: string;
+}[] = [
+  { id: "cron-runtime", purpose: "cron", name: "Cron model" },
+  { id: "subagent-runtime", purpose: "subagent", name: "Subagent model" },
+  { id: "fallback-runtime", purpose: "fallback", name: "Fallback model" },
+  {
+    id: "app-edit-runtime",
+    purpose: "appEdit",
+    name: "App edit model",
+    label: `Runtime for chats beside a published app until the person picks another model in that chat; it takes precedence over their conversation runtime and saved model variant. Unset means ${APP_EDIT_DEFAULT_RUNTIME.modelId}. When the person cannot run it on this deployment, the chat uses their conversation runtime.`,
+  },
+];
+
 const RUNTIME_RESOURCES: {
   id: string;
   purpose?: Parameters<ScopedConfigStore["setPurposeRuntime"]>[0];
   label?: string;
-}[] = [
-  { id: "runtime" },
-  { id: "cron-runtime", purpose: "cron" },
-  { id: "subagent-runtime", purpose: "subagent" },
-  { id: "fallback-runtime", purpose: "fallback" },
-  {
-    id: "app-edit-runtime",
-    purpose: "appEdit",
-    label: `Runtime for chats beside a published app until the person picks another model in that chat; it takes precedence over their conversation runtime and saved model variant. Unset means ${APP_EDIT_DEFAULT_RUNTIME.modelId}. When the person cannot run it on this deployment, the chat uses their conversation runtime.`,
-  },
-];
+}[] = [{ id: "runtime" }, ...PURPOSE_RUNTIME_RESOURCES];
 
 export const ADMIN_RESOURCES: readonly AdminResource[] = [
   {
@@ -136,7 +142,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     label: "Security posture. The org value is a minimum; narrower scopes may tighten it but cannot weaken it.",
     readKey: "securityPosture",
     enumValues: SECURITY_POSTURES,
-    get: (deps, scope) => deps.config!.getSecurityPostureDurable(scope),
+    get: (deps, scope) => deps.config.getSecurityPostureDurable(scope),
     apply: generic<SecurityPosture>(
       (body) => {
         const posture = parseSecurityPosture((body as { posture?: unknown }).posture);
@@ -144,7 +150,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           ? { value: posture }
           : { error: `security-posture requires { posture: ${SECURITY_POSTURES.join(" | ")} }` };
       },
-      (deps, scope, posture) => deps.config!.setSecurityPosture(scope, posture),
+      (deps, scope, posture) => deps.config.setSecurityPosture(scope, posture),
     ),
   },
   {
@@ -155,7 +161,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       "Cross-context read posture. The organization is a ceiling; personal and room scopes may opt out. Isolated wins.",
     readKey: "sharingPosture",
     enumValues: SHARING_POSTURES,
-    get: (deps, scope) => deps.config!.getSharingPostureDurable(scope),
+    get: (deps, scope) => deps.config.getSharingPostureDurable(scope),
     apply: generic<SharingPosture | null>(
       (body) => {
         if ((body as { inherit?: unknown }).inherit === true) return { value: null };
@@ -165,7 +171,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           : { error: `sharing-posture requires { posture: ${SHARING_POSTURES.join(" | ")} }` };
       },
       (deps, scope, posture) =>
-        posture === null ? deps.config!.clearSharingPosture(scope) : deps.config!.setSharingPosture(scope, posture),
+        posture === null ? deps.config.clearSharingPosture(scope) : deps.config.setSharingPosture(scope, posture),
     ),
   },
   decisionsResource,
@@ -176,7 +182,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     label:
       'Which standing HiLO approval options are offered: "Allow session" and "Allow always". Composes tighten-only with the org value; disabling a mode also suspends existing grants of that mode until re-enabled.',
     readKey: "approvalGrantModes",
-    get: (deps, scope) => deps.config!.getApprovalGrantModesDurable(scope),
+    get: (deps, scope) => deps.config.getApprovalGrantModesDurable(scope),
     apply: generic<ApprovalGrantModes>(
       (body) => {
         const b = body as { session?: unknown; always?: unknown };
@@ -185,38 +191,38 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         }
         return { value: { session: b.session, always: b.always } };
       },
-      (deps, scope, modes) => deps.config!.setApprovalGrantModes(scope, modes),
+      (deps, scope, modes) => deps.config.setApprovalGrantModes(scope, modes),
     ),
   },
   {
     id: "command-policy",
     kind: "custom",
     readKey: "commandPolicy",
-    get: (deps, scope) => deps.config!.getCommandPolicy(scope),
+    get: (deps, scope) => deps.config.getCommandPolicy(scope),
     apply: generic<CommandPolicy>(
       (body) => {
         const p = parseCommandPolicy(body);
         return "error" in p ? { error: p.error } : { value: p.policy };
       },
-      (deps, scope, policy) => deps.config!.setCommandPolicy(scope, policy),
+      (deps, scope, policy) => deps.config.setCommandPolicy(scope, policy),
     ),
   },
   {
     id: "soul",
     kind: "text",
     readKey: "soul",
-    get: (deps, scope) => deps.config!.getSoul(scope),
+    get: (deps, scope) => deps.config.getSoul(scope),
     apply: async (ctx, actor, scope) => {
       const body = ctx.body as { content?: unknown; expectedVersion?: unknown };
       if (typeof body.content !== "string") return { error: "soul requires { content: string }" };
       if (body.content.length > MAX_SOUL_CHARS) return { error: `SOUL must be at most ${MAX_SOUL_CHARS} characters` };
       if (body.expectedVersion === undefined) {
-        await ctx.deps.config!.setSoul(scope, body.content, actor.id);
+        await ctx.deps.config.setSoul(scope, body.content, actor.id);
         return { ok: true };
       }
       if (typeof body.expectedVersion !== "number")
         return { error: "expectedVersion must be a number", code: "bad_version" };
-      const version = await ctx.deps.config!.setSoulIfVersion(scope, body.expectedVersion, body.content, actor.id);
+      const version = await ctx.deps.config.setSoulIfVersion(scope, body.expectedVersion, body.content, actor.id);
       if (version === null) {
         return {
           error: "SOUL changed after this draft was loaded. Reload before saving.",
@@ -233,7 +239,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     readKey: "ambientPolicy",
     get: async (deps, scope) => {
       const ref = channelContainer(scope);
-      if (!deps.channelPolicy || !ref) return undefined;
+      if (!ref) return undefined;
       const p = await deps.channelPolicy.get(ref).catch(swallowAs("admin: read channel ambient policy", undefined));
       if (p === undefined) return undefined;
       return {
@@ -245,7 +251,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     },
     apply: async (ctx, actor, scope) => {
       const deps = ctx.deps;
-      if (!deps.channelPolicy) return { error: "not available on this deployment", status: 404 };
       const ref = channelContainer(scope);
       if (!ref) return { error: "ambient policy applies to channel and group scopes only" };
       const b = (ctx.body ?? {}) as {
@@ -284,13 +289,13 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     id: "egress",
     kind: "custom",
     readKey: "egress",
-    get: (deps, scope) => deps.config!.getEgress(scope),
+    get: (deps, scope) => deps.config.getEgress(scope),
     apply: generic(
       (body) => {
         const parsed = parseEgressPolicy(body);
         return "error" in parsed ? parsed : { value: parsed.policy };
       },
-      (deps, scope, v) => deps.config!.setEgress(scope, v),
+      (deps, scope, v) => deps.config.setEgress(scope, v),
     ),
   },
   {
@@ -300,7 +305,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     readKey: "featureFlags",
     label: "Live feature rollout table. Each feature maps to the scopes where it is enabled.",
     get: async (deps) => {
-      if (!deps.featureFlags) return undefined;
       const rows = await deps.featureFlags.list();
       return FEATURE_NAMES.map((featureName) => ({
         ...FEATURES[featureName],
@@ -308,7 +312,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       }));
     },
     apply: async (ctx, actor, scope) => {
-      if (!ctx.deps.featureFlags) return { error: "not available on this deployment", status: 404 };
       const body = (ctx.body ?? {}) as { featureName?: unknown; scopeId?: unknown; on?: unknown };
       if (typeof body.featureName !== "string" || !(FEATURE_NAMES as readonly string[]).includes(body.featureName)) {
         return { error: `feature-flags requires featureName: ${FEATURE_NAMES.join(" | ")}` };
@@ -361,14 +364,14 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     label:
       "Supports external Slack participants: internal members may chat with the agent in Slack rooms whose audience includes an external user (Connect member or guest). Externals themselves still can't interact.",
     readKey: "externalSlackParticipants",
-    get: (deps, scope) => deps.config!.getExternalSlackParticipants(scope),
+    get: (deps, scope) => deps.config.getExternalSlackParticipants(scope),
     apply: generic<boolean>(
       (body, { scope }) => {
         const bad = orgOnly(scope, "the external-Slack-participants toggle is org-wide");
         if (bad) return bad;
         return boolBody(body);
       },
-      (deps, scope, on) => deps.config!.setExternalSlackParticipants(scope, on),
+      (deps, scope, on) => deps.config.setExternalSlackParticipants(scope, on),
     ),
   },
   {
@@ -378,14 +381,14 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     label:
       "Channel pinned-header default: on means the agent posts and pins its header message (naming the model in use) in every Slack channel unless a channel explicitly turns it off.",
     readKey: "channelHeaderPinDefault",
-    get: (deps, scope) => (parseScopeId(scope).kind === "org" ? deps.config!.getChannelHeaderPin(scope) : undefined),
+    get: (deps, scope) => (parseScopeId(scope).kind === "org" ? deps.config.getChannelHeaderPin(scope) : undefined),
     apply: generic<boolean>(
       (body, { scope }) => {
         const bad = orgOnly(scope, "the channel pinned-header default is org-wide");
         if (bad) return bad;
         return boolBody(body);
       },
-      (deps, scope, on) => deps.config!.setChannelHeaderPin(scope, on),
+      (deps, scope, on) => deps.config.setChannelHeaderPin(scope, on),
     ),
   },
   {
@@ -395,14 +398,14 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     label:
       "Ambient behavior org-wide: off means the agent never acts on overheard messages anywhere, regardless of per-channel settings.",
     readKey: "orgAmbient",
-    get: (deps, scope) => (parseScopeId(scope).kind === "org" ? deps.config!.getOrgAmbient() : undefined),
+    get: (deps, scope) => (parseScopeId(scope).kind === "org" ? deps.config.getOrgAmbient() : undefined),
     apply: generic<boolean>(
       (body, { scope }) => {
         const bad = orgOnly(scope, "the ambient switch here is org-wide");
         if (bad) return bad;
         return boolBody(body);
       },
-      (deps, _scope, on) => deps.config!.setOrgAmbient(on),
+      (deps, _scope, on) => deps.config.setOrgAmbient(on),
     ),
   },
   {
@@ -412,14 +415,14 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     label:
       "Fast mode for interactive turns org-wide: on means human turns run in fast mode on fast-capable models unless the turn asks otherwise. Requires fast-mode quota with the provider.",
     readKey: "interactiveFastMode",
-    get: (deps, scope) => (parseScopeId(scope).kind === "org" ? deps.config!.getInteractiveFastMode() : undefined),
+    get: (deps, scope) => (parseScopeId(scope).kind === "org" ? deps.config.getInteractiveFastMode() : undefined),
     apply: generic<boolean>(
       (body, { scope }) => {
         const bad = orgOnly(scope, "the interactive fast-mode switch is org-wide");
         if (bad) return bad;
         return boolBody(body);
       },
-      (deps, _scope, on) => deps.config!.setInteractiveFastMode(on),
+      (deps, _scope, on) => deps.config.setInteractiveFastMode(on),
     ),
   },
   {
@@ -429,14 +432,14 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     label:
       "Individual authorization for AI usage org-wide: on means each user must connect their own Claude or Codex account (API key or subscription login) before using the assistant; the org's shared model credentials are not used for their turns.",
     readKey: "individualModelAuth",
-    get: (deps, scope) => (parseScopeId(scope).kind === "org" ? deps.config!.getIndividualModelAuth() : undefined),
+    get: (deps, scope) => (parseScopeId(scope).kind === "org" ? deps.config.getIndividualModelAuth() : undefined),
     apply: generic<boolean>(
       (body, { scope }) => {
         const bad = orgOnly(scope, "the individual-authorization switch is org-wide");
         if (bad) return bad;
         return boolBody(body);
       },
-      (deps, _scope, on) => deps.config!.setIndividualModelAuth(on),
+      (deps, _scope, on) => deps.config.setIndividualModelAuth(on),
     ),
   },
   {
@@ -449,7 +452,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     get enumValues() {
       return embeddingModelCatalog();
     },
-    get: (deps) => deps.config!.getEmbeddingModelDurable(),
+    get: (deps) => deps.config.getEmbeddingModelDurable(),
     apply: async (ctx, _actor, scope) => {
       const bad = orgOnly(scope, "the memory embedding model is org-wide");
       if (bad) return bad;
@@ -458,7 +461,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         return { error: "Provide an embedding modelId, or null to disable semantic recall" };
       if (modelId !== null && !resolveEmbeddingModel(modelId))
         return { error: "Unknown or unverified embedding model" };
-      await ctx.deps.config!.setEmbeddingModel(modelId as string | null);
+      await ctx.deps.config.setEmbeddingModel(modelId as string | null);
       return { ok: true };
     },
   },
@@ -472,17 +475,16 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     get enumValues() {
       return selectableBaseModels();
     },
-    get: (deps, scope) => deps.config!.getBaseModel(scope),
+    get: (deps, scope) => deps.config.getBaseModel(scope),
     apply: async (ctx, _actor, scope) => {
       const raw = (ctx.body as { modelId?: unknown }).modelId;
       if (raw !== undefined && raw !== null && typeof raw !== "string")
         return { error: "base-model requires { modelId: string } (empty string clears the override)" };
       const modelId = typeof raw === "string" ? raw.trim() : "";
       if (modelId && !resolveModel(modelId)) return { error: `unknown model id: ${modelId}` };
-      const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-      const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
-      const runtime = await ctx.deps.config!.getRuntimeSelectionDurable(scope);
-      if (!modelId) await ctx.deps.config!.setRuntimeSelection(scope, null);
+      const managedKeys = await ctx.deps.modelCredentials.availability();
+      const runtime = await ctx.deps.config.getRuntimeSelectionDurable(scope);
+      if (!modelId) await ctx.deps.config.setRuntimeSelection(scope, null);
       else {
         if (!modelSupported(modelId)) return { error: `model ${modelId} is not supported` };
         if (!modelServiceable(modelId, managedKeys))
@@ -491,10 +493,10 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           };
         const current =
           runtime ??
-          (await resolveRuntimeChoice(ctx.deps.config!, scopeId("org", configOrgId()), scope, {
+          (await resolveRuntimeChoice(ctx.deps.config, scopeId("org", configOrgId()), scope, {
             modelId: defaultModel(ctx.deps.baseModelDefault),
           }));
-        await ctx.deps.config!.setRuntimeSelection(scope, {
+        await ctx.deps.config.setRuntimeSelection(scope, {
           modelId,
           ...(current.effortLevel ? { effortLevel: current.effortLevel } : {}),
           ...(typeof current.fastMode === "boolean"
@@ -515,16 +517,16 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     readKey: purpose ? `${purpose}Runtime` : "runtime",
     get: async (deps, scope) =>
       purpose
-        ? ((await deps.config!.getPurposeRuntimeDurable(purpose)) ?? null)
-        : deps.config!.getRuntimeSelection(scope),
+        ? ((await deps.config.getPurposeRuntimeDurable(purpose)) ?? null)
+        : deps.config.getRuntimeSelection(scope),
     apply: async (ctx, _actor, scope) => {
       if (purpose) {
         const bad = orgOnly(scope, `${purpose} runtime defaults are org-wide`);
         if (bad) return bad;
       }
       if ((ctx.body as { inherit?: unknown } | null)?.inherit === true || (purpose && ctx.body === null)) {
-        if (purpose) await ctx.deps.config!.clearPurposeRuntime(purpose);
-        else await ctx.deps.config!.setRuntimeSelection(scope, null);
+        if (purpose) await ctx.deps.config.clearPurposeRuntime(purpose);
+        else await ctx.deps.config.setRuntimeSelection(scope, null);
         return { ok: true };
       }
       const modelId = (ctx.body as { modelId?: unknown }).modelId;
@@ -539,8 +541,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         return { error: "runtime requires fastMode (boolean)" };
       if (purpose && fastMode === true && !fastModeModelIds().includes(modelId))
         return { error: `fast mode is not supported by ${modelId}` };
-      const configuredKeys = ctx.deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-      const managedKeys = ctx.deps.modelCredentials ? await ctx.deps.modelCredentials.availability() : configuredKeys;
+      const managedKeys = await ctx.deps.modelCredentials.availability();
       if (!modelServiceable(modelId, managedKeys))
         return {
           error: `model ${modelId} isn't serviceable on this deployment: its provider key is not configured`,
@@ -550,8 +551,8 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         ...(typeof effortLevel === "string" ? { effortLevel } : {}),
         ...(typeof fastMode === "boolean" ? { fastMode: fastMode && fastModeModelIds().includes(modelId) } : {}),
       };
-      if (purpose) await ctx.deps.config!.setPurposeRuntime(purpose, choice);
-      else await ctx.deps.config!.setRuntimeSelection(scope, choice);
+      if (purpose) await ctx.deps.config.setPurposeRuntime(purpose, choice);
+      else await ctx.deps.config.setRuntimeSelection(scope, choice);
       return { ok: true };
     },
   })),
@@ -567,7 +568,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     get enumValues() {
       return selectableBaseModels();
     },
-    get: (deps, scope) => deps.config!.getWebuiModels(scope),
+    get: (deps, scope) => deps.config.getWebuiModels(scope),
     apply: generic<string[] | null>(
       (body, { scope }) => {
         const bad = orgOnly(scope, "the web UI model picker is org-wide");
@@ -582,7 +583,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         const unique = ids.filter((id) => (seen.has(id) ? false : (seen.add(id), true)));
         return { value: unique.length ? unique : null };
       },
-      (deps, scope, ids) => deps.config!.setWebuiModels(scope, ids),
+      (deps, scope, ids) => deps.config.setWebuiModels(scope, ids),
     ),
   },
   {
@@ -593,7 +594,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     label:
       "Slack ack emoji (names the bot may react with to acknowledge a message). Empty restores the built-in rotation.",
     readKey: "ackEmoji",
-    get: (deps, scope) => deps.config!.getAckEmoji(scope),
+    get: (deps, scope) => deps.config.getAckEmoji(scope),
     apply: generic<string[] | null>(
       (body, { scope }) => {
         const bad = orgOnly(scope, "the ack emoji set is org-wide");
@@ -610,7 +611,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         }
         return { value: names.length ? names : null };
       },
-      (deps, scope, names) => deps.config!.setAckEmoji(scope, names),
+      (deps, scope, names) => deps.config.setAckEmoji(scope, names),
     ),
   },
   appHandleResource,
@@ -620,7 +621,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     target: "org",
     clearable: true,
     readKey: "branding",
-    get: (deps, scope) => deps.config!.getBranding(scope),
+    get: (deps, scope) => deps.config.getBranding(scope),
     apply: async (ctx, _actor, scope) => {
       const bad = orgOnly(scope, "branding is org-wide");
       if (bad) return bad;
@@ -640,7 +641,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       if (markUrlInput && !value?.markUrl) {
         return { error: "branding mark image must be an https URL" };
       }
-      await ctx.deps.config!.setBranding(scope, value ?? null);
+      await ctx.deps.config.setBranding(scope, value ?? null);
       return { ok: true };
     },
   },
@@ -652,7 +653,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     label:
       "This organization's starting suggested activities and welcome: { seeds: { activities, apps? } }, or { seeds: null } to clear.",
     readKey: "activitySeeds",
-    get: (deps, scope) => deps.config!.getActivitySeeds(scope),
+    get: (deps, scope) => deps.config.getActivitySeeds(scope),
     apply: generic<ActivitySeeds | null>(
       (body, { scope }) => {
         const bad = orgOnly(scope, "activity seeds are org-wide");
@@ -665,7 +666,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           return { error: errMessage(error) };
         }
       },
-      (deps, scope, value) => deps.config!.setActivitySeeds(scope, value),
+      (deps, scope, value) => deps.config.setActivitySeeds(scope, value),
     ),
   },
   {
@@ -675,7 +676,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     clearable: true,
     label: "Max browser steps per browse task (empty restores the default of 50).",
     readKey: "browseMaxSteps",
-    get: (deps, scope) => deps.config!.getBrowseMaxSteps(scope),
+    get: (deps, scope) => deps.config.getBrowseMaxSteps(scope),
     apply: generic<number | null>(
       (body, { scope }) =>
         orgOnly(scope, "the browse step limit is org-wide") ??
@@ -685,7 +686,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           500,
           "browse-max-steps requires { steps: integer 1-500 } (empty clears to the default of 50)",
         ),
-      (deps, scope, steps) => deps.config!.setBrowseMaxSteps(scope, steps),
+      (deps, scope, steps) => deps.config.setBrowseMaxSteps(scope, steps),
     ),
   },
   {
@@ -695,7 +696,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     clearable: true,
     label: `Percent of the history budget compaction keeps verbatim, ${COMPACT_KEEP_PERCENT.min}-${COMPACT_KEEP_PERCENT.max} (empty restores the default of ${COMPACT_KEEP_PERCENT.default}). Lower keeps less recent history verbatim but compacts less often and costs less.`,
     readKey: "compactionKeepPercent",
-    get: (deps) => deps.config!.getCompactionSettings().keepPercent,
+    get: (deps) => deps.config.getCompactionSettings().keepPercent,
     apply: generic<number | null>(
       (body, { scope }) =>
         orgOnly(scope, "the compaction keep percent is org-wide") ??
@@ -705,7 +706,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           COMPACT_KEEP_PERCENT.max,
           `compaction-keep-percent requires { percent: integer ${COMPACT_KEEP_PERCENT.min}-${COMPACT_KEEP_PERCENT.max} } (empty clears to the default of ${COMPACT_KEEP_PERCENT.default})`,
         ),
-      (deps, _scope, percent) => deps.config!.setCompactionKeepPercent(percent),
+      (deps, _scope, percent) => deps.config.setCompactionKeepPercent(percent),
     ),
   },
   {
@@ -715,7 +716,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     clearable: true,
     label: `Ceiling on the conversation history budget in tokens, a positive integer (empty restores the default of ${HISTORY_BUDGET_DEFAULT_TOKENS}). The budget still never exceeds half of a model's usable context window. Applies to every model. Lower makes long conversations cheaper on per-token providers but keeps less history verbatim.`,
     readKey: "historyBudgetTokens",
-    get: (deps) => deps.config!.getCompactionSettings().historyBudgetTokens,
+    get: (deps) => deps.config.getCompactionSettings().historyBudgetTokens,
     apply: generic<number | null>(
       (body, { scope }) =>
         orgOnly(scope, "the history budget is org-wide") ??
@@ -725,7 +726,7 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           Number.MAX_SAFE_INTEGER,
           `history-budget-tokens requires { tokens: positive integer } (empty clears to the default of ${HISTORY_BUDGET_DEFAULT_TOKENS})`,
         ),
-      (deps, _scope, tokens) => deps.config!.setHistoryBudgetTokens(tokens),
+      (deps, _scope, tokens) => deps.config.setHistoryBudgetTokens(tokens),
     ),
   },
   {
@@ -735,17 +736,17 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     label:
       "Model spend caps in USD: { dailyUsd?, monthlyUsd? } per UTC day and month. On the org scope it is the default for each person's personal scope; on any other scope it caps that scope and overrides the default. {} means no cap there; { inherit: true } clears it.",
     readKey: "spendLimit",
-    get: (deps, scope) => deps.config!.getSpendLimitDurable(scope),
+    get: (deps, scope) => deps.config.getSpendLimitDurable(scope),
     apply: generic<SpendLimit | null>(
       (body) => parseSpendLimit(body),
-      (deps, scope, limit) => deps.config!.setSpendLimit(scope, limit),
+      (deps, scope, limit) => deps.config.setSpendLimit(scope, limit),
     ),
   },
   {
     id: "connectors",
     kind: "custom",
     readKey: "connectors",
-    get: (deps, scope) => deps.config!.listConnectorClients(scope),
+    get: (deps, scope) => deps.config.listConnectorClients(scope),
     apply: async (ctx, actor, scope) => {
       const { deps } = ctx;
       const b = ctx.body as {
@@ -762,13 +763,13 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
       const provider = typeof b.provider === "string" ? b.provider : "";
       if (!PROVIDERS[provider]) return { error: `unknown OAuth provider: ${provider}` };
       if (b.delete === true) {
-        await deps.config!.deleteConnectorClient(scope, provider);
+        await deps.config.deleteConnectorClient(scope, provider);
         return { ok: true };
       }
       if (typeof b.clientId !== "string" || typeof b.clientSecret !== "string") {
         return { error: "connectors requires { provider, clientId, clientSecret }" };
       }
-      await deps.config!.setConnectorClient(scope, provider, {
+      await deps.config.setConnectorClient(scope, provider, {
         clientId: b.clientId,
         clientSecret: b.clientSecret,
         ...(Array.isArray(b.scopes) ? { scopes: b.scopes.map(String) } : {}),
@@ -789,8 +790,6 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
     apply: async (ctx, actor, scope) => {
       const { deps } = ctx;
       const tenant = tenantOf(ctx);
-      if (!deps.acl) return { error: "ACL store not wired", code: "not_found", status: 404 };
-      if (!deps.serviceCreds) return { error: "credential store not wired", code: "not_found", status: 404 };
       const bad = orgOnly(scope, "service credentials are org-scoped");
       if (bad) return bad;
       const b = ctx.body as {
@@ -906,15 +905,15 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           if (!existing) {
             credentialRestored =
               mutationVersion !== null &&
-              (await deps.serviceCreds!.deleteServiceCredentialIfCurrent(scope, slug, mutationVersion));
+              (await deps.serviceCreds.deleteServiceCredentialIfCurrent(scope, slug, mutationVersion));
           } else if (deletedCredential) {
             credentialRestored =
-              (await deps.serviceCreds!.setServiceCredentialIfAbsent(scope, restoreInput(existing, secretBefore))) !==
+              (await deps.serviceCreds.setServiceCredentialIfAbsent(scope, restoreInput(existing, secretBefore))) !==
               null;
           } else {
             credentialRestored =
               mutationVersion !== null &&
-              (await deps.serviceCreds!.setServiceCredentialIfCurrent(
+              (await deps.serviceCreds.setServiceCredentialIfCurrent(
                 scope,
                 restoreInput(existing, secretBefore),
                 mutationVersion,
@@ -922,14 +921,14 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
           }
           if (!credentialRestored) return false;
           const grantsRestored =
-            (await deps.acl!.replaceGrantsIfCurrent(tenant, scope, ref, grantsWritten, grantsBefore, actor.id)) ||
-            grantShape(await deps.acl!.grantsFor(tenant, scope, ref)) === grantShape(grantsBefore);
+            (await deps.acl.replaceGrantsIfCurrent(tenant, scope, ref, grantsWritten, grantsBefore, actor.id)) ||
+            grantShape(await deps.acl.grantsFor(tenant, scope, ref)) === grantShape(grantsBefore);
           if (!grantsRestored) return false;
-          const restored = (await deps.serviceCreds!.listServiceCredentials(scope)).find(
+          const restored = (await deps.serviceCreds.listServiceCredentials(scope)).find(
             (credential) => credential.slug === slug,
           );
-          const restoredSecret = restored ? await deps.serviceCreds!.getServiceCredentialSecret(scope, slug) : null;
-          const restoredGrants = await deps.acl!.grantsFor(tenant, scope, ref);
+          const restoredSecret = restored ? await deps.serviceCreds.getServiceCredentialSecret(scope, slug) : null;
+          const restoredGrants = await deps.acl.grantsFor(tenant, scope, ref);
           return (
             publicShape(restored) === publicShape(existing) &&
             (restoredSecret?.secret ?? null) === (secretBefore?.secret ?? null) &&
@@ -1032,7 +1031,9 @@ export const ADMIN_RESOURCES: readonly AdminResource[] = [
         );
       });
       if (badGrantee !== undefined)
-        return { error: `grantee must be this org or a valid personal:/team:/channel: scope (got ${badGrantee})` };
+        return {
+          error: `grantee must be this org or a valid personal:/team:/channel: scope (got ${scopeLabel(badGrantee as ScopeId)})`,
+        };
       if (b.deployments !== undefined && typeof b.deployments !== "boolean")
         return { error: "deployments must be true or false" };
       const injectionError = credentialInjectionError(b.injection);

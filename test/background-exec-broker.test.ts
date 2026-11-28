@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { testTenant } from "./support/test-tenant.ts";
 import { createBackgroundBroker } from "../src/connectors/background-exec-broker.ts";
 import { redactCommand } from "../src/sandbox/exec-process-session.ts";
 import type { ProcessSandbox, ProcessSession, SandboxHandle, StartProcessOptions } from "../src/sandbox/sandbox.ts";
@@ -7,8 +8,9 @@ import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts"
 import { createPostgresProcessRegistry } from "../src/processes/process-registry.ts";
 import { startedBy } from "./support/live-run.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
-const SCOPE = "personal:U1";
+const SCOPE = personalScope("U1");
 const handle: SandboxHandle = { id: "vm", rootDir: "/workspace", homeDir: "/root", resourceId: "sandbox-1" };
 
 function fakeSandbox(opts?: { seedOutput?: string }) {
@@ -279,8 +281,8 @@ test("stop actually waits the TERM grace: a process exiting shortly after TERM i
 test("CROSS-SCOPE GUARD: poll/stop of another scope's processId is refused (invariant 1)", async () => {
   const fake = fakeSandbox();
   const registry = createPostgresProcessRegistry(testDatabaseUrl());
-  const brokerA = createBackgroundBroker({ sandbox: fake.sandbox, registry, scopeId: "personal:A", pollMs: 20 });
-  const brokerB = createBackgroundBroker({ sandbox: fake.sandbox, registry, scopeId: "personal:B", pollMs: 20 });
+  const brokerA = createBackgroundBroker({ sandbox: fake.sandbox, registry, scopeId: personalScope("A"), pollMs: 20 });
+  const brokerB = createBackgroundBroker({ sandbox: fake.sandbox, registry, scopeId: personalScope("B"), pollMs: 20 });
 
   const { processId } = await brokerA.start(handle, "secret-job", "Run background tests");
   await assert.rejects(brokerB.poll(handle, processId), /no such background job/);
@@ -532,15 +534,25 @@ test("every registered background job records the computer it runs on", async ()
   );
 });
 
-test("only the owner's live turn can send input to or stop a job that saves their sign-in", async () => {
+test("a later run in the same conversation can send input to and stop a job that saves a sign-in", async () => {
   const { broker, registry, sandbox } = await build();
-  const source = { credentialId: "c1", ownerId: "U1", service: "aws", live: true, fileHashes: {} };
+  const source = { credentialId: "c1", ownerId: "U1", service: "aws", writeback: true, fileHashes: {} };
   const files = { plan: { directory: "/tmp/qm-credentials", credentials: [] }, sources: [source] };
   const { processId } = await broker.start(handle, "login", "Sign in", undefined, { env: {}, secrets: [], files });
-  const unattended = createBackgroundBroker({ sandbox, registry, scopeId: SCOPE, pollMs: 20 });
-  await assert.rejects(unattended.write(handle, processId, "x\n"), /only from a person's live turn/);
-  await assert.rejects(unattended.stop(handle, processId), /only from a person's live turn/);
-  const live = createBackgroundBroker({ sandbox, registry, scopeId: SCOPE, pollMs: 20, livePersonTurn: true });
-  assert.equal((await live.write(handle, processId, "x\n")).bytes, 2);
-  assert.equal((await live.stop(handle, processId)).stopped, true);
+  const later = createBackgroundBroker({ sandbox, registry, scopeId: SCOPE, pollMs: 20 });
+  assert.equal((await later.write(handle, processId, "x\n")).bytes, 2);
+  assert.equal((await later.stop(handle, processId)).stopped, true);
+  const elsewhere = createBackgroundBroker({ sandbox, registry, scopeId: "channel:OTHER", pollMs: 20 });
+  await assert.rejects(elsewhere.stop(handle, processId), /no such background job/);
+});
+
+test("a bot's turn cannot send input to or stop a job that saves a sign-in", async () => {
+  const { broker, registry, sandbox } = await build();
+  const source = { credentialId: "c1", ownerId: "U1", service: "aws", writeback: true, fileHashes: {} };
+  const files = { plan: { directory: "/tmp/qm-credentials", credentials: [] }, sources: [source] };
+  const { processId } = await broker.start(handle, "login", "Sign in", undefined, { env: {}, secrets: [], files });
+  const starter = { tenant: testTenant, actorId: "B1", botActor: true };
+  const bot = createBackgroundBroker({ sandbox, registry, scopeId: SCOPE, pollMs: 20, starter });
+  await assert.rejects(bot.write(handle, processId, "x\n"), /a bot's turn can't/);
+  await assert.rejects(bot.stop(handle, processId), /a bot's turn can't/);
 });

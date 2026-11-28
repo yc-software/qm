@@ -2,14 +2,17 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { recentPrincipalDeliveryNote } from "../src/core/orchestrator/turn-helpers.ts";
+import type { DeliveryProvenance } from "../src/types.ts";
+import { personalScope } from "../src/types.ts";
 
-async function deliveredNote(texts: string[], since?: number): Promise<string> {
+async function deliveredNote(texts: string[], since?: number, provenance?: DeliveryProvenance): Promise<string> {
   const store = createDeliveryStore();
   for (const [i, text] of texts.entries()) {
     const d = await store.enqueue({
       destination: { type: "principal", target: "U-alice", onBehalfOf: "U-carol" },
       text,
       idempotencyKey: `k-${i}`,
+      provenance,
     });
     await store.recordRecipientThread(d.id, "dm:D-alice", 1_700_000_000_000 + i);
   }
@@ -28,9 +31,18 @@ test("a long delivery is capped at 200 chars with an ellipsis, keeping timestamp
   assert.equal(body.slice(0, 200), long.replace(/\s+/g, " ").slice(0, 200));
 });
 
-test("a short delivery stays verbatim", async () => {
-  const note = await deliveredNote(["deploy digest ready"]);
-  assert.match(note, /from U-carol: deploy digest ready$/m);
+test("a short delivery stays verbatim and includes provenance", async () => {
+  const note = await deliveredNote(["deploy digest ready"], undefined, {
+    trigger: "cron",
+    surface: "cron",
+    fireKey: "cron:c1:1",
+    sourceScopeId: personalScope("U-alice"),
+    sourceThreadRef: "cron:c1:1",
+    sourceId: "c1",
+    sourceTitle: "Digest",
+    sourceSessionId: "s1",
+  });
+  assert.match(note, /\[cron id=c1 title="Digest" session=s1 fire=cron:c1:1\] from U-carol: deploy digest ready$/m);
   assert.doesNotMatch(note, /…/);
 });
 

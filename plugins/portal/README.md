@@ -113,6 +113,9 @@ preference only selects a provider; it grants no identity or administrator acces
 A new browser or cleared cookies still uses the primary provider by default.
 Use `/auth/login?provider=primary` to explicitly select the primary provider; the
 trusted sign-in error page offers this alternative.
+Signing out of a trusted sign-in lands on the signed-out page, even with the
+embedded broker, so a live session at the trusted provider does not sign the
+person straight back in.
 
 ## Operator admin login without email
 

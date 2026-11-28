@@ -14,6 +14,7 @@ import { ProviderTurnError } from "../src/core/turn-error.ts";
 import { runtimeConfigBody } from "../src/api/runtime-config.ts";
 import { testConfigStore } from "./support/test-database.ts";
 import { orgScope } from "../src/config.ts";
+import { personalScope } from "../src/types.ts";
 
 const GATEWAY = {
   url: "https://gateway.example/v1",
@@ -102,7 +103,7 @@ function turn(agent: ReturnType<typeof createAgent>, modelId: string): Promise<u
     systemPrompt: "BASE",
     history: [],
     tools: {} as AgentTurnInput["tools"],
-    scopeLabel: "personal:tester" as AgentTurnInput["scopeLabel"],
+    scopeLabel: personalScope("tester") as AgentTurnInput["scopeLabel"],
     orgScopeId: "org:test" as AgentTurnInput["orgScopeId"],
     runtime: { modelId },
     emit: async (item: NewItem) => ({ ...item, seq: seq++, createdAt: Date.now() }) as unknown as Item,
@@ -251,7 +252,7 @@ test("a summary that fails everywhere names each route it tried and why", async 
         (e: unknown) => e,
       );
       assert.ok(error instanceof ProviderTurnError);
-      assert.equal(error.code, "model_budget");
+      assert.equal(error.code, "auth");
       assert.match(error.message, /shared model gateway.*Budget has been exceeded/s);
       assert.match(error.message, /fallback .*organization's own provider key or subscription\).*key revoked/s);
     },

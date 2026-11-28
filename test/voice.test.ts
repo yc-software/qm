@@ -33,7 +33,7 @@ test("session creation keeps credentials and authoritative configuration on serv
     const body = JSON.parse(String(init?.body));
     assert.equal(body.session.model, "gpt-live-1");
     assert.equal(body.session.store, false);
-    assert.equal(body.session.delegation.responses.tools[0].name, "ask_qm");
+    assert.deepEqual(body.session.delegation, { type: "client", acknowledgement_delay_ms: 800 });
     assert.equal(body.transport.sdp, "v=0\r\no=offer");
     assert.equal(String(init?.body).includes("private-user"), false);
     return Response.json({

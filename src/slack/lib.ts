@@ -112,6 +112,8 @@ export {
   botIdentityFromEnv,
   botIdentityArgs,
   originContext,
+  personaContinues,
+  type SurfaceMessageReader,
   slackPersonaReplyArgs,
   slackReplyArgs,
   channelSurfaceUrl,

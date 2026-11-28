@@ -39,7 +39,8 @@ export function cronScriptFrom(
 ): CronScript | string {
   const action = patch.action ?? cron.action;
   const text = patch.text ?? cron.text;
-  if (action === undefined || cron.message !== undefined || text !== undefined || cron.loopId)
+  const message = patch.action !== undefined ? undefined : cron.message;
+  if (action === undefined || message !== undefined || text !== undefined || cron.loopId)
     return "script needs a cron with a task for the agent";
   if (typeof req.command !== "string" || !req.command.trim()) return "script.command must be a command";
   if (
@@ -158,10 +159,18 @@ async function fit(output: string, toolOutput: Pick<ToolOutputStore, "inlineToke
 export async function trialCronScript(
   script: CronScript,
   execute: Execute,
-  toolOutput?: Pick<ToolOutputStore, "inlineTokens">,
-): Promise<string | undefined> {
-  const { result, exit } = await runOnce(script, execute);
-  if (result && !result.timedOut && (result.code === 0 || result.code === 1)) return undefined;
+  toolOutput: Pick<ToolOutputStore, "inlineTokens"> | undefined,
+  signal: AbortSignal,
+): Promise<{ passed: boolean; exit: string; output: string }> {
+  const { result, exit } = await runOnce(script, execute, signal);
   const output = outputOf(result);
-  return `script not set: its trial run failed (${exit}); a cron script must exit 0 (handled) or 1 (wake the agent)${output ? `. Output:\n${await fit(output, toolOutput)}` : ""}`;
+  return {
+    passed: result !== undefined && !result.timedOut && (result.code === 0 || result.code === 1),
+    exit,
+    output: output && (await fit(output, toolOutput)),
+  };
+}
+
+export function scriptTrialRefusal(exit: string, output: string | undefined): string {
+  return `script not set: its trial run failed (${exit}); a cron script must exit 0 (handled) or 1 (wake the agent)${output ? `. Output:\n${output}` : ""}`;
 }

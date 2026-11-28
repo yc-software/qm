@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { SideChatAnchorError } from "../src/api/app-types.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { isUserItem, type Item } from "../src/sessions/items.ts";
@@ -128,7 +128,7 @@ test("a stranger cannot fork someone else's conversation", async () => {
   assert.equal(await app.forkSession("does-not-exist", "U1"), null);
 });
 
-test("side chats preserve their anchor, stay out of session pages, expand in place, and flag a running turn", async () => {
+test("side chats preserve their anchor, stay out of session pages, expand in place, and list a queued question as working", async () => {
   const { app, sessions, runs } = freshApp();
   const result = await app.turn(dm("Explain shared queues", "web:U1:side-chat"));
   const source = (await app.getSession(result.sessionId!))!;
@@ -164,10 +164,17 @@ test("side chats preserve their anchor, stay out of session pages, expand in pla
   const actor = { id: "internal:U1", type: "internal" as const };
   const conversation = { kind: "dm" as const, threadRef: fork.session.threadRef, audience: [actor] };
   const request = { actor, conversation, origin: { kind: "direct" as const }, text: "Keep going" };
-  const { run } = await runs.enqueue({ sessionId: fork.session.threadRef, request });
-  const [row] = (await app.sideChats("U1", source.session.id))!;
-  assert.deepEqual([row!.working, row!.workingSince], [true, run.startedAt ?? run.createdAt]);
-  const opened = (await app.getSessionForViewer(fork.session.id, { actorId: "U1" }))!.session;
+  const queued = (await app.forkSession(source.session.id, "U1", {
+    upToSeq: source.items.at(-1)!.seq,
+    sideChat: { entrySeq: entry.seq, quote: "queues", occurrence: 0 },
+  }))!.session;
+  const { run } = await runs.enqueue({
+    sessionId: queued.threadRef,
+    request: { ...request, conversation: { ...conversation, threadRef: queued.threadRef } },
+  });
+  const row = (await app.sideChats("U1", source.session.id))!.find((chat) => chat.id === queued.id);
+  assert.deepEqual([row?.working, row?.workingSince], [true, run.startedAt ?? run.createdAt]);
+  const opened = (await app.getSessionForViewer(queued.id, { actorId: "U1" }))!.session;
   assert.deepEqual([opened.working, opened.workingSince], [true, run.startedAt ?? run.createdAt]);
 });
 
@@ -211,6 +218,7 @@ test("side-chat reads bind the query principal to the authenticated portal ident
   const sourceSecret = "side-chat-source-secret-for-http-tests";
   const identitySecret = "side-chat-identity-secret-for-http-tests";
   const server = createServer(app, {
+    ...testCore(),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: sourceSecret,
     capabilitySecret: "side-chat-capability-secret-for-http-tests",

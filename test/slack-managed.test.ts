@@ -4,6 +4,7 @@ import test from "node:test";
 import type { App as BoltApp, ReceiverEvent } from "@slack/bolt";
 import { createSlackInstallationStore } from "../src/surfaces/slack-installation.ts";
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
+import { boundTenant } from "../src/tenants/context.ts";
 import { testMap } from "./support/test-database.ts";
 
 const installation = {
@@ -118,7 +119,18 @@ test("managed delivery isolates workspace, app, generation, and credentials and 
   } as unknown as BoltApp);
   await receiver.start(0 as never);
   assert.equal((await request("events", body, "POST", "wrong-company")).status, 401);
+  const warn = t.mock.method(console, "warn", () => {});
   assert.equal((await request("events", { ...body, installId: "old" })).status, 409);
+  assert.equal(warn.mock.calls[0]?.arguments[0], "[slack-managed] installation_mismatch");
+  assert.deepEqual(JSON.parse(String(warn.mock.calls[0]?.arguments[1])), {
+    tenant: boundTenant() ?? null,
+    teamId: "T123",
+    storedTeamId: "T123",
+    storedInstallId: "install-1",
+    inputInstallId: "old",
+    storedAppId: "A123",
+    optsAppId: "A123",
+  });
   assert.equal((await request("events", { ...body, body: { ...event, team_id: "TOTHER" } })).status, 400);
   assert.equal((await request("events", { ...body, body: { ...event, api_app_id: "AOTHER" } })).status, 400);
   assert.equal(received.length, 0);
@@ -134,6 +146,15 @@ test("managed delivery isolates workspace, app, generation, and credentials and 
   assert.deepEqual(await response.json(), { text: "Accepted" });
   await request("installation", { installId: installation.installId }, "DELETE");
   assert.equal((await request("events", body)).status, 409);
+  assert.deepEqual(JSON.parse(String(warn.mock.calls[1]?.arguments[1])), {
+    tenant: boundTenant() ?? null,
+    teamId: "T123",
+    storedTeamId: null,
+    storedInstallId: null,
+    inputInstallId: "install-1",
+    storedAppId: null,
+    optsAppId: "A123",
+  });
 });
 
 test("failed delivery withholds acknowledgment", async (t) => {

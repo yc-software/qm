@@ -2,7 +2,7 @@ import type { SessionStore, SessionWriter } from "../sessions/session-store.ts";
 import { hasRunningRun, type RunStore } from "../runs/run-store.ts";
 import { parseSlackThreadRef, slackThreadRefCandidates } from "./message-gating.ts";
 import type { IngestEvent, SurfaceCache } from "../surface-cache/types.ts";
-import { isoFromTs, xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
+import { isoFromTs, speakerAttrs, xmlAttrEscape, xmlEscape } from "../util/message-tag.ts";
 import { sleep } from "../util/async.ts";
 import { isAgentReply, isHidden, isUserItem, type Item, messageTs } from "../sessions/items.ts";
 
@@ -38,10 +38,12 @@ export function messageRevision(e: Pick<Item, "kind" | "body">): MessageRevision
 }
 
 export function renderMessageRevision(p: MessageRevisionPayload): string {
+  const speaker = speakerAttrs(p.name, p.sourceRole);
   const attrs = [
     `id="${xmlAttrEscape(p.ts)}"`,
     ...(p.sourceRole ? [`from="${p.sourceRole}"`] : []),
-    ...(p.name?.trim() ? [`author="${xmlAttrEscape(p.name.trim())}"`] : []),
+    ...(speaker.author ? [`author="${xmlAttrEscape(speaker.author)}"`] : []),
+    ...(speaker.via ? [`via="${xmlAttrEscape(speaker.via)}"`] : []),
     ...(isoFromTs(p.ts) ? [`sent-at="${isoFromTs(p.ts)}"`] : []),
   ].join(" ");
   return p.action === "deleted"

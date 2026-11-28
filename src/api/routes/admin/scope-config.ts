@@ -8,7 +8,6 @@ import {
   embeddingModelCatalog,
   defaultModel,
   modelServiceable,
-  ALL_PROVIDERS_AVAILABLE,
   resolveModel,
   HISTORY_BUDGET_DEFAULT_TOKENS,
 } from "../../../model/pi-models.ts";
@@ -32,18 +31,18 @@ import {
 } from "../../../policy/command-policy.ts";
 import { isHostDenied } from "../../../resolution/egress-policy.ts";
 import { discoverScopes } from "./common.ts";
+import { actionApproved } from "../../action-approval.ts";
 import { scopeActivity } from "./scope-activity.ts";
 
 export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
   const { res, deps, params, body } = ctx;
-  if (!deps.config) return sendJson(res, 404, { error: "not_found" });
   const targetScope = params.scope!;
   const resource = params.resource!;
 
   const actor = await authorizeAdmin(ctx, targetScope);
   if (!actor) return;
   const withScopeMutationLock = async <T>(fn: () => Promise<T>): Promise<T> =>
-    deps.advisoryLock ? deps.advisoryLock.withLock(`admin-governance:${targetScope}`, fn) : fn();
+    deps.advisoryLock.withLock(`admin-governance:${targetScope}`, fn);
 
   if (resource === "command-policy-simulate") {
     const command = (body as { command?: unknown }).command;
@@ -86,7 +85,8 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
 
   const desc = ADMIN_RESOURCE_BY_ID.get(resource);
   if (!desc) return sendJson(res, 404, { error: "not_found", message: `unknown admin resource: ${resource}` });
-  if (desc.refreshesModels) await deps.refreshModels?.();
+  if (!(await actionApproved(ctx, { summary: `Change ${resource} for ${targetScope}` }))) return;
+  if (desc.refreshesModels) await deps.refreshModels();
   return withScopeMutationLock(async () => {
     try {
       const result = await desc.apply(ctx, actor, targetScope);
@@ -94,7 +94,7 @@ export async function putScopeConfig(ctx: ApiCtx): Promise<void> {
         return sendJson(res, result.status ?? 400, { error: result.code ?? "bad_request", message: result.error });
       }
     } catch (err) {
-      await deps.config!.refreshScope(targetScope);
+      await deps.config.refreshScope(targetScope);
       throw err;
     }
     audit(ctx, { principalId: actor.id, action: `${resource}.update`, resource, scopeLabel: targetScope });
@@ -107,20 +107,22 @@ export async function getAdminResources(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  await deps.refreshModels?.();
+  await deps.refreshModels();
   audit(ctx, { principalId: actor.id, action: "resources.read", resource: "resources", scopeLabel: scope });
   return sendJson(res, 200, { resources: adminResourceManifest() });
 }
 
 export async function adminPermissions(deps: ApiCtx["deps"], tenant: Tenant, actor: Principal) {
-  if (!deps.admin || !(await activePrincipal(deps, actor.id))) return null;
+  if (!(await activePrincipal(deps, actor.id))) return null;
   const status = await deps.admin.adminStatusOf(tenant, actor);
-  return { ...status, permissions: status.isAdmin ? ["admin"] : [] };
+  let permissions: string[] = [];
+  if (status.role === "org_admin") permissions = ["admin"];
+  else if (status.role === "owner") permissions = ["owner"];
+  return { ...status, permissions };
 }
 
 export async function whoami(ctx: ApiCtx): Promise<void> {
   const { res, deps } = ctx;
-  if (!deps.admin) return sendJson(res, 404, { error: "not_found" });
   const actor = adminActorFrom(ctx);
   const status = actor ? await adminPermissions(deps, tenantOf(ctx), actor) : null;
   if (!actor || !status) return sendJson(res, 200, { isAdmin: false, permissions: [] });
@@ -275,8 +277,8 @@ type SettingsView = keyof typeof SETTINGS_RESOURCES;
 
 async function scopeServiceCredentials(deps: ApiCtx["deps"], tenant: Tenant, targetScope: string) {
   const [credentials, grants] = await Promise.all([
-    deps.serviceCreds?.listServiceCredentials(targetScope) ?? [],
-    deps.acl?.find(tenant, { ownerScopeId: targetScope, kind: "service-cred" }) ?? [],
+    deps.serviceCreds.listServiceCredentials(targetScope),
+    deps.acl.find(tenant, { ownerScopeId: targetScope, kind: "service-cred" }) ?? [],
   ]);
   const grantees = new Map<string, string[]>();
   for (const grant of grants) {
@@ -294,8 +296,7 @@ export async function getCredentialUsageSummary(ctx: ApiCtx): Promise<void> {
   const targetScope = ctx.params.scope!;
   if (!targetScope || targetScope.includes("/")) return sendJson(ctx.res, 404, { error: "not_found" });
   if (!(await authorizeAdmin(ctx, targetScope))) return;
-  const credentials = (await ctx.deps.serviceCreds?.listServiceCredentials(targetScope)) ?? [];
-  if (!ctx.deps.credentialUsage) return sendJson(ctx.res, 503, { error: "usage_unavailable" });
+  const credentials = await ctx.deps.serviceCreds.listServiceCredentials(targetScope);
   const summaries = await ctx.deps.credentialUsage.summary(
     tenantOf(ctx),
     credentials.map((credential) => credential.slug),
@@ -304,16 +305,14 @@ export async function getCredentialUsageSummary(ctx: ApiCtx): Promise<void> {
 }
 
 async function scopeEgress(deps: ApiCtx["deps"], targetScope: string) {
-  const scopeProfile = (await deps.sandbox?.profileFor?.(targetScope)) ?? deps.sandbox?.profile;
-  const declaredEgress =
-    scopeProfile?.egressEnforcement ?? deps.egressDeclaredEnforcement ?? deps.egressEnforcement ?? "none";
-  const controlPlaneConfigured = deps.egressControlPlaneConfigured ?? deps.egressEnforcement === declaredEgress;
-  const effectiveEgressFidelity = controlPlaneConfigured ? declaredEgress : "none";
+  const scopeProfile = (await deps.sandbox.profileFor?.(targetScope)) ?? deps.sandbox.profile;
+  const declaredEgress = scopeProfile?.egressEnforcement ?? deps.egressDeclaredEnforcement;
+  const effectiveEgressFidelity = deps.egressControlPlaneConfigured ? declaredEgress : "none";
   let egressReason = "ready";
   if (declaredEgress !== "domain") egressReason = "backend_unsupported";
   else if (effectiveEgressFidelity !== "domain") egressReason = "control_plane_unconfigured";
-  const orgEgress = deps.config!.getEgress(orgScope(deps));
-  const targetEgress = deps.config!.getEgress(targetScope);
+  const orgEgress = deps.config.getEgress(orgScope(deps));
+  const targetEgress = deps.config.getEgress(targetScope);
   const effectiveEgressPolicy = {
     deniedHosts: [...new Set([...(orgEgress?.deniedHosts ?? []), ...(targetEgress?.deniedHosts ?? [])])],
     allowedHosts: [] as string[],
@@ -323,7 +322,7 @@ async function scopeEgress(deps: ApiCtx["deps"], targetScope: string) {
   ].filter((host) => !isHostDenied(host, effectiveEgressPolicy.deniedHosts));
   return {
     egressEnforcement: {
-      backend: scopeProfile?.backend ?? deps.sandboxBackend ?? "unknown",
+      backend: scopeProfile?.backend ?? deps.sandboxBackend,
       declaredFidelity: declaredEgress,
       effectiveFidelity: effectiveEgressFidelity,
       fidelity: effectiveEgressFidelity,
@@ -335,17 +334,11 @@ async function scopeEgress(deps: ApiCtx["deps"], targetScope: string) {
 }
 
 async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, unknown>, nonblocking: boolean) {
-  const configuredKeys = deps.providerKeys ?? ALL_PROVIDERS_AVAILABLE;
-  const managedKeys = deps.modelCredentials ? await deps.modelCredentials.availability() : configuredKeys;
-  const cached =
-    deps.modelCredentials && managedKeys.openrouter && nonblocking
-      ? cachedModelCatalog(deps.modelCredentialFetch)
-      : undefined;
+  const managedKeys = await deps.modelCredentials.availability();
+  const cached = managedKeys.openrouter && nonblocking ? cachedModelCatalog(deps.modelCredentialFetch) : undefined;
   const catalog =
     cached?.models ??
-    (deps.modelCredentials && managedKeys.openrouter
-      ? await selectableModelCatalog(deps.modelCredentialFetch)
-      : builtInModelCatalog());
+    (managedKeys.openrouter ? await selectableModelCatalog(deps.modelCredentialFetch) : builtInModelCatalog());
   const runtime = values.runtime as { modelId?: unknown } | null | undefined;
   let currentId = defaultModel(deps.baseModelDefault);
   if (typeof values.baseModel === "string") currentId = values.baseModel;
@@ -395,7 +388,6 @@ async function scopeModelOptions(deps: ApiCtx["deps"], values: Record<string, un
 
 export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
   const { res, deps, params, url } = ctx;
-  if (!deps.config) return sendJson(res, 404, { error: "not_found" });
   const targetScope = params.scope!;
   if (!targetScope || targetScope.includes("/")) return sendJson(res, 404, { error: "not_found" });
   const requestedView = url.searchParams.get("view");
@@ -418,8 +410,8 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
   const needsModels = includes("models", "governance", "onboarding");
   const needsConfig = view !== "credentials" && view !== "connectors";
   await Promise.all([
-    needsConfig ? read("config", () => deps.config!.refreshScope(targetScope)) : undefined,
-    needsModels ? read("modelRegistry", () => deps.refreshModels?.()) : undefined,
+    needsConfig ? read("config", () => deps.config.refreshScope(targetScope)) : undefined,
+    needsModels ? read("modelRegistry", () => deps.refreshModels()) : undefined,
   ]);
   audit(ctx, { principalId: actor.id, action: "config.read", resource: "config", scopeLabel: targetScope });
   const selectedKeys: readonly string[] | undefined = view === null ? undefined : SETTINGS_RESOURCES[view];
@@ -445,10 +437,10 @@ export async function getScopeConfig(ctx: ApiCtx): Promise<void> {
       ? read("credentials", () => scopeServiceCredentials(deps, tenantOf(ctx), targetScope))
       : undefined,
     includes("credentials") && parseScopeId(targetScope).kind === "org"
-      ? read("people", () => deps.directory?.list())
+      ? read("people", () => deps.directory.list())
       : undefined,
     includes("credentials") && parseScopeId(targetScope).kind === "org"
-      ? read("channels", () => deps.directory?.listChannels?.())
+      ? read("channels", () => deps.directory.listChannels?.())
       : undefined,
     includes("governance") ? deps.config.getSharingPostureOwnDurable(targetScope) : undefined,
     includes("governance") ? scopeEgress(deps, targetScope) : undefined,
@@ -495,8 +487,8 @@ export async function retention(ctx: ApiCtx): Promise<void> {
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
   audit(ctx, { principalId: actor.id, action: "retention.read", resource: "retention", scopeLabel: scope });
-  const sessionCount = (await deps.sessions?.countSessions()) ?? 0;
-  const activity = (await deps.admin?.users.activity()) ?? [];
+  const sessionCount = (await deps.sessions.countSessions()) ?? 0;
+  const activity = (await deps.admin.users.activity()) ?? [];
   const report = computeRetention({ sessionCount, activity, nowMs: Date.now() });
   return sendJson(res, 200, { scopeId: scope, ...report });
 }

@@ -10,7 +10,7 @@ export function safeHttpHref(url: string): string | null {
   return /^(?:https?:\/\/|mailto:)/i.test(decoded) ? decoded : null;
 }
 
-function splitOnce(s: string, sep: string): [string, string | undefined] {
+export function splitOnce(s: string, sep: string): [string, string | undefined] {
   const at = s.indexOf(sep);
   return at < 0 ? [s, undefined] : [s.slice(0, at), s.slice(at + sep.length)];
 }
@@ -66,6 +66,60 @@ export function slackWireToPlain(text: string): string {
     .join("");
 }
 
+const SLACK_MARKS: Record<string, string> = { "*": "**", _: "_", "~": "~~" };
+const MARKDOWN_SYNTAX = new Set("\\`*_~[]()<>#+-=.!|&");
+
+function joinsWord(c: string | undefined, mark: string): boolean {
+  return c !== undefined && (c === mark || (c >= "0" && c <= "9") || c.toLowerCase() !== c.toUpperCase());
+}
+
+function spanClose(text: string, open: number): number {
+  const mark = text[open]!;
+  const next = text[open + 1];
+  if (joinsWord(text[open - 1], mark) || next === undefined || !next.trim() || next === mark) return -1;
+  for (let i = open + 1; i < text.length && text[i] !== "\n" && text[i] !== "`"; i++)
+    if (text[i] === mark) return !text[i - 1]!.trim() || joinsWord(text[i + 1], mark) ? -1 : i;
+  return -1;
+}
+
+function codeEnd(text: string, open: number): number {
+  const fence = text.startsWith("```", open) ? "```" : "`";
+  const close = text.indexOf(fence, open + fence.length);
+  if (close < 0 || (fence === "`" && text.slice(open, close).includes("\n"))) return -1;
+  return close + fence.length;
+}
+
+function slackMarkdown(text: string, lineStart: boolean): string {
+  let out = "";
+  let leading = lineStart;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    const code = c === "`" ? codeEnd(text, i) : -1;
+    const close = SLACK_MARKS[c] ? spanClose(text, i) : -1;
+    if (code > 0) {
+      out += text.slice(i, code);
+      i = code - 1;
+    } else if (close > 0) {
+      out += SLACK_MARKS[c] + slackMarkdown(text.slice(i + 1, close), false) + SLACK_MARKS[c];
+      i = close;
+    } else if (c === ">" && (i ? text[i - 1] === "\n" : lineStart)) out += c;
+    else if (c === " " && leading) out += "\u00a0";
+    else out += MARKDOWN_SYNTAX.has(c) ? `\\${c}` : c;
+    leading = code < 0 && close < 0 && (c === "\n" || (leading && c === " "));
+  }
+  return out;
+}
+
+export function slackWireToMarkdown(text: string, emojiFor: (name: string) => string | null): string {
+  let out = "";
+  for (const seg of splitSlackWire(text)) {
+    if (seg.kind === "mention") out += `<@${seg.handle}>`;
+    else if (seg.kind === "link") out += `[${seg.label.replaceAll("[", "\\[").replaceAll("]", "\\]")}](<${seg.href}>)`;
+    else out += slackMarkdown(withEmoji(seg.text, emojiFor), !out || out.endsWith("\n"));
+  }
+  return out;
+}
+
 const REACTION_DIRECTIVE = /\[\[react:[^[\]]*\]\]/gi;
 const TRAILING_OPEN_REACTION = /\[\[react:[^[\]]*$/i;
 const ANY_DIRECTIVE = /\[\[react:/i;
@@ -87,7 +141,11 @@ export function stripSlackDirectives(text: string): string {
     .trim();
 }
 
-function replaceShortcodes(text: string, emojiFor: (name: string) => string | null): string {
+export const REACTION_PREFIX = "[Slack reaction] ";
+
+export const FORWARD_PREFIX = "[forwarded message from ";
+
+function withEmoji(text: string, emojiFor: (name: string) => string | null): string {
   const parts = text.split(":");
   let out = parts[0] ?? "";
   for (let i = 1; i < parts.length; i++) {
@@ -101,5 +159,5 @@ function replaceShortcodes(text: string, emojiFor: (name: string) => string | nu
 }
 
 export function slackPreviewText(text: string, emojiFor: (name: string) => string | null): string {
-  return replaceShortcodes(slackWireToPlain(stripSlackDirectives(text)), emojiFor).trim();
+  return withEmoji(slackWireToPlain(stripSlackDirectives(text)), emojiFor).trim();
 }

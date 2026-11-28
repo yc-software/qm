@@ -144,7 +144,7 @@ function buildOrchestrator(
   return { orch, sessions, errors, config };
 }
 
-function liveTurnProbe() {
+function busyThreadProbe() {
   const busyThreads = new Set<string>();
   const runs = {
     inFlightForThread: async (threadRef: string) =>
@@ -775,7 +775,7 @@ async function untilTrue(what: string, predicate: () => boolean, deadlineMs = 3_
 
 test("the background pass waits out another live turn rather than throwing its summary away", async () => {
   const { agent, compactCalls, open } = gatedAgent();
-  const { runs, busyThreads } = liveTurnProbe();
+  const { runs, busyThreads } = busyThreadProbe();
   const { orch, sessions } = buildOrchestrator(
     agent,
     budgetBetweenSoftAndHard(tokensOf(...msgTexts(8))),
@@ -952,7 +952,7 @@ test("a retry restores a committed runtime decision after the resumed segment cr
   assert.equal(calls, 3);
 });
 
-test("only a cron automation receives task-runtime authority and each fire starts fresh", async () => {
+test("a person's fires may switch their task runtime and each fire starts fresh", async () => {
   const base = createMockAgent();
   const active = { modelId: "claude-sonnet-5", effortLevel: "high", fastMode: false };
   const outcomes: { surface: string; ok: boolean }[] = [];
@@ -1004,9 +1004,9 @@ test("only a cron automation receives task-runtime authority and each fire start
   });
   assert.deepEqual(
     outcomes.map((x) => x.ok),
-    [true, false, true],
+    [true, true, true],
   );
-  assert.equal(resumed, 2);
+  assert.equal(resumed, 3);
 });
 
 test("cron and loop dispatch use purpose defaults while task handoffs and later fires stay isolated", async () => {

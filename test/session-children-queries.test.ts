@@ -11,15 +11,17 @@ import { createInsecureTestServer } from "../src/api/server.ts";
 import { buildApp } from "../src/wiring.ts";
 import type { Principal, Session } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
+import { personalScope } from "../src/types.ts";
+import { testCore } from "./support/build-app.ts";
 
 async function childrenQueries(children: number, busyTrees: number): Promise<number> {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "children-")), seedSkills: false }));
-  const server = createInsecureTestServer(built.app);
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const principal: Principal = { id: "internal:U1", type: "internal" };
   const session = async (threadRef: string, parent?: Session) => {
-    const s = await built.sessions.getOrCreateByThread(threadRef, "dm", "personal:U1", undefined, "web");
+    const s = await built.sessions.getOrCreateByThread(threadRef, "dm", personalScope("U1"), undefined, "web");
     await built.sessions.addParticipant(s.id, "U1", threadRef);
     if (parent) await built.sessions.setParentSession(s.id, parent.id);
     return s;
@@ -85,10 +87,10 @@ test("a session's same-scope ancestors come back nearest first, skipping ancesto
       if (parent) await built.sessions.setParentSession(s.id, parent.id);
       return s;
     };
-    const root = await session("web:U1:root", "personal:U1");
+    const root = await session("web:U1:root", personalScope("U1"));
     const elsewhere = await session("subagent:root:1", "channel:C1", root);
-    const mid = await session("subagent:root:2", "personal:U1", elsewhere);
-    const leaf = await session("subagent:root:3", "personal:U1", mid);
+    const mid = await session("subagent:root:2", personalScope("U1"), elsewhere);
+    const leaf = await session("subagent:root:3", personalScope("U1"), mid);
     const ancestors = await built.sessions.sameScopeAncestors([leaf.threadRef, "web:U1:missing"]);
     assert.deepEqual(
       ancestors.map((a) => a.threadRef),

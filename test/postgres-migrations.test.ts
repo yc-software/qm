@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
 import pg from "pg";
-import { applyPgMigrations, createPgPool, definePgMigration, PG_MIGRATIONS_TABLE } from "../src/persistence/pg-pool.ts";
+import {
+  applyPgMigrations,
+  createPgPool,
+  definePgMigration,
+  migrateDatabase,
+  PG_MIGRATIONS_TABLE,
+} from "../src/persistence/pg-pool.ts";
 import { settle } from "./support/settle.ts";
 
 const databaseUrl = process.env.DATABASE_URL;
@@ -120,42 +126,6 @@ test("concurrent index retry resolves indexes in the target table schema", { ski
   }
 });
 
-test("an autocommit migration can commit between pages and is recorded once", { skip }, async () => {
-  const a = new pg.Pool({ connectionString: databaseUrl });
-  const b = new pg.Pool({ connectionString: databaseUrl });
-  const { id, table } = names();
-  const migration = definePgMigration({
-    id,
-    autocommit: true,
-    statements: [
-      `CREATE OR REPLACE PROCEDURE ${table}_fill() LANGUAGE plpgsql AS $fill$
-BEGIN
-  FOR page IN 1..3 LOOP
-    INSERT INTO ${table}(value) VALUES (page);
-    COMMIT;
-  END LOOP;
-END $fill$`,
-      `CALL ${table}_fill()`,
-      `DROP PROCEDURE ${table}_fill()`,
-    ],
-  });
-  try {
-    await a.query(`CREATE TABLE ${table}(value INT NOT NULL)`);
-    await Promise.all([applyPgMigrations(a, [migration]), applyPgMigrations(b, [migration])]);
-    const rows = await a.query(`SELECT value FROM ${table} ORDER BY value`);
-    assert.deepEqual(
-      rows.rows.map((row) => row.value),
-      [1, 2, 3],
-    );
-    const ledger = await a.query(`SELECT checksum FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [id]);
-    assert.deepEqual(ledger.rows, [{ checksum: migration.checksum }]);
-  } finally {
-    await a.query(`DROP TABLE IF EXISTS ${table}`);
-    await a.query(`DELETE FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [id]);
-    await Promise.all([a.end(), b.end()]);
-  }
-});
-
 test("concurrent migrators apply one version exactly once", { skip }, async () => {
   const a = new pg.Pool({ connectionString: databaseUrl });
   const b = new pg.Pool({ connectionString: databaseUrl });
@@ -223,14 +193,14 @@ for (const lock of ["qm:schema-migrations"]) {
     const admin = new pg.Pool({ connectionString: databaseUrl });
     const holder = new pg.Client({ connectionString: databaseUrl });
     const { id, table } = names();
-    const store = createPgPool(databaseUrl!, [{ id, statements: [`ALTER TABLE ${table} ADD COLUMN extra INT`] }]);
+    const store = createPgPool(databaseUrl!);
     await holder.connect();
     try {
       await admin.query(`CREATE TABLE ${table}(value INT NOT NULL)`);
       await admin.query(`INSERT INTO ${table}(value) VALUES (1)`);
       const holderPid = (await holder.query<{ pid: number }>("SELECT pg_backend_pid() AS pid")).rows[0]!.pid;
       await holder.query("SELECT pg_advisory_lock(hashtext($1))", [lock]);
-      const ready = store.pool();
+      const ready = migrateDatabase(databaseUrl!);
       let startFailure: unknown;
       ready.catch((error: unknown) => {
         startFailure = error;
@@ -254,7 +224,7 @@ for (const lock of ["qm:schema-migrations"]) {
         await holder.query("SELECT pg_advisory_unlock(hashtext($1))", [lock]);
       }
       await ready;
-      assert.deepEqual(await store.q(`SELECT value, extra FROM ${table}`), [{ value: 1, extra: null }]);
+      assert.deepEqual(await store.q(`SELECT value FROM ${table}`), [{ value: 1 }]);
     } finally {
       await holder.end();
       await store.close();
@@ -286,26 +256,30 @@ test("a migration recorded by an earlier step's SQL in the same run is not appli
   }
 });
 
-test("an upgrade step runs when its predecessor is applied earlier in the same run", { skip }, async () => {
-  const pool = new pg.Pool({ connectionString: databaseUrl });
-  const { id, table } = names();
-  const predecessor = definePgMigration({ id: `${id}/a`, statements: [`CREATE TABLE ${table}(value INT)`] });
-  const upgrade = definePgMigration({
-    id: `${id}/b`,
-    upgradeFrom: predecessor.id,
-    statements: [`INSERT INTO ${table}(value) VALUES (1)`],
-  });
-  const skipped = definePgMigration({
-    id: `${id}/c`,
-    upgradeFrom: `${id}/missing`,
-    statements: [`INSERT INTO ${table}(value) VALUES (2)`],
-  });
-  try {
-    await applyPgMigrations(pool, [predecessor, upgrade, skipped]);
-    assert.deepEqual((await pool.query(`SELECT value FROM ${table}`)).rows, [{ value: 1 }]);
-  } finally {
-    await pool.query(`DROP TABLE IF EXISTS ${table}`);
-    await pool.query(`DELETE FROM ${PG_MIGRATIONS_TABLE} WHERE id LIKE $1`, [`${id}/%`]);
-    await pool.end();
-  }
-});
+test(
+  "a migration that replaces earlier ones is recorded without running once all of them are applied",
+  { skip },
+  async () => {
+    const pool = new pg.Pool({ connectionString: databaseUrl });
+    const { id, table } = names();
+    const created = definePgMigration({ id: `${id}/a`, statements: [`CREATE TABLE ${table}(value INT)`] });
+    const filled = definePgMigration({ id: `${id}/b`, statements: [`INSERT INTO ${table}(value) VALUES (1)`] });
+    const baseline = definePgMigration({
+      id: `${id}/baseline`,
+      statements: [`CREATE TABLE ${table}(value INT)`],
+      replaces: [created.id, filled.id],
+    });
+    try {
+      await applyPgMigrations(pool, [created]);
+      await assert.rejects(applyPgMigrations(pool, [baseline]), /missing 1 of them \(.*\/b\)/);
+      await applyPgMigrations(pool, [filled, baseline]);
+      assert.deepEqual((await pool.query(`SELECT value FROM ${table}`)).rows, [{ value: 1 }]);
+      const ledger = await pool.query(`SELECT 1 FROM ${PG_MIGRATIONS_TABLE} WHERE id = $1`, [baseline.id]);
+      assert.equal(ledger.rowCount, 1);
+    } finally {
+      await pool.query(`DROP TABLE IF EXISTS ${table}`);
+      await pool.query(`DELETE FROM ${PG_MIGRATIONS_TABLE} WHERE id LIKE $1`, [`${id}/%`]);
+      await pool.end();
+    }
+  },
+);

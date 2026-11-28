@@ -47,10 +47,14 @@ test("Slack chats offer the account link once the check finds no link, recheckin
     await until(() => !!document.querySelector("qm-slack-reply textarea"));
     assert.equal(bodies.length, 2);
     assert.match(
-      document.querySelector("qm-slack-reply .composer-input")!.getAttribute("placeholder")!,
+      document.querySelector("qm-slack-reply .composer-input")!.getAttribute("aria-label")!,
       /Reply in Slack as Alice/,
     );
-    assert.equal(document.querySelector(".chat-subtitle")!.textContent, "Slack");
+    assert.equal(
+      document.querySelector("qm-slack-reply .composer-input")!.getAttribute("placeholder"),
+      "Reply in thread…",
+    );
+    assert.match(document.querySelector(".split-pane-title")!.textContent!, /Slack discussion/);
   } finally {
     await h.close();
   }

@@ -16,6 +16,7 @@ import type { Sandbox } from "../src/sandbox/sandbox.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { testAdvisoryLock, testCountedAdvisoryLock, testMap } from "./support/test-database.ts";
+import { sleep } from "../src/util/async.ts";
 
 let fake: FakeModal;
 let sandbox: Sandbox;
@@ -989,6 +990,14 @@ test("failed native checkpoints wait for the interval across cleanup and mainten
   assert.equal(attempts, 3);
 });
 
+test("a live sandbox that lost its hydration marker reports the refused checkpoint once", async () => {
+  const codes: string[] = [];
+  const s = make({ snapshotIntervalMs: 1, onError: (e: { code: string }) => codes.push(e.code) });
+  await s.run(await s.provision(scope), "rm -f ~/.qm-hydrated");
+  for (const wait of [5, 5, 5]) await sleep(wait).then(() => s.reapDeepIdle!(72 * 3600_000));
+  assert.deepEqual(codes, ["periodic_snapshot_failed"]);
+});
+
 test("a write landing during a deep-idle checkpoint keeps the sandbox running", { timeout: 10000 }, async () => {
   const store = testMap<StoredModalSandbox>();
   const advisoryLock = testAdvisoryLock();
@@ -1225,4 +1234,22 @@ test("a computer's memory size reaches every Modal create, and a resize restart 
   assert.equal((await s.run(h, "true")).code, 0);
   assert.deepEqual(sizes, [4, 4, 8, 999, 8]);
   assert.equal(s.profile.sizesMemory, true);
+});
+
+test("a computer's chosen image reaches every Modal create for it, including a resize restart", async () => {
+  const images: unknown[] = [];
+  const s = make({
+    imageFor: async (id: string) => (id === scope ? "toolchain" : undefined),
+    client: {
+      ...fake.client,
+      create: async (options: Parameters<ModalClient["create"]>[0]) => {
+        images.push(options.image);
+        return fake.client.create(options);
+      },
+    },
+  });
+  await s.provision(scope);
+  await s.restartComputer!(scope, 8);
+  await s.provision(scopeId("personal", "other"));
+  assert.deepEqual(images, ["toolchain", "toolchain", undefined]);
 });

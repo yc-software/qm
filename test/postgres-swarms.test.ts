@@ -1,4 +1,4 @@
-import { test, before, after } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
@@ -8,37 +8,11 @@ import { createPostgresAdvisoryLock } from "../src/persistence/advisory-lock.ts"
 import { createSwarmStore, SWARM_LIMITS, type SwarmStorage } from "../src/swarms/swarm-store.ts";
 import { createSwarmService } from "../src/swarms/swarm-service.ts";
 import { swarmFixture } from "./support/swarm-fixture.ts";
-import { seedTestTenant, testTenant } from "./support/test-tenant.ts";
+import { testTenant } from "./support/test-tenant.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
 const baseUrl = process.env.DATABASE_URL;
-const schema = `swarm_test_${process.pid}`;
-const isolatedUrl = baseUrl ? new URL(baseUrl) : undefined;
-isolatedUrl?.searchParams.set(
-  "options",
-  `${isolatedUrl?.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim(),
-);
-const databaseUrl = isolatedUrl?.toString();
-before(async () => {
-  if (!baseUrl) return;
-  const { default: pg } = await import("pg");
-  const pool = new pg.Pool({ connectionString: baseUrl });
-  try {
-    await pool.query(`CREATE SCHEMA ${schema}`);
-  } finally {
-    await pool.end();
-  }
-  await seedTestTenant(databaseUrl!);
-});
-after(async () => {
-  if (!baseUrl) return;
-  const { default: pg } = await import("pg");
-  const pool = new pg.Pool({ connectionString: baseUrl });
-  try {
-    await pool.query(`DROP SCHEMA ${schema} CASCADE`);
-  } finally {
-    await pool.end();
-  }
-});
+const databaseUrl = baseUrl ? testDatabaseUrl() : undefined;
 const skip = databaseUrl ? false : "set DATABASE_URL to a disposable Postgres database";
 
 test(
@@ -248,8 +222,6 @@ test("Postgres swarms atomically bound concurrent pools across independent clien
       /rollback/,
     );
     assert.equal((await store.get(fixture.root.id))!.notificationCount, 20);
-    const applied = await first.pool.q("SELECT id FROM qm_schema_migrations WHERE id = 'durable-map/swarms/0001'");
-    assert.equal(applied.length, 1);
     await first.map<SwarmStorage>("swarms", ["pending"]).delete(fixture.root.id);
   } finally {
     await runtime.close();

@@ -13,7 +13,7 @@ interface TenantSandboxSettings {
   settings: TenantSettings;
 }
 
-async function tenantSandboxSettings(): Promise<TenantSandboxSettings | undefined> {
+export function sandboxTenant(): string | undefined {
   const tenant = boundTenant();
   const boot = bootTenant();
   if (tenant === undefined) {
@@ -21,6 +21,12 @@ async function tenantSandboxSettings(): Promise<TenantSandboxSettings | undefine
     return undefined;
   }
   if (tenant === boot) return undefined;
+  return tenant;
+}
+
+async function tenantSandboxSettings(): Promise<TenantSandboxSettings | undefined> {
+  const tenant = sandboxTenant();
+  if (tenant === undefined) return undefined;
   await loadTenant();
   const settings = loadedTenantSettings();
   if (!settings) throw new Error("tenant settings are not loaded");

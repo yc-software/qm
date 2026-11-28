@@ -86,7 +86,7 @@ test("a denied approval's refusal is a clean outcome, not an error", async () =>
   stubApprovalResolve({
     status: "refused",
     refusalKind: "approval_denied",
-    reason: "approval denied for git push --force",
+    reason: "approval declined for git push --force",
   });
   await runApprovalTurn(fakeAgent(), { requestId: "a-1", approved: false }, undefined);
 });
@@ -111,7 +111,7 @@ test("a missing or expired approval record surfaces a visible expiry message", a
 
 test("deciding an approval that was already decided resolves quietly with nothing to follow", async () => {
   stubResolveResponse({ error: "not_found" }, 404);
-  assert.equal(await resolveApproval({ requestId: "a-1", approved: false }), null);
+  assert.deepEqual(await resolveApproval({ requestId: "a-1", approved: false }), { status: "gone" });
 });
 
 test("a synchronous core refusal surfaces its reason, not a bare HTTP status", async () => {

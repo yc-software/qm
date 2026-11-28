@@ -7,8 +7,7 @@ import type { ServerDeps } from "../src/api/deps.ts";
 import { webMeConfig } from "../src/api/routes/web-me.ts";
 import { ADMIN_RESOURCES } from "../src/api/routes/admin-resources.ts";
 import { orgId, orgScope } from "../src/config.ts";
-import { scopeId, type ScopeId } from "../src/types.ts";
-import { serverDeps } from "../src/wiring.ts";
+import { scopeId, type ScopeId, personalScope } from "../src/types.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
@@ -24,13 +23,12 @@ const webMe = webMeConfig({
   }),
   SENTRY_BROWSER_DSN: "https://public@sentry.example.com/1",
   SENTRY_RELEASE: "release-1",
-  WEB_UI_WELCOME_COHORT: " spring ",
   WEB_UI_SUGGESTED_ACTIVITIES: JSON.stringify(activities),
 });
 
 async function serve(deps: Partial<ServerDeps> = {}): Promise<string> {
   const server = createServer(built.app, {
-    ...serverDeps(config, built),
+    ...built,
     ...browserSessionDeps,
     web: { events: {} as never, me: webMe, shell: { release: async () => undefined } as never },
     suggestedActivities: undefined,
@@ -58,6 +56,7 @@ test("/me describes the signed-in person, the company and the web app's settings
   const body = await me(browserSessionCookie("bob@example.com", { name: " Bob " }));
   assert.deepEqual(body, {
     user: "bob@example.com",
+    personalScope: personalScope("bob@example.com"),
     org: orgId(),
     companyName: "Acme",
     workspace: null,
@@ -71,7 +70,6 @@ test("/me describes the signed-in person, the company and the web app's settings
     modelAuthConnected: false,
     impersonatedBy: null,
     displayName: "Bob",
-    welcomeCohort: "spring",
     suggestedActivities: activities,
     permissions: [],
   });
@@ -146,7 +144,7 @@ test("/me carries the activity seeds set on the organization, and a rejected wri
     JSON.stringify(await write({ seeds: { activities: [{ ...idea, replaces: "crm" }] } })),
     /activities\.0: .*replaces/,
   );
-  assert.match(JSON.stringify(await write({ seeds }, "personal:bob@example.com")), /org-wide/);
+  assert.match(JSON.stringify(await write({ seeds }, personalScope("bob@example.com"))), /org-wide/);
   assert.deepEqual((await me(cookie)).welcome, seeds);
   assert.deepEqual(await write({ seeds: null }), { ok: true });
   assert.equal("welcome" in (await me(cookie)), false);

@@ -1,4 +1,5 @@
 import { loopAdministration } from "./loop-administration.ts";
+import { cronAdministration } from "./cron-administration.ts";
 import type { ScopeId } from "../types.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
@@ -125,6 +126,7 @@ export function createMessagingMethods(
   | "directoryChannelsFor"
   | "directoryMember"
   | "loopAdministration"
+  | "cronAdministration"
   | "samePerson"
   | "personMatcher"
   | "cronAdminUrl"
@@ -214,7 +216,13 @@ export function createMessagingMethods(
     async updateCron(id, patch, by, trial) {
       const before = await deps.crons.get(id);
       if (!before) return null;
-      if (patch.runtime !== undefined) await validateRuntime({ ...before, ...patch });
+      if (patch.runtime !== undefined)
+        await validateRuntime({
+          ...before,
+          ...patch,
+          action: patch.action === undefined ? before.action : (patch.action ?? undefined),
+          message: patch.message === undefined ? before.message : (patch.message ?? undefined),
+        });
       if (patch.schedule) validateUserSchedule(patch.schedule);
       await trialBeforeSave(patch.script, patch.schedule, trial);
       const linked = linkedChanges(before, patch);
@@ -513,6 +521,7 @@ export function createMessagingMethods(
       );
     },
     loopAdministration: (actor, loops) => loopAdministration(deps, actor, loops),
+    cronAdministration: (tenant, actor, crons) => cronAdministration(deps, tenant, actor, crons),
     samePerson(a, b) {
       return samePersonInDirectory(deps.directory, a, b);
     },

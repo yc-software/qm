@@ -9,6 +9,7 @@ import {
   isNonRetryable,
   NonRetryableTurnError,
   ProviderTurnError,
+  turnErrorCode,
   turnFailureMessage,
 } from "../core/turn-error.ts";
 import {
@@ -68,6 +69,7 @@ export async function processRun(
           run.startedAt !== null ? Math.max(0, run.startedAt - run.createdAt) : undefined,
         "qm.surface": request.surface,
         "qm.origin": "origin" in request ? request.origin.kind : undefined,
+        "qm.tenant": run.tenantId,
       },
       () => attemptRun(tenant, deps, { ...run, request }, opts),
       (result) => opts?.shutdown?.aborted === true || result.stopped === true || result.status === "queued",
@@ -173,7 +175,7 @@ async function attemptRun(
         tenant,
         {
           category: "turn",
-          code: "error",
+          code: turnErrorCode(err),
           message: `run ${run.id}: ${errMessage(err)}`,
           scopeLabel: conversationScope(run.request.conversation, run.request.actor.id),
         },

@@ -7,7 +7,7 @@ import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { createIdempotencyStore } from "../src/idempotency/idempotency-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
 import type { LeaderLease } from "../src/persistence/leader-lease.ts";
-import { scopeId, type TurnRequest, type TurnResult } from "../src/types.ts";
+import { scopeId, type TurnRequest, type TurnResult, personalScope } from "../src/types.ts";
 import type { ProcessSandbox, ProcessSession, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { ProcessSessionGoneError } from "../src/sandbox/exec-process-session.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
@@ -17,7 +17,7 @@ import { testDatabaseUrl, testMap } from "./support/test-database.ts";
 const automationOrigin = (request?: { origin?: TurnOrigin }) =>
   request?.origin?.kind === "automation" ? request.origin : undefined;
 
-const SCOPE = "personal:U1";
+const SCOPE = personalScope("U1");
 const handle: SandboxHandle = { id: "vm", rootDir: "/workspace", homeDir: "/root" };
 
 function fakeSandbox() {
@@ -171,7 +171,6 @@ test("new output wakes the agent as a first-class live turn in the arming conver
   assert.match(h.calls[0]?.text ?? "", /watching background job p-1/);
   assert.equal(automationOrigin(h.calls[0])?.screenData, "compiling...\n");
   assert.doesNotMatch(automationOrigin(h.calls[0])?.screenData ?? "", /Act on this|watching background job/);
-  assert.equal(automationOrigin(h.calls[0])?.ownerFire, undefined, "a job-watch wake is not its owner's fire");
   assert.equal(h.calls[0]?.surfaceTools, true);
   assert.equal(h.calls[0]?.addressed, true);
   assert.deepEqual(automationOrigin(h.calls[0])?.destination, {

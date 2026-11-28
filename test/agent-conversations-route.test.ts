@@ -4,10 +4,10 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { serverDeps, type BuiltApp } from "../src/wiring.ts";
+import { type Core } from "../src/wiring.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { startSession } from "../src/api/start-session.ts";
@@ -29,13 +29,20 @@ function dm(externalId: string, text: string, thread: string): TurnRequest {
 describe("agent conversations self-API", async () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
   let mineId: string;
   let theirsId: string;
 
-  const capFor = (actorId: string, scope = scopeId("personal", actorId), live = true) =>
+  const capFor = (actorId: string, scope = scopeId("personal", actorId), personAuthority = true) =>
     mintCapabilityToken(
-      { actorId, scopeId: scope, aud: CONTROL_PLANE_AUD, exp: Date.now() + CAPABILITY_TTL_MS, liveActor: live },
+      {
+        actorId,
+        scopeId: scope,
+        audienceScopeId: scope,
+        aud: CONTROL_PLANE_AUD,
+        exp: Date.now() + CAPABILITY_TTL_MS,
+        personAuthority,
+      },
       SECRET,
     );
 
@@ -51,12 +58,10 @@ describe("agent conversations self-API", async () => {
   before(async () => {
     built = buildApp(testConfig({ signingSecret: SECRET }));
     server = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       portalUrl: "https://portal.example/",
-      sessions: built.sessions,
-      memory: built.memory,
-      config: built.config,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -310,6 +315,33 @@ describe("agent conversations self-API", async () => {
     assert.equal(conversation.title, "Launch plan");
     assert.equal(conversation.pinned, true);
   });
+
+  it("inspects own fire sessions from a DM, not from shared rooms or for other users", async () => {
+    for (const [surface, threadRef, expectedParticipants] of [
+      ["cron", "cron:c1:1", 1],
+      ["monitor", "monitor:m1:1", 0],
+    ] as const) {
+      const fireId = (
+        await built.app.turn({
+          surface,
+          actor: { externalId: "U1" },
+          conversation: { kind: "dm", threadRef },
+          text: "run digest",
+          origin: { kind: "automation" },
+        })
+      ).sessionId!;
+      assert.equal((await built.sessions.participantsOf(fireId)).length, expectedParticipants);
+      const own = await get(`/v1/conversations/${fireId}`, await capFor("U1"));
+      assert.equal(own.status, 200);
+      const body = (await own.json()) as { items: Item[] };
+      assert.ok(body.items.some((i) => i.kind === "AgentMessage"));
+      assert.equal((await get(`/v1/conversations/${fireId}`, await capFor("U2"))).status, 404);
+      assert.equal(
+        (await get(`/v1/conversations/${fireId}`, await capFor("U1", scopeId("channel", "C1")))).status,
+        404,
+      );
+    }
+  });
 });
 
 test("bot work in a person's name sees only conversations bot work ran in; the person still sees all of theirs", async (t) => {
@@ -320,7 +352,7 @@ test("bot work in a person's name sees only conversations bot work ran in; the p
   const built = buildApp(config, {
     agent: { ...mock, runTurn: (turn) => (turnTools.set(turn.session.threadRef, turn.tools), mock.runTurn(turn)) },
   });
-  const server = createServer(built.app, serverDeps(config, built)).listen(port, "127.0.0.1");
+  const server = createServer(built.app, built).listen(port, "127.0.0.1");
   t.after(() => server.close());
   await once(server, "listening");
   const web = async (thread: string, text: string, botActor?: true) =>

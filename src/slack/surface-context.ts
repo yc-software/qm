@@ -157,14 +157,15 @@ export function createSurfaceContextFulfiller(deps: {
     const {
       attachments: [staged],
       issues,
-    } = await stageFiles(client, [file]);
+    } = await stageFiles(client, channel, [file]);
     if (!staged) return { error: issues.join("; ") };
     return { attachments: [staged] };
   }
 
-  function stageFiles(client: any, files: SlackFile[]) {
+  function stageFiles(client: any, channel: string, files: SlackFile[]) {
     return stageSlackFiles(client, files, {
       token: botToken,
+      where: { chat: channel },
       ...(trustedFileHost ? { trustedHost: trustedFileHost } : {}),
       core,
       directory,
@@ -235,6 +236,7 @@ export function createSurfaceContextFulfiller(deps: {
         return await post(
           await stageFiles(
             client,
+            channel,
             q.fileIds.map((id) => ({ id })),
           ),
         );

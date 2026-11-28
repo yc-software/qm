@@ -6,10 +6,7 @@ import { boundTenant, withoutTenant, withTenant } from "../src/tenants/context.t
 import { tenantLookup, type TenantKey, type TenantLookup } from "../src/tenants/lookup.ts";
 import { twoTenants, type TwoTenants } from "./support/two-tenants.ts";
 
-type RowKey = Exclude<
-  TenantKey,
-  "slack_team" | "slack_bridge" | "partner_chat" | "teams_tenant" | "deployment" | "app_host"
->;
+type RowKey = Exclude<TenantKey, "slack_team" | "slack_bridge" | "teams_tenant" | "deployment" | "app_host">;
 const TABLES: Record<RowKey, string> = {
   webhook: "webhooks",
   loop_ingress: "loop_ingress",

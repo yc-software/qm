@@ -5,8 +5,7 @@ description: See what the person is looking at in the QM web UI right now — th
 
 # ui-state — snapshot the person's open web UI
 
-Only works during a turn the person started from the web UI, in their own (non-shared)
-conversation, when the `ui_canvas` feature is enabled for them. Their browser tab answers
+Only works on a web UI turn, in the person's own (non-shared) conversation, when the `ui_canvas` feature is enabled for them. Their browser tab answers
 the request, so it fails with `ui_not_open` if they have closed QM.
 
 ```sh

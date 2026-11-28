@@ -163,6 +163,6 @@ test("subagents a Slack bot's turns open and message keep the bot marker and its
   for (const ref of [threadRef, child.threadRef])
     assert.deepEqual(await runtimes.get(ref)!(active, { action: "set", model: "Astra", lifetime: "task" }), {
       ok: false,
-      error: "live_actor_required",
+      error: "authority_required",
     });
 });

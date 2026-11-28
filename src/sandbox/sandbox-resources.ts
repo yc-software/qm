@@ -1,6 +1,6 @@
 import { tenantSandboxChoice } from "./tenant-sandbox-shape.ts";
 import { perTenant } from "../tenants/cache.ts";
-import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
+import { withSpeakerMembership } from "../resolution/scope-membership.ts";
 import { personOrOwningBot } from "../auth/capability-token.ts";
 import { samePerson } from "../directory/person.ts";
 import { randomUUID } from "node:crypto";
@@ -21,11 +21,11 @@ import { intersectEgressPolicies } from "../resolution/egress-policy.ts";
 import { isOpenScopeMember } from "../resolution/sharing-access.ts";
 import { NoDefaultSandboxError, type SandboxBackendName } from "./sandbox-routing.ts";
 import type { Sandbox, AgentComputerSpec, ProvisionOptions, ComputerStatus, EgressEnforcement } from "./sandbox.ts";
+import type { SandboxImages } from "./sandbox-settings.ts";
 import { JOB_COMPUTER_SCOPE_PREFIX } from "./home-snapshot.ts";
 import { claimThenBind } from "../tenants/claim.ts";
 import type { LoadSample } from "./load-probe.ts";
 import type { SwarmService } from "../swarms/swarm-service.ts";
-import { msOf } from "../sessions/items.ts";
 import { errMessage, errText } from "../util/errors.ts";
 
 export interface SandboxResource {
@@ -45,6 +45,7 @@ export interface SandboxResource {
   error?: string;
   jobOnly?: boolean;
   memoryGb?: number;
+  image?: string;
   swarmId?: string;
   personUsed?: true;
 }
@@ -61,58 +62,12 @@ export interface SandboxDefault {
   sandboxId: string | null;
 }
 
-export const CLEAR_BOT_SET_DEFAULTS_MIGRATION = {
-  id: "sessions/store/0063-clear-bot-set-defaults",
-  statements: [
-    `DO $$
-    BEGIN
-      IF to_regclass('items') IS NULL OR to_regclass('runs') IS NULL OR to_regclass('audit_log') IS NULL
-         OR to_regclass('sandbox_defaults') IS NULL OR to_regclass('sandbox_resources') IS NULL THEN
-        RETURN;
-      END IF;
-      WITH tool_sets AS MATERIALIZED (
-        SELECT c.tenant_id, ${msOf("res.created_at")} AS at, c.body ->> 'sandbox_id' AS sandbox_id,
-               r.id AS run_id, r.session_id AS thread_ref,
-               CASE WHEN pg_input_is_valid(r.request, 'jsonb') THEN r.request::jsonb ->> 'botActor' = 'true' END AS bot
-          FROM items c
-          JOIN items res ON res.tenant_id = c.tenant_id AND res.session_id = c.session_id AND res.kind = 'ToolResult'
-                        AND md5(res.call_id) = md5(c.call_id) AND res.call_id = c.call_id
-          LEFT JOIN runs r ON r.tenant_id = c.tenant_id AND r.id = c.turn_id::text
-         WHERE c.kind = 'ToolCall' AND c.tool = 'sandbox' AND c.body ->> 'action' = 'set_default'
-           AND res.is_error IS NOT TRUE
-      ), events AS (
-        SELECT t.tenant_id, sr.json ->> 'ownerScopeId' AS scope, t.at, t.sandbox_id, t.bot, t.run_id, t.thread_ref
-          FROM tool_sets t
-          JOIN sandbox_resources sr ON sr.tenant_id = t.tenant_id AND sr.id = t.sandbox_id
-        UNION ALL
-        SELECT tenant_id, scope_label, at, resource, false, NULL, NULL
-          FROM audit_log WHERE action = 'sandbox.default' AND resource <> 'null'
-      ), latest AS (
-        SELECT DISTINCT ON (tenant_id, scope) tenant_id, scope AS id, sandbox_id, bot, run_id, thread_ref
-          FROM events
-         ORDER BY tenant_id, scope, at DESC, bot IS TRUE
-      ), cleared AS (
-        UPDATE sandbox_defaults d SET json = '{"sandboxId": null}'::jsonb
-          FROM latest l WHERE l.bot AND d.tenant_id = l.tenant_id AND d.id = l.id AND d.json ->> 'sandboxId' = l.sandbox_id
-        RETURNING l.tenant_id, l.id, l.sandbox_id, l.run_id, l.thread_ref
-      ), versions AS (
-        UPDATE durable_map_versions SET v = v + 1
-         WHERE tbl = 'sandbox_defaults' AND tenant_id IN (SELECT tenant_id FROM cleared)
-      )
-      INSERT INTO audit_log (tenant_id, at, principal_id, action, resource, scope_label, detail)
-      SELECT tenant_id, ${msOf("now()")}, 'system:migration', 'sandbox.default', 'null', id,
-             jsonb_build_object('runId', run_id, 'threadRef', thread_ref, 'previousSandboxId', sandbox_id,
-                                'botActor', true)::text
-        FROM cleared;
-    END $$`,
-  ],
-};
-
 interface SandboxProviderProfile {
   name: SandboxBackendName;
   spec?: AgentComputerSpec;
   egressEnforcement?: EgressEnforcement;
   sizesMemory?: boolean;
+  images?: string[];
   actions: string[];
 }
 
@@ -136,7 +91,7 @@ export interface SandboxResources {
     name?: string,
     reservationId?: string,
     jobOnly?: boolean,
-    memoryGb?: number,
+    machine?: { memoryGb?: number; image?: string },
     swarmId?: string,
     personUsed?: boolean,
   ): Promise<SandboxResource>;
@@ -145,9 +100,10 @@ export interface SandboxResources {
   access(actorId: string, id: string): Promise<SandboxResource>;
   status(actorId: string, id: string): Promise<ComputerStatus>;
   restart(actorId: string, id: string, memoryGb?: number): Promise<void>;
+  imageFor(backingScopeId: string): Promise<string | undefined>;
   retire(actorId: string, id: string): Promise<void>;
   notePersonUse(id: string): Promise<SandboxResource>;
-  use<T>(id: string, action: () => Promise<T>, exclusive?: boolean): Promise<T>;
+  use<T>(id: string, action: () => Promise<T>, lock?: "shared" | "exclusive"): Promise<T>;
   hold(id: string, runId: string): Promise<void>;
   recordLoad(id: string, sample: LoadSample): Promise<void>;
   load(id: string): Promise<LoadSample | null>;
@@ -217,22 +173,6 @@ export async function assertBotMayUseComputer(
   if (resource && !(await botMayUse(resource))) throw new BotComputerRefusedError();
 }
 
-export const MARK_ADMIN_CREATED_COMPUTERS_MIGRATION = {
-  id: "durable-map/sandbox_resources/0040-mark-admin-created",
-  statements: [
-    `DO $$
-    BEGIN
-      IF to_regclass('sandbox_resources') IS NOT NULL AND to_regclass('audit_log') IS NOT NULL THEN
-        UPDATE durable_map_versions SET v = v + 1 WHERE tbl = 'sandbox_resources';
-        UPDATE sandbox_resources r SET json = r.json || '{"personUsed": true}'::jsonb
-        FROM audit_log a
-        WHERE a.action = 'sandbox.create' AND a.tenant_id = r.tenant_id AND a.resource = r.id
-          AND NOT r.json ? 'personUsed';
-      END IF;
-    END $$`,
-  ],
-};
-
 export async function defaultComputer(
   resources: Pick<SandboxResources, "resolve"> | undefined,
   scopeId: ScopeId,
@@ -252,6 +192,7 @@ export function createSandboxResources(opts: {
   defaults: DurableMap<SandboxDefault>;
   backends: Partial<Record<SandboxBackendName, Sandbox>>;
   defaultBackend: SandboxBackendName;
+  images?: SandboxImages;
   provisionOptions?: (scopeId: string) => Promise<ProvisionOptions>;
   beforeDefaultChange?: (scopeId: string) => Promise<void>;
   beforeRetire?: (record: SandboxResource) => Promise<void>;
@@ -306,13 +247,15 @@ export function createSandboxResources(opts: {
       throw error;
     }
   };
-  const use = async <T>(id: string, action: () => Promise<T>, exclusive = false): Promise<T> => {
+  const use = async <T>(id: string, action: () => Promise<T>, lock?: "shared" | "exclusive"): Promise<T> => {
     const guarded = async (): Promise<T> => {
       const current = await get(id);
       if (current.state === "retired") throw new Error("sandbox has been retired");
       return action();
     };
-    return exclusive ? opts.lock.withLock(`sandbox-resource:${id}`, guarded) : guarded();
+    if (!lock) return guarded();
+    const key = `sandbox-resource:${id}`;
+    return lock === "shared" ? opts.lock.withSharedLock(key, guarded) : opts.lock.withLock(key, guarded);
   };
   const profiles = (): SandboxProviderProfile[] =>
     (Object.entries(opts.backends) as Array<[SandboxBackendName, Sandbox]>)
@@ -322,19 +265,39 @@ export function createSandboxResources(opts: {
         ...(backend.profile.spec ? { spec: backend.profile.spec } : {}),
         ...(backend.profile.egressEnforcement ? { egressEnforcement: backend.profile.egressEnforcement } : {}),
         ...(backend.profile.sizesMemory ? { sizesMemory: true } : {}),
+        ...(offered(name).length ? { images: offered(name) } : {}),
         actions: actionsFor(backend),
       }));
+  const images = opts.images ?? {};
+  const offered = (backend: SandboxBackendName): string[] =>
+    Object.keys(images).filter((name) => images[name]![backend]);
   const checkMemory = (backend: Sandbox, memoryGb: number | undefined): void => {
     if (memoryGb === undefined) return;
     if (!backend.profile.sizesMemory) throw new Error(`${backend.profile.backend} computers take no memory size`);
   };
+  const imageRef = ({ backend, image }: Pick<SandboxResource, "backend" | "image">): string | undefined => {
+    if (image === undefined) return undefined;
+    if (!Object.hasOwn(images, image))
+      throw new Error(`unknown image ${image}; configured images: ${Object.keys(images).join(", ") || "none"}`);
+    if (offered(backend).includes(image)) return images[image]![backend];
+    const elsewhere = (Object.keys(opts.backends) as SandboxBackendName[]).filter((name) =>
+      offered(name).includes(image),
+    );
+    const where = elsewhere.length ? `; it is available on ${elsewhere.join(", ")}` : "";
+    throw new Error(`image ${image} is not set up for ${backend}${where}`);
+  };
   return {
     profiles,
+    async imageFor(backingScopeId) {
+      const prefix = ["sandbox-", JOB_COMPUTER_SCOPE_PREFIX].find((p) => backingScopeId.startsWith(p));
+      const record = prefix ? await opts.records.get(backingScopeId.slice(prefix.length)) : null;
+      return record?.backingScopeId === backingScopeId ? imageRef(record) : undefined;
+    },
     forTurn: (turn) =>
       createSandboxResources({
         ...opts,
         canUseScope: async (actorId, scopeId) =>
-          withLiveTurnMembership(opts.canUseScope, { ...turn, verified: await turn.isCurrent() })(actorId, scopeId),
+          withSpeakerMembership(opts.canUseScope, { ...turn, verified: await turn.isCurrent() })(actorId, scopeId),
       }),
     async defaultBackend() {
       const { backend } = await tenantSandboxChoice({ backend: opts.defaultBackend, scopeBackends: {} });
@@ -427,7 +390,7 @@ export function createSandboxResources(opts: {
           await backend.restartComputer!(record.backingScopeId, memoryGb ?? record.memoryGb);
           if (memoryGb !== undefined) await opts.records.update(id, (current) => ({ ...current, memoryGb }));
         },
-        true,
+        "exclusive",
       );
     },
     async resolve(scopeId) {
@@ -455,12 +418,14 @@ export function createSandboxResources(opts: {
         providers: profiles(),
       };
     },
-    async create(actorId, scopeId, backend, name, reservationId, jobOnly, memoryGb, swarmId, personUsed) {
+    async create(actorId, scopeId, backend, name, reservationId, jobOnly, machine, swarmId, personUsed) {
       await initialize();
       await authorize(actorId, scopeId);
       if (!Object.hasOwn(opts.backends, backend) || !opts.backends[backend as SandboxBackendName])
         throw new Error(`sandbox backend unavailable: ${backend}`);
+      const { memoryGb, image } = machine ?? {};
       checkMemory(opts.backends[backend as SandboxBackendName]!, memoryGb);
+      imageRef({ backend: backend as SandboxBackendName, image });
       if (jobOnly && !opts.backends[backend as SandboxBackendName]?.destroyScope)
         throw new Error(
           `background jobs with private credentials need a computer that ${backend} can retire; run the command in the foreground`,
@@ -479,6 +444,7 @@ export function createSandboxResources(opts: {
         state: "provisioning",
         ...(jobOnly ? { jobOnly } : {}),
         ...(memoryGb ? { memoryGb } : {}),
+        ...(image ? { image } : {}),
         ...(swarmId ? { swarmId } : {}),
         ...(personUsed ? { personUsed } : {}),
       };

@@ -10,7 +10,7 @@ import type { AddressInfo } from "node:net";
 import { computeRetention } from "../src/admin/retention.ts";
 import type { UserActivity } from "../src/identity/user-store.ts";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 
@@ -68,11 +68,7 @@ test("computeRetention: empty input yields zeros, never NaN", () => {
 
 function start() {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "admin-ret-")) }));
-  const server = createInsecureTestServer(built.app, {
-    admin: built.admin,
-    sessions: built.sessions,
-    auditLog: built.auditLog,
-  });
+  const server = createInsecureTestServer(built.app, testCore(built));
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   return { base, built, close: () => new Promise<void>((r) => server.close(() => r())) };

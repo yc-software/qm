@@ -6,6 +6,7 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
 import type { App } from "../src/api/app.ts";
 import { freePort } from "../scripts/dev/lib/proc.ts";
+import { testCore } from "./support/build-app.ts";
 
 function appWith(endpoint: Record<string, unknown>): App {
   return {
@@ -23,6 +24,7 @@ test("/d/ proxy serves the warming page to a browser navigation when the app han
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
   const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }), {
+    ...testCore(),
     deployDialTimeoutMs: 200,
   });
   server.listen(0);
@@ -47,7 +49,7 @@ test("/d/ proxy serves the warming page to a browser navigation when the app han
 test("/d/ proxy serves the warming page to a browser navigation when the app refuses connections", async () => {
   const upstreamPort = await freePort();
 
-  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }));
+  const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }), testCore());
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
   try {
@@ -68,6 +70,7 @@ test("/d/ proxy keeps JSON gateway errors for non-document requests", async () =
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
   const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }), {
+    ...testCore(),
     deployDialTimeoutMs: 200,
   });
   server.listen(0);
@@ -101,6 +104,7 @@ test("a recently-healthy upstream keeps the full dial timeout for slow pages", a
   const upstreamPort = (upstream.address() as AddressInfo).port;
 
   const server = createInsecureTestServer(appWith({ host: "127.0.0.1", port: upstreamPort }), {
+    ...testCore(),
     deployDialTimeoutMs: 1000,
   });
   server.listen(0);

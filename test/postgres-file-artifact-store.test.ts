@@ -1,27 +1,22 @@
 import { assertDocumentListing, assertSharedRecordIdentity } from "./support/file-document-listing.ts";
-import { test, beforeEach } from "node:test";
+import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryDurableByteStore } from "../src/files/durable-byte-store.ts";
 import { createPostgresFileArtifactStore } from "../src/files/postgres-file-artifact-store.ts";
 import { fileArtifactId, type PutFileInput } from "../src/files/file-artifact-store.ts";
 import { scopeId } from "../src/types.ts";
+import { testDatabaseUrl } from "./support/test-database.ts";
 
-const URL = process.env.DATABASE_URL;
+let URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres file-artifact-store tests";
+
+beforeEach(() => {
+  if (URL) URL = testDatabaseUrl();
+});
 
 const owner = scopeId("channel", "C1");
 const other = scopeId("personal", "U9");
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x7f]);
-
-beforeEach(async () => {
-  if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query("DROP TABLE IF EXISTS file_artifacts CASCADE");
-  await p.query("DROP TABLE IF EXISTS file_artifact_deletions CASCADE");
-  await p.end();
-});
 
 function put(over: Partial<PutFileInput> = {}): PutFileInput {
   return {

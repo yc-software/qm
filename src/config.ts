@@ -1,3 +1,4 @@
+import type { VaultSettings } from "./credentials/vault-secret-store.ts";
 import { isClaudeSubscriptionToken } from "./model/claude-subscription.ts";
 import { isDnsLabel } from "../plugins/chassis/src/dns-label.ts";
 import {
@@ -24,8 +25,10 @@ import {
 import { join, resolve } from "node:path";
 import {
   parseMemoryCaptureMode,
+  parseMemoryCardMode,
   parseMemoryRecallMode,
   type MemoryCaptureMode,
+  type MemoryCardMode,
   type MemoryRecallMode,
 } from "./memory/policy.ts";
 import { parseMemoryStrategyKind, type MemoryStrategyKind } from "./memory/strategy.ts";
@@ -88,6 +91,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   captureLlmRequests: boolean;
   adminGrants?: string;
   trustedOidcAdminIssuer?: string;
+  trustedOidcAdminRole?: "org_admin" | "owner";
   workspaceProvisionerUrl?: string;
   emailAuthPrincipals?: string[];
   emailAuthDomain?: string;
@@ -119,7 +123,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   requireSignedPortalIdentity?: boolean;
   connectorSecretKey?: string;
   slackEventsPort?: number;
-  genericChat?: { url: string; secret: string; label?: string; mark?: string };
+  genericChat?: { url: string; secret: string; issuer: string; label?: string; mark?: string };
   secretsBackend: "env" | "aws";
   secretsPrefix: string;
   apiBaseUrl?: string;
@@ -138,6 +142,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   transferStore: "local" | "s3";
   s3Bucket?: string;
   s3Region?: string;
+  vault?: VaultSettings;
   s3Endpoint?: string;
   s3Prefix?: string;
   deployIdleTtlMs?: number;
@@ -148,6 +153,7 @@ export interface Config extends SandboxSettings, DeploySettings {
   cronFireConcurrency: number;
   memoryRecall: MemoryRecallMode;
   memoryCapture: MemoryCaptureMode;
+  memoryCard: MemoryCardMode;
   memoryStrategy: MemoryStrategyKind;
   memoryProviderConfig?: MemoryProviderConfig;
   memoryCaptureQuietMs: number;
@@ -386,6 +392,48 @@ function modelProviderEnvStrict(env: NodeJS.ProcessEnv): ModelProvider | undefin
   return declared;
 }
 
+const KUBERNETES_SERVICE_ACCOUNT_TOKEN = "/var/run/secrets/kubernetes.io/serviceaccount/token";
+
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end--;
+  return value.slice(0, end);
+}
+
+function vaultEnv(env: NodeJS.ProcessEnv): Pick<Config, "vault"> {
+  if (!env.VAULT_ADDR) return {};
+  const method = env.VAULT_AUTH_METHOD || "token";
+  const base = {
+    addr: stripTrailingSlashes(env.VAULT_ADDR),
+    kvMount: env.VAULT_KV_MOUNT || "secret",
+    ...(env.VAULT_NAMESPACE ? { namespace: env.VAULT_NAMESPACE } : {}),
+  };
+  if (method === "token") {
+    if (!env.VAULT_TOKEN && !env.VAULT_TOKEN_FILE) {
+      throw new Error("VAULT_AUTH_METHOD=token needs VAULT_TOKEN or VAULT_TOKEN_FILE");
+    }
+    return {
+      vault: {
+        ...base,
+        auth: {
+          method,
+          ...(env.VAULT_TOKEN ? { token: env.VAULT_TOKEN } : {}),
+          ...(env.VAULT_TOKEN_FILE ? { tokenFile: env.VAULT_TOKEN_FILE } : {}),
+        },
+      },
+    };
+  }
+  if (method !== "kubernetes" && method !== "jwt") {
+    throw new Error(`VAULT_AUTH_METHOD=${JSON.stringify(method)} is not recognized — use token, kubernetes or jwt`);
+  }
+  if (!env.VAULT_AUTH_ROLE) throw new Error(`VAULT_AUTH_METHOD=${method} needs VAULT_AUTH_ROLE`);
+  const jwtFile = env.VAULT_AUTH_JWT_FILE || (method === "kubernetes" ? KUBERNETES_SERVICE_ACCOUNT_TOKEN : undefined);
+  if (!jwtFile) throw new Error("VAULT_AUTH_METHOD=jwt needs VAULT_AUTH_JWT_FILE");
+  return {
+    vault: { ...base, auth: { method, mount: env.VAULT_AUTH_MOUNT || method, role: env.VAULT_AUTH_ROLE, jwtFile } },
+  };
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const s3Endpoint = env.AWS_ENDPOINT_URL_S3?.trim();
   if (s3Endpoint) {
@@ -512,8 +560,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   );
   const slackEventsPort =
     env.SLACK_EVENTS_MODE?.trim() === "http" ? numEnvStrict("SLACK_EVENTS_PORT", env.SLACK_EVENTS_PORT) : undefined;
-  if (Boolean(env.GENERIC_CHAT_URL?.trim()) !== Boolean(env.GENERIC_CHAT_SECRET?.trim()))
-    throw new Error("GENERIC_CHAT_URL and GENERIC_CHAT_SECRET must be set together");
+  const genericChatSet = [env.GENERIC_CHAT_URL, env.GENERIC_CHAT_SECRET, env.GENERIC_CHAT_ISSUER].map(
+    (v) => !!v?.trim(),
+  );
+  if (new Set(genericChatSet).size > 1)
+    throw new Error("GENERIC_CHAT_URL, GENERIC_CHAT_SECRET and GENERIC_CHAT_ISSUER must be set together");
   const genericChatMark = env.GENERIC_CHAT_MARK?.trim();
   if (genericChatMark && !isSvgPathData(genericChatMark))
     throw new Error(`GENERIC_CHAT_MARK must be SVG path data of at most ${SVG_PATH_MAX} characters`);
@@ -569,6 +620,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(modelGateway ? { modelGateway } : {}),
     ...(brokerCredentials.length ? { brokerCredentials } : {}),
     ...(env.TRUSTED_OIDC_ADMIN_ISSUER ? { trustedOidcAdminIssuer: env.TRUSTED_OIDC_ADMIN_ISSUER } : {}),
+    ...(env.TRUSTED_OIDC_ADMIN_ROLE
+      ? {
+          trustedOidcAdminRole: choiceEnvStrict("TRUSTED_OIDC_ADMIN_ROLE", env.TRUSTED_OIDC_ADMIN_ROLE, [
+            "org_admin",
+            "owner",
+          ] as const),
+        }
+      : {}),
     ...(env.WORKSPACE_PROVISIONER_URL ? { workspaceProvisionerUrl: workspaceProvisionerUrl(env) } : {}),
     ...(env.ADMIN_GRANTS ? { adminGrants: env.ADMIN_GRANTS } : {}),
     ...(env.AUTH_ALLOWED_EMAILS
@@ -631,11 +690,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     requireSignedPortalIdentity: env.REQUIRE_SIGNED_PORTAL_IDENTITY === "1",
     ...(env.CONNECTOR_SECRET_KEY ? { connectorSecretKey: env.CONNECTOR_SECRET_KEY } : {}),
     ...(slackEventsPort !== undefined ? { slackEventsPort } : {}),
-    ...(env.GENERIC_CHAT_URL?.trim() && env.GENERIC_CHAT_SECRET?.trim()
+    ...(env.GENERIC_CHAT_URL?.trim() && env.GENERIC_CHAT_SECRET?.trim() && env.GENERIC_CHAT_ISSUER?.trim()
       ? {
           genericChat: {
             url: env.GENERIC_CHAT_URL.trim(),
             secret: env.GENERIC_CHAT_SECRET.trim(),
+            issuer: env.GENERIC_CHAT_ISSUER.trim(),
             ...(env.GENERIC_CHAT_LABEL?.trim() ? { label: env.GENERIC_CHAT_LABEL.trim() } : {}),
             ...(genericChatMark ? { mark: genericChatMark } : {}),
           },
@@ -665,6 +725,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ...(env.DEPLOYMENT_LAYER ? { deploymentLayerDir: resolve(env.DEPLOYMENT_LAYER) } : {}),
     memoryRecall: parseMemoryRecallMode(env.MEMORY_RECALL),
     memoryCapture: parseMemoryCaptureMode(env.MEMORY_CAPTURE),
+    memoryCard: parseMemoryCardMode(env.MEMORY_CARD),
     memoryStrategy: parseMemoryStrategyKind(env.MEMORY_STRATEGY),
     ...(memoryProviderConfig ? { memoryProviderConfig } : {}),
     privateNetworkAllowedOrigins,
@@ -674,6 +735,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     snapshotStore: env.SNAPSHOT_STORE === "s3" ? "s3" : "local",
     transferStore: env.TRANSFER_STORE === "s3" ? "s3" : "local",
     ...(env.S3_BUCKET ? { s3Bucket: env.S3_BUCKET } : {}),
+    ...vaultEnv(env),
     ...(env.S3_REGION ? { s3Region: env.S3_REGION } : {}),
     ...(s3Endpoint ? { s3Endpoint } : {}),
     ...(env.S3_PREFIX ? { s3Prefix: env.S3_PREFIX } : {}),

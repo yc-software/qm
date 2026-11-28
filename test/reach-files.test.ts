@@ -5,8 +5,8 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { type Core } from "../src/wiring.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { reachEnqueue } from "../src/reach/reach.ts";
@@ -21,12 +21,8 @@ const SECRET = "reach-files-secret".repeat(3);
 
 describe("POST /v1/reach with files", () => {
   let server: Server;
-  let bare: Server;
-  let noSandbox: Server;
   let base: string;
-  let bareBase: string;
-  let noSandboxBase: string;
-  let built: BuiltApp;
+  let built: Core;
 
   const capDm = async (actorId: string) =>
     await mintCapabilityToken(
@@ -56,38 +52,16 @@ describe("POST /v1/reach with files", () => {
     ]);
     await selectDefaultSandbox(built, "U-carol", scopeId("personal", "U-carol"));
     server = createServer(built.app, {
-      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-      signingSecret: SECRET,
-      sandbox: built.sandbox,
-      blobTransfer: built.blobTransfer,
-      files: built.files,
-      environments: built.environments,
-      auditLog: built.auditLog,
-      sandboxResources: built.sandboxResources,
-    });
-    bare = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
     });
-    noSandbox = createServer(built.app, {
-      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
-      signingSecret: SECRET,
-      blobTransfer: built.blobTransfer,
-      files: built.files,
-      environments: built.environments,
-    });
-    await new Promise<void>((resolve) => noSandbox.listen(0, resolve));
-    noSandboxBase = `http://localhost:${(noSandbox.address() as AddressInfo).port}`;
     await new Promise<void>((resolve) => server.listen(0, resolve));
-    await new Promise<void>((resolve) => bare.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
-    bareBase = `http://localhost:${(bare.address() as AddressInfo).port}`;
   });
 
   after(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    await new Promise<void>((resolve) => bare.close(() => resolve()));
-    await new Promise<void>((resolve) => noSandbox.close(() => resolve()));
   });
 
   const storeFile = async (owner: string, name: string, data: string, ownerScopeId = scopeId("personal", owner)) => {
@@ -148,25 +122,6 @@ describe("POST /v1/reach with files", () => {
     const body = (await res.json()) as any;
     assert.equal(body.error, "attach_failed");
     assert.doesNotMatch(body.message, /alice only/);
-  });
-
-  it("sends stored Files IDs on a server with no sandbox, but refuses workspace paths there", async () => {
-    const id = await storeFile("U-carol", "nobox.txt", "no box\n");
-    const ok = await post(
-      noSandboxBase,
-      "/v1/reach",
-      { text: "stored only", recipient: "Alice", files: [{ file_id: id }], sandbox_id: "ignored" },
-      { "x-agent-capability": await capDm("U-carol") },
-    );
-    assert.equal(ok.status, 200);
-    assert.deepEqual(await readDelivered(((await ok.json()) as any).deliveryId), ["nobox.txt:no box\n"]);
-    const refused = await post(
-      noSandboxBase,
-      "/v1/reach",
-      { text: "path", recipient: "Alice", files: [{ file_id: id }, "reports/report.md"] },
-      { "x-agent-capability": await capDm("U-carol") },
-    );
-    assert.equal(refused.status, 501);
   });
 
   it("rolls back a staged stored file when a later workspace path in the batch is missing", async () => {
@@ -461,17 +416,6 @@ describe("POST /v1/reach with files", () => {
     );
     assert.equal(res.status, 400);
     assert.match(((await res.json()) as any).message, /files compose into a text post/);
-  });
-
-  it("501s honestly when the server has no sandbox/blob store wired — never a lying 200", async () => {
-    const res = await post(
-      bareBase,
-      "/v1/reach",
-      { text: "x", recipient: "Alice", files: ["reports/report.md"] },
-      { "x-agent-capability": await capDm("U-carol") },
-    );
-    assert.equal(res.status, 501);
-    assert.equal(((await res.json()) as any).error, "not_configured");
   });
 
   it("a plain text-only reach still works unchanged", async () => {

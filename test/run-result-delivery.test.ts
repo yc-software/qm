@@ -18,6 +18,7 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { holdThread, testRuns } from "./support/live-run.ts";
 import { TEST_TENANT } from "./support/test-tenant.ts";
+import { personalScope } from "../src/types.ts";
 
 const actor: Principal = { id: "internal:U1", type: "internal" };
 const turn = (text: string, deliveryTarget?: string): OrchestratorInput => ({
@@ -65,8 +66,9 @@ test("runResultDelivery maps ok-with-reply to a recovery delivery keyed by run",
       trigger: "conversation",
       surface: "slack",
       fireKey: "run:r-1",
-      sourceScopeId: "personal:internal:U1",
+      sourceScopeId: personalScope("internal:U1"),
       sourceThreadRef: "t",
+      sourceRunId: "r-1",
     },
     idempotencyKey: "run:r-1",
   });
@@ -348,7 +350,7 @@ test("wired stores: a parked run lands a durable, non-ackable failure note", asy
 
 const failureSessions = async () => {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const scope = "personal:u1@example.test" as import("../src/types.ts").ScopeId;
+  const scope = personalScope("u1@example.test") as import("../src/types.ts").ScopeId;
   const session = await sessions.getOrCreateByThread("slack:D1", "dm", scope, undefined, "slack");
   return { sessions, session };
 };
@@ -539,4 +541,28 @@ test("runResultDelivery notes a reply the reply check retracted and rewrote", ()
   );
   assert.equal(d?.destination.editNote, "Edited after a reply check: em dash, too long");
   assert.equal(runResultDelivery(run({}))?.destination.editNote, undefined);
+});
+
+test("an approved automation replay delivers its result to origin.destination unless surfaceTools handled it", () => {
+  const destination = { type: "slack", target: "C1" };
+  const req = {
+    ...turn("digest"),
+    surface: "cron",
+    origin: { kind: "automation" as const, destination },
+    approval: { requestId: "a-1", approved: true, scope: "once" as const },
+  };
+  assert.deepEqual(runResultDelivery(run({ request: req }))?.destination, destination);
+  assert.equal(runResultDelivery(run({ request: { ...req, surfaceTools: true } })), null);
+  assert.equal(runResultDelivery(run({ request: { ...req, approval: undefined } })), null);
+});
+
+test("an approval continuation started by a trigger leaves its reply to the trigger's own delivery", () => {
+  const destination = { type: "slack", target: "D1" };
+  const req = {
+    ...turn("set it"),
+    surface: "approval",
+    origin: { kind: "automation" as const, fire: true as const, destination },
+    approval: { requestId: "a-2", approved: true, scope: "once" as const },
+  };
+  assert.equal(runResultDelivery(run({ request: req, result: { status: "ok", reply: "done" } })), null);
 });

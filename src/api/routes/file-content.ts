@@ -1,3 +1,4 @@
+import parseRange from "range-parser";
 import { relayStream } from "../../../plugins/chassis/src/http.ts";
 import { errMessage } from "../../util/errors.ts";
 import {
@@ -30,7 +31,15 @@ function viewerOf(ctx: ApiCtx): string | null {
   return viewer ?? null;
 }
 
-async function openForViewer(ctx: ApiCtx) {
+function singleRange(header: string | undefined) {
+  if (!header) return undefined;
+  return (sizeBytes: number) => {
+    const ranges = parseRange(sizeBytes, header, { combine: true });
+    return Array.isArray(ranges) && ranges.type === "bytes" && ranges.length === 1 ? ranges[0] : undefined;
+  };
+}
+
+async function openForViewer(ctx: ApiCtx, rangeHeader?: string) {
   const viewer = viewerOf(ctx);
   if (!viewer) return null;
   const opened = await ctx.app.openFileForViewer(
@@ -38,6 +47,7 @@ async function openForViewer(ctx: ApiCtx) {
     ctx.params.id!,
     viewer,
     isOwnScopeBotWork(ctx.capability),
+    singleRange(rangeHeader),
   );
   if (!opened) sendJson(ctx.res, 404, { error: "not_found" });
   return opened;
@@ -50,16 +60,26 @@ function streamFile(ctx: ApiCtx, stream: NodeJS.ReadableStream): void {
   });
 }
 
+async function getFile(ctx: ApiCtx): Promise<void> {
+  const viewer = viewerOf(ctx);
+  if (!viewer) return;
+  const file = await ctx.app.fileForViewer(tenantOf(ctx), ctx.params.id!, viewer, isOwnScopeBotWork(ctx.capability));
+  return file ? sendJson(ctx.res, 200, file) : sendJson(ctx.res, 404, { error: "not_found" });
+}
+
 async function getFileContent(ctx: ApiCtx): Promise<void> {
-  const opened = await openForViewer(ctx);
+  const opened = await openForViewer(ctx, ctx.req.headers.range);
   if (!opened) return;
+  const { range, sizeBytes } = opened;
   const contentType = contentTypeWithUtf8Charset(opened.mimetype);
   const appsDomain = ctx.deps.deployAppsDomain;
   const ancestors = frameAncestorsDirective(appsDomain ? [`*.${appsDomain}`] : []);
   ctx.res.removeHeader("x-frame-options");
-  ctx.res.writeHead(200, {
+  ctx.res.writeHead(range ? 206 : 200, {
     "content-type": contentType,
-    "content-length": String(opened.sizeBytes),
+    "content-length": String(range ? range.end - range.start + 1 : sizeBytes),
+    "accept-ranges": "bytes",
+    ...(range ? { "content-range": `bytes ${range.start}-${range.end}/${sizeBytes}` } : {}),
     "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(opened.name)}`,
     "content-security-policy":
       contentType === "application/pdf" ? ancestors : `${UNTRUSTED_CONTENT_SANDBOX_CSP}; ${ancestors}`,
@@ -110,6 +130,7 @@ async function getFileByName(ctx: ApiCtx): Promise<void> {
 
 export const fileContentRoutes: Route[] = withActor("query.viewer", [
   { method: "GET", path: "/v1/files/by-name/content", browser: true, auth: "source", handle: getFileByName },
+  { method: "GET", path: "/v1/files/:id", browser: true, auth: "either", handle: getFile },
   { method: "GET", path: "/v1/files/:id/content", browser: true, auth: "either", handle: getFileContent },
   { method: "GET", path: "/v1/playgrounds/:id", browser: true, auth: "source", handle: getPlayground },
 ]);

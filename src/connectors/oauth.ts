@@ -335,6 +335,7 @@ export const PROVIDERS: Record<string, OAuthProviderConfig> = {
       "mpim:write",
       "mpim:history",
       "chat:write",
+      "files:write",
       "canvases:read",
       "canvases:write",
       "search:read",

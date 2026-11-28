@@ -12,9 +12,11 @@ import type { PendingApprovalRecord, ScopeId, Session } from "../types.ts";
 import { isUserItem, type Item, messageTs, proseText } from "../sessions/items.ts";
 import { orgId as orgIdOf } from "../config.ts";
 import { parseScopeId, scopeId } from "../types.ts";
-import { ambientTenant } from "../tenants/context.ts";
+import { ambientTenant, type Tenant } from "../tenants/context.ts";
+import { claimThenBind } from "../tenants/claim.ts";
+import { reportFailure } from "../util/errors.ts";
 import { fileArtifactId, artifactPath } from "../files/file-artifact-store.ts";
-import { windowedTranscript } from "../sessions/session-store.ts";
+import { windowedTranscript, type SessionOrigin } from "../sessions/session-store.ts";
 import { createTranscriptSource } from "../sessions/transcript-source.ts";
 import { cancelGoal, goalCancelledItem, openGoal, resumeGoal } from "../agent/goal.ts";
 import { goalView } from "../runs/turn-stream.ts";
@@ -84,6 +86,7 @@ export function createSessionMethods(
   | "unpinConversationItem"
   | "listFilesForViewer"
   | "uploadFileForViewer"
+  | "fileForViewer"
   | "openFileForViewer"
   | "listSessions"
   | "listSessionPage"
@@ -117,6 +120,8 @@ export function createSessionMethods(
   | "suggestNextPrompt"
   | "spawnSession"
   | "discardSession"
+  | "deleteEphemeralSession"
+  | "purgeExpiredEphemeralSessions"
   | "forkSession"
   | "grant"
   | "revokeGrant"
@@ -156,6 +161,25 @@ export function createSessionMethods(
     artifactAuthor,
   } = h;
   const transcripts = createTranscriptSource(deps.sessions);
+  const fireOrigins: ReadonlySet<SessionOrigin> = new Set(["cron", "webhook", "monitor", "loop"]);
+  const fileArtifactForViewer = async (tenant: Tenant, id: string, principalId: string, ownScopeBotWork: boolean) => {
+    const art = await deps.files.get(id);
+    if (!art) return null;
+    const myScopes = await currentResourceScopesForViewer(principalId, ownScopeBotWork);
+    if (myScopes.includes(art.ownerScopeId)) return art;
+    const grants = await deps.acl.grantsFor(tenant, art.ownerScopeId, art.id);
+    return grants.some((g) => myScopes.includes(g.granteeScopeId)) ? art : null;
+  };
+  const accessibleFireSession = async (
+    sessionId: string,
+    principalId: string,
+    fireScope: "accessible" | ScopeId,
+  ): Promise<Session | null> => {
+    const session = await deps.sessions.get(sessionId);
+    if (!session?.origin || !fireOrigins.has(session.origin)) return null;
+    if (fireScope !== "accessible" && session.scopeId !== fireScope) return null;
+    return (await canUseContext(principalId, session.scopeId)) ? session : null;
+  };
   const pinView = (
     rec: { id: string; text?: string; entrySeq?: number; addedBy: string; createdAt: number },
     item?: Item,
@@ -399,6 +423,13 @@ export function createSessionMethods(
     }));
   }
 
+  async function purgeEphemeralRow(tenant: Tenant, sessionId: string, threadRef: string): Promise<void> {
+    await deps.promptSnapshots?.delete(sessionId);
+    const deletedRuns = await deps.runs.deleteByThread(tenant, threadRef);
+    if (deletedRuns.length) await deps.runActivity?.deleteForRuns(tenant, deletedRuns);
+    await deps.sessions.deleteSession(sessionId);
+  }
+
   return {
     async getSession(sessionId, window) {
       const session = await deps.sessions.get(sessionId);
@@ -432,23 +463,43 @@ export function createSessionMethods(
 
     async getSessionForViewer(sessionId, viewer, window) {
       const principalId = viewer.actorId;
-      const found = await sessionForViewer(sessionId, principalId);
+      const participantSession = await sessionForViewer(sessionId, principalId);
+      const found =
+        participantSession ??
+        (viewer.fireScope && viewer.fireScope !== "none"
+          ? await accessibleFireSession(sessionId, principalId, viewer.fireScope)
+          : null);
       if (!found || !sessionVisibleTo(viewer, found)) return null;
+      if (
+        viewer.fireScope &&
+        viewer.fireScope !== "accessible" &&
+        found.origin &&
+        fireOrigins.has(found.origin) &&
+        (viewer.fireScope === "none" || found.scopeId !== viewer.fireScope)
+      ) {
+        return null;
+      }
+      const readTranscript = (opts: { limit?: number; beforeSeq?: number; sinceSeq?: number }) =>
+        participantSession
+          ? transcripts.forViewer(sessionId, principalId, opts)
+          : transcripts.forRender(sessionId, opts);
       let limit = tailWindowLimit(window);
       const [initialRead, pinRecords, goals, latestPromptAt, run] = await Promise.all([
-        transcripts.forViewer(sessionId, principalId, {
+        readTranscript({
           limit,
           beforeSeq: window?.beforeSeq,
           sinceSeq: window?.sinceSeq,
         }),
         deps.sessions.listPins(sessionId),
         deps.sessions.goals([sessionId]),
-        window?.beforeSeq === undefined ? deps.sessions.latestVisiblePromptAt(sessionId, principalId) : undefined,
+        participantSession && window?.beforeSeq === undefined
+          ? deps.sessions.latestVisiblePromptAt(sessionId, principalId)
+          : undefined,
         window?.beforeSeq === undefined ? deps.runs.activeForThread(found.threadRef) : undefined,
       ]);
       const session = {
         ...withoutStoredFacts(found),
-        canContinue: await canContinueOnWeb(principalId, found),
+        canContinue: participantSession ? await canContinueOnWeb(principalId, found) : false,
         ...ownRunState(run ?? undefined),
       };
       const goal = openGoal(goals.get(sessionId));
@@ -457,14 +508,14 @@ export function createSessionMethods(
       let visible = read.items;
       while (limit !== undefined && read.earlier > 0 && !coversTailWindow(visible, window!.tailTurns!)) {
         limit *= 2;
-        read = await transcripts.forViewer(sessionId, principalId, { limit, beforeSeq: window?.beforeSeq });
+        read = await readTranscript({ limit, beforeSeq: window?.beforeSeq });
         visible = read.items;
       }
       const w = windowedTranscript(visible, window);
       const earlier = w.earlier + read.earlier;
-      const pins = await decoratedPins(pinRecords, visible, (seqs) =>
-        viewerStoredItemsAt(sessionId, principalId, seqs),
-      );
+      const pins = participantSession
+        ? await decoratedPins(pinRecords, visible, (seqs) => viewerStoredItemsAt(sessionId, principalId, seqs))
+        : [];
       return {
         session,
         items: w.items,
@@ -572,19 +623,24 @@ export function createSessionMethods(
       return toFileItem(artifact);
     },
 
-    async openFileForViewer(tenant, id, principalId, ownScopeBotWork) {
-      const art = await deps.files.get(id);
+    async fileForViewer(tenant, id, principalId, ownScopeBotWork) {
+      const art = await fileArtifactForViewer(tenant, id, principalId, ownScopeBotWork);
+      return art ? toFileItem(art) : null;
+    },
+
+    async openFileForViewer(tenant, id, principalId, ownScopeBotWork, pickRange) {
+      const art = await fileArtifactForViewer(tenant, id, principalId, ownScopeBotWork);
       if (!art) return null;
-      const myScopes = await currentResourceScopesForViewer(principalId, ownScopeBotWork);
-      let allowed = myScopes.includes(art.ownerScopeId);
-      if (!allowed) {
-        const grants = await deps.acl.grantsFor(tenant, art.ownerScopeId, art.id);
-        allowed = grants.some((g) => myScopes.includes(g.granteeScopeId));
-      }
-      if (!allowed) return null;
-      const opened = await deps.files.open(id);
+      const range = pickRange?.(art.sizeBytes);
+      const opened = await deps.files.open(id, range);
       if (!opened) return null;
-      return { name: art.name, mimetype: art.mimetype, sizeBytes: opened.sizeBytes, stream: opened.stream };
+      return {
+        name: art.name,
+        mimetype: art.mimetype,
+        sizeBytes: opened.sizeBytes,
+        stream: opened.stream,
+        ...(range ? { range } : {}),
+      };
     },
 
     async listSessions(viewer) {
@@ -671,7 +727,7 @@ export function createSessionMethods(
       if (!id) return null;
       const session = await sessionForViewer(id, principalId);
       if (!session) return null;
-      const { clientTools: _clientTools, ...row } = withoutStoredFacts(session);
+      const row = withoutStoredFacts(session);
       const [decorated] = await decorateSessions(principalId, [row]);
       return decorated ?? null;
     },
@@ -1107,7 +1163,7 @@ export function createSessionMethods(
     async forkSession(sessionId, principalId, opts) {
       if (!(await sessionForViewer(sessionId, principalId))) return null;
       const source = await deps.sessions.get(sessionId);
-      if (!source) return null;
+      if (!source || source.ephemeral) return null;
       const parsed = parseScopeId(source.scopeId);
       const fork = async (projectMembers?: readonly string[]) => {
         const visible = (await transcripts.forViewer(sessionId, principalId)).items;
@@ -1208,6 +1264,56 @@ export function createSessionMethods(
       return create();
     },
 
+    async deleteEphemeralSession(tenant, threadRef, principalId) {
+      const session = await deps.sessions.getByThread(threadRef);
+      if (!session?.ephemeral) return { deleted: false, reason: "not_found" };
+      const visible = await sessionForViewer(session.id, principalId);
+      if (!visible) return { deleted: false, reason: "not_found" };
+      await deps.sessions.markEphemeralExpired(tenant, session.id);
+      const active = await deps.runs.inFlightForThread(threadRef);
+      for (const run of active) {
+        if (run.status === "pending") await deps.runs.withdraw(run.id);
+        else if (deps.signals) await deps.signals.send(run.id, { kind: "abort" });
+      }
+      if (active.some((r) => r.status === "running")) {
+        await waitForNoRunningRun(deps.runs, threadRef, 5_000).catch((err: unknown) =>
+          reportFailure("ephemeral.delete.wait", err),
+        );
+      }
+      if ((await deps.runs.inFlightForThread(threadRef)).length) return { deleted: false, reason: "in_flight" };
+      await purgeEphemeralRow(tenant, session.id, threadRef);
+      return { deleted: true };
+    },
+
+    async purgeExpiredEphemeralSessions(cutoffMs, opts) {
+      const deadline = opts?.deadline ?? Infinity;
+      const batchSize = 100;
+      let afterId = "";
+      let purged = 0;
+      while (Date.now() < deadline && !opts?.stop?.()) {
+        let count = 0;
+        let lastId = afterId;
+        await claimThenBind(
+          async () => {
+            const batch = await deps.sessions.claimExpiredEphemeral(cutoffMs, batchSize, afterId);
+            count = batch.length;
+            if (batch.length) lastId = batch[batch.length - 1]!.id;
+            return batch;
+          },
+          async (id: string, tenant: Tenant) => {
+            const session = await deps.sessions.get(id);
+            if (!session?.ephemeral) return;
+            if ((await deps.runs.inFlightForThread(session.threadRef)).length) return;
+            await purgeEphemeralRow(tenant, session.id, session.threadRef);
+            purged++;
+          },
+        );
+        if (count < batchSize || lastId === afterId) break;
+        afterId = lastId;
+      }
+      return purged;
+    },
+
     async discardSession(sessionId, principalId) {
       const session = await sessionForViewer(sessionId, principalId);
       if (!session) return false;
@@ -1274,11 +1380,11 @@ export function createSessionMethods(
         scopeLabel: granteeScopeId,
       });
     },
-    async promoteSkill(id, targetScopeId, actorId, liveActor) {
+    async promoteSkill(id, targetScopeId, actorId, personAuthority) {
       if (parseScopeId(targetScopeId).kind !== "org")
         throw new Error("promote targets the org scope — use share or move for anything narrower");
-      if (liveActor !== true)
-        throw new AdminError(403, "promoting a skill org-wide takes a live person, never an autonomous trigger");
+      if (personAuthority !== true)
+        throw new AdminError(403, "promoting a skill org-wide takes a person's own authority");
       if (!deps.admin) throw new Error("org promotion requires an admin service");
       const status = await deps.admin.adminStatusOf(ambientTenant(), { id: actorId, type: "internal" });
       if (!status.isAdmin) throw new AdminError(403, "only an org admin can promote a skill org-wide");

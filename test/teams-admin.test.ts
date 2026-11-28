@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import { strFromU8, unzipSync } from "fflate";
 import { createServer } from "../src/api/server.ts";
-import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
@@ -18,7 +17,7 @@ test("an admin connects a Teams bot Microsoft accepts, downloads its app, and di
   const { network: teamsNetworkClient, secrets } = fakeEntra((secret) =>
     secret === "right" ? { token: "t" } : { error: "AADSTS7000215: Invalid client secret provided." },
   );
-  const server = createServer(built.app, { ...serverDeps(config, built), ...browserSessionDeps, teamsNetworkClient });
+  const server = createServer(built.app, { ...built, ...browserSessionDeps, teamsNetworkClient });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/admin/teams`;

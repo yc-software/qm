@@ -44,11 +44,10 @@ export function approvalButtons(p: Pick<PendingApproval, "requestId" | "grantMod
   return [...(reviewable ? allow : []), { actionId: "hilo_deny", value: p.requestId, label: "Deny", style: "danger" }];
 }
 
-type ReplayedFields = "surface" | "async" | "idempotencyKey" | "redeliveryKey" | "approval";
+type ReplayedFields = "async" | "idempotencyKey" | "redeliveryKey" | "approval";
 
 export function replayableTurn<T extends object>(request: T): Omit<T, ReplayedFields> {
   const {
-    surface: _surface,
     async: _async,
     idempotencyKey: _idempotencyKey,
     redeliveryKey: _redeliveryKey,

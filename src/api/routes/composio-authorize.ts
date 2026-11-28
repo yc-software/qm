@@ -6,12 +6,11 @@ import { createExactSecretValueMasker } from "../../security/secret-masking.ts";
 import { scopeId } from "../../types.ts";
 import { errMessage, reportFailure } from "../../util/errors.ts";
 import { redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
-import { personAtKeyboard } from "../artifact-share.ts";
-import { refuseWithoutPerson, sendJson } from "../http.ts";
+import { sendJson } from "../http.ts";
 import { appReturnPath } from "./connectors.ts";
 import { ACCOUNT_ID, composioUnavailable, composioUserId, credential, externalApps, request } from "./composio.ts";
 import { isToolkitId } from "../../mcp/connector-apps.ts";
-import { audit, isObj } from "./shared.ts";
+import { audit, isObj, requirePersonAuthority } from "./shared.ts";
 import type { ApiCtx, Route } from "./route.ts";
 
 export function composioCallbackUrl(publicUrl: string | undefined, returnTo: unknown, state: unknown): string | null {
@@ -38,11 +37,11 @@ export function composioCallbackUrl(publicUrl: string | undefined, returnTo: unk
 }
 
 async function authorize(ctx: ApiCtx, linkSlack: boolean, callbackUrl: unknown): Promise<void> {
-  if (ctx.capability && !personAtKeyboard(ctx.capability)) return refuseWithoutPerson(ctx.res);
+  if (!requirePersonAuthority(ctx)) return;
   const access = await credential(ctx, true);
   if (!access) return;
   const toolkit = linkSlack ? "slack" : (ctx.body as { toolkit?: unknown } | null)?.toolkit;
-  if (linkSlack && (!ctx.deps.signingSecret || !ctx.deps.principalLinks || ctx.actor?.imp))
+  if (linkSlack && (!ctx.deps.signingSecret || ctx.actor?.imp))
     return sendJson(ctx.res, 403, { error: "link_unavailable", message: "Sign in as yourself to connect Slack." });
   if (!isToolkitId(toolkit)) return sendJson(ctx.res, 400, { error: "invalid_toolkit" });
   const external = (await externalApps(ctx)).find((app) => app.toolkit === toolkit);
@@ -88,7 +87,7 @@ async function authorize(ctx: ApiCtx, linkSlack: boolean, callbackUrl: unknown):
     });
     if (typeof link.connected_account_id !== "string" || !ACCOUNT_ID.test(link.connected_account_id))
       throw new Error("Invalid account");
-    await ctx.deps.composioReturns?.put(`${userId}:${link.connected_account_id}`, {
+    await ctx.deps.composioReturns.put(`${userId}:${link.connected_account_id}`, {
       url: typeof callbackUrl === "string" ? callbackUrl : null,
       toolkit,
       expiresAt: Date.now() + 20 * 60_000,

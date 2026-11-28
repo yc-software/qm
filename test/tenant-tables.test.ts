@@ -7,7 +7,7 @@ import { createPgPool, type PgPool } from "../src/persistence/pg-pool.ts";
 import { createPostgresInstanceRegistry } from "../src/runs/instance-registry.ts";
 import { withoutTenant, withTenant } from "../src/tenants/context.ts";
 import { scopeId } from "../src/types.ts";
-import { testMigratedDatabaseUrl } from "./support/test-database.ts";
+import { testMigratedDatabaseUrl, createTestMapTables } from "./support/test-database.ts";
 import { appUrl, ownerUrl } from "./support/test-tenant.ts";
 
 const UNTENANTED: Record<string, string> = {
@@ -41,7 +41,7 @@ describe("tenant tables", () => {
     appDatabaseUrl = appUrl(databaseUrl);
     app = createPgPool(appDatabaseUrl);
     await createPostgresInstanceRegistry(owner, { instanceId: "i", deploymentKey: "k", startedAt: 0 }).beat(false);
-    await createPostgresMap<{ who: string }>(owner, "tenant_probe").get("none");
+    await createTestMapTables(databaseUrl, { tenant_probe: [] });
     await owner.q("INSERT INTO tenants(id) VALUES ($1), ($2)", [tenantA, tenantB]);
   });
 

@@ -3,7 +3,6 @@ import { createPgPool } from "../persistence/pg-pool.ts";
 import { checkRuleSet, type DecisionHook, type DecisionProvider, type DecisionRule } from "./decisions.ts";
 import { tenantKeyed } from "../tenants/cache.ts";
 import type { Tenant } from "../tenants/context.ts";
-import { tenantTables } from "../tenants/migrations.ts";
 
 interface DecisionWriter {
   actorId: string;
@@ -17,30 +16,6 @@ export interface DecisionStore {
   saveRule(tenant: Tenant, rule: DecisionRule, by: DecisionWriter): Promise<void>;
   removeRule(tenant: Tenant, id: string): Promise<void>;
 }
-
-const SCHEMA = [
-  `CREATE TABLE IF NOT EXISTS decision_providers(
-    provider_id TEXT   PRIMARY KEY,
-    protocol    TEXT   NOT NULL,
-    base_url    TEXT,
-    credential  TEXT,
-    updated_by  TEXT   NOT NULL,
-    updated_at  BIGINT NOT NULL
-  )`,
-  `CREATE TABLE IF NOT EXISTS decision_rules(
-    rule_id     TEXT    PRIMARY KEY,
-    hook        TEXT    NOT NULL,
-    question    TEXT    NOT NULL,
-    options     JSON    NOT NULL,
-    provider_id TEXT    NOT NULL REFERENCES decision_providers(provider_id),
-    model       TEXT    NOT NULL,
-    mode        TEXT    NOT NULL CHECK (mode IN ('off', 'observe', 'enforce')),
-    on_error    TEXT    NOT NULL,
-    updated_by  TEXT    NOT NULL,
-    updated_at  BIGINT  NOT NULL
-  )`,
-  `CREATE INDEX IF NOT EXISTS decision_rules_hook ON decision_rules (hook) WHERE mode <> 'off'`,
-];
 
 const toRule = (r: Record<string, unknown>): DecisionRule => ({
   id: r.rule_id as string,
@@ -58,26 +33,7 @@ const MAX_STORED_RULES = 100;
 const MAX_PROVIDERS = 20;
 
 export function createPostgresDecisionStore(connectionString: string): DecisionStore {
-  const pg = createPgPool(connectionString, [
-    { id: "decisions/0001", statements: SCHEMA },
-    ...tenantTables(
-      "decisions/0002-tenants",
-      [
-        { table: "decision_providers", primaryKey: "provider_id" },
-        { table: "decision_rules", primaryKey: "rule_id" },
-      ],
-      {
-        references: [
-          {
-            table: "decision_rules",
-            name: "decision_rules_provider_id_fkey",
-            columns: "provider_id",
-            references: "decision_providers(tenant_id, provider_id)",
-          },
-        ],
-      },
-    ),
-  ]);
+  const pg = createPgPool(connectionString);
   type TenantCache = {
     active: Map<DecisionHook, { at: number; rules: Promise<DecisionRule[]> }>;
     known: { at: number; providers: Promise<DecisionProvider[]> } | undefined;

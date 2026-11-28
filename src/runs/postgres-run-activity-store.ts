@@ -1,29 +1,11 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
 import type { Item } from "../sessions/items.ts";
 import { RUN_ACTIVITY_TTL_MS, type RunActivityEntry, type RunActivityStore } from "./run-activity-store.ts";
-import { tenantTables } from "../tenants/migrations.ts";
-
-const SCHEMA = [
-  `CREATE TABLE IF NOT EXISTS run_activity(
-    id BIGSERIAL PRIMARY KEY,
-    run_id TEXT NOT NULL,
-    seq BIGINT NOT NULL,
-    parent_seq BIGINT,
-    type TEXT NOT NULL,
-    payload JSONB NOT NULL,
-    created_at BIGINT NOT NULL
-  )`,
-  `CREATE INDEX IF NOT EXISTS idx_run_activity_run ON run_activity(run_id, id)`,
-  `CREATE INDEX IF NOT EXISTS idx_run_activity_created ON run_activity(created_at)`,
-];
 
 const PRUNE_INTERVAL_MS = 60_000;
 
 export function createPostgresRunActivityStore(connectionString: string): RunActivityStore {
-  const pg = createPgPool(connectionString, [
-    { id: "runs/activity/0001", statements: SCHEMA },
-    ...tenantTables("runs/activity/0002-tenants", [{ table: "run_activity", primaryKey: "id" }]),
-  ]);
+  const pg = createPgPool(connectionString);
   const q = pg.query;
   let nextPruneAt = Number.NEGATIVE_INFINITY;
 
@@ -58,6 +40,11 @@ export function createPostgresRunActivityStore(connectionString: string): RunAct
           ? { item: r.payload as Item }
           : { marker: "text_start", seq: Number(r.seq), createdAt: Number(r.created_at), ...(r.payload as object) },
       );
+    },
+
+    async deleteForRuns(tenant, runIds) {
+      if (!runIds.length) return;
+      await pg.forTenant(tenant).query("DELETE FROM run_activity WHERE run_id = ANY($1::text[])", [[...runIds]]);
     },
 
     async close() {

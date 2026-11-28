@@ -12,7 +12,7 @@ export const appHandleResource: AdminResource = {
   get: () => tenantAppHandle() ?? "",
   apply: async (ctx, _actor, scope) => {
     if (parseScopeId(scope).kind !== "org") return { error: "the app handle is org-wide; target an org scope" };
-    const setAppHandle = ctx.deps.directory?.setAppHandle;
+    const setAppHandle = ctx.deps.directory.setAppHandle;
     if (!setAppHandle) return { error: "app handles are not available on this install", status: 404 };
     const parsed = appHandleSchema.safeParse(String((ctx.body as { handle?: unknown })?.handle ?? "").trim());
     if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? "invalid handle" };

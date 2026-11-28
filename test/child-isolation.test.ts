@@ -24,6 +24,7 @@ import {
   type Principal,
   type ScopeId,
   type Session,
+  personalScope,
 } from "../src/types.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
 
@@ -45,7 +46,7 @@ async function syscallsRig() {
     advisoryLock: testAdvisoryLock(),
     maxAttempts: 3,
   });
-  const room = await sessions.getOrCreateByThread(conversation.threadRef, "dm", scope, undefined, "web", undefined, {
+  const room = await sessions.getOrCreateByThread(conversation.threadRef, "dm", scope, undefined, "web", {
     context: sessionContextOf({ origin: { kind: "human" }, surface: "web", text: "", actor, conversation }),
   });
   await sessions.addParticipant(room.id, actor.id);
@@ -271,7 +272,7 @@ function turnRig() {
     backends: { local: disk.backend },
     defaultBackend: "local",
     lock: testAdvisoryLock(),
-    canUseScope: async (who, owner) => owner === `personal:${who}` || (who === "carol" && owner === scope),
+    canUseScope: async (who, owner) => owner === personalScope(who) || (who === "carol" && owner === scope),
   });
   const router = createSandboxRouter({ backends: { local: disk.backend }, defaultBackend: "local", resources });
   const turn = (session: Session, who: Principal = actor) => {

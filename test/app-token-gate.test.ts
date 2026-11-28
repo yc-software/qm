@@ -17,6 +17,7 @@ import type { PublishedApp } from "../src/deploy/deploy-store.ts";
 import { personalScope } from "../src/types.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { testCore } from "./support/build-app.ts";
 
 const SECRET = "app-token-gate-secret".repeat(2);
 
@@ -94,10 +95,16 @@ describe("a published app's broker token follows the app it was minted for, on e
           deployments: appsAllowed,
         }),
       },
+      acl: {
+        grantsFor: async (_tenant: unknown, ownerScopeId: string, ref: string) => [
+          { ownerScopeId, ref, granteeScopeId: ownerScopeId, permission: "read" },
+        ],
+      },
       brokerFetch: async () => ({ status: 200, text: async () => "{}" }),
       gitHttpFetch: async () => ({ status: 200, headers: {}, body: Readable.from(["0000"]) }),
     } as unknown as Partial<ServerDeps>;
     server = createServer(app, {
+      ...testCore(),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       ...deps,
@@ -168,7 +175,8 @@ describe("a published app's broker token follows the app it was minted for, on e
           aud: CREDENTIAL_BROKER_AUD,
           credentials: ["sample-api"],
           botActor: true,
-          liveActor: true,
+          internalAudience: true,
+          personAuthority: true,
           members: [{ id: "B1", type: "internal" }],
           exp: Date.now() + APP_CREDENTIAL_TTL_MS,
         },
@@ -180,7 +188,8 @@ describe("a published app's broker token follows the app it was minted for, on e
       actorId: "B1",
       scopeId: "channel:C1",
       botActor: true,
-      liveActor: true,
+      internalAudience: true,
+      personAuthority: true,
       members: [{ id: "B1", type: "internal" }],
     };
     assert.deepEqual(authorized, [expected, expected]);

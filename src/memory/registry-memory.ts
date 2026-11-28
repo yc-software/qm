@@ -8,13 +8,8 @@ import type { MemoryService } from "./memory-service.ts";
 import type { MemoryProviderConfig } from "./provider-config.ts";
 import { createMemoryProviders, logMemoryProviderError } from "./provider-factory.ts";
 import { MemoryProviderDisabled } from "./provider-outcome.ts";
-import { createRoutedMemoryService, type MemoryProviderRoute } from "./provider-router.ts";
-import {
-  readRegistry,
-  resolveMemoryRegistry,
-  type DisabledRegistryRoute,
-  type MemoryRegistryStore,
-} from "./registry.ts";
+import { brainRefused, createRoutedMemoryService, type MemoryProviderRoute } from "./provider-router.ts";
+import { readRegistry, type DisabledRegistryRoute, type MemoryRegistryStore } from "./registry.ts";
 
 const NOTEBOOK_ROUTE: MemoryProviderRoute = {
   provider: "default",
@@ -48,10 +43,10 @@ const alongside = async <T>(served: Promise<T>, disabled: Promise<unknown>[]): P
 export function createRegistryMemoryService(opts: {
   defaultMemory: MemoryService;
   overlay?: MemoryProviderConfig;
-  registry: Pick<MemoryRegistryStore, "current" | "overlayIds" | "key">;
+  registry: Pick<MemoryRegistryStore, "current" | "resolve">;
   sessionItems?: (sessionId: string) => Promise<Item[]>;
   registryFetch?: AddressFetch;
-  onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture" | "forget") => void;
+  onError?: (error: unknown, provider: string, operation: "recall" | "query" | "capture" | "forget" | "lookup") => void;
 }): MemoryService {
   const overlayProviders = createMemoryProviders(opts.overlay?.providers ?? [], opts);
   const onError = opts.onError ?? logMemoryProviderError;
@@ -70,7 +65,7 @@ export function createRegistryMemoryService(opts: {
     if (version === slot.snapshot.version) return slot.snapshot;
     try {
       const registry = readRegistry(record);
-      const { config, disabled } = resolveMemoryRegistry(registry, opts.registry);
+      const { config, disabled } = await opts.registry.resolve(registry);
       slot.snapshot = {
         version,
         disabled: disabled.filter(({ code }) => code !== "id_taken").map(disabledRoute),
@@ -125,6 +120,12 @@ export function createRegistryMemoryService(opts: {
         );
       },
       read: async (scopeId) => (await serve()).service.read(scopeId),
+      brains: async (scopeId, reader) => (await (await serve()).service.brains?.(scopeId, reader)) ?? [],
+      async lookup(scopeId, tool, args, by, context) {
+        const { service } = await serve();
+        if (!service.lookup) throw brainRefused("No brain is connected to this conversation.");
+        return service.lookup(scopeId, tool, args, by, context);
+      },
       facts: async (scopeId) => (await (await serve()).service.facts?.(scopeId)) ?? [],
       async edit(scopeId, edits, by, context) {
         const { service } = await serve();

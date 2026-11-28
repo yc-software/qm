@@ -145,6 +145,7 @@ export interface AgentOptions {
   controlTools?: boolean;
   sandboxResources?: boolean;
   memorySizedBackends?: string[];
+  sandboxImages?: string[];
   turnWallClockMs?: number;
   execTimeoutMs?: number;
   execTimeoutCeilingMs?: number;
@@ -374,6 +375,7 @@ export function createAgent(opts?: AgentOptions): Agent {
       ...(turn.surfacePrompt ? { surfacePrompt: turn.surfacePrompt } : {}),
       ...(turn.clientTools?.length ? { clientTools: turn.clientTools } : {}),
       ...(turn.readOnly ? { readOnly: true } : {}),
+      ...(turn.ephemeral ? { ephemeral: true } : {}),
       ...(turn.botActor ? { botActor: true } : {}),
       ...(turn.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
       ...(opts?.execTimeoutMs !== undefined ? { execTimeoutMs: opts.execTimeoutMs } : {}),
@@ -382,6 +384,7 @@ export function createAgent(opts?: AgentOptions): Agent {
       ...(opts?.backgroundJobTtlMaxMs !== undefined ? { backgroundJobTtlMaxMs: opts.backgroundJobTtlMaxMs } : {}),
       sandboxResources: opts?.sandboxResources,
       ...(opts?.memorySizedBackends?.length ? { memorySizedBackends: opts.memorySizedBackends } : {}),
+      ...(opts?.sandboxImages?.length ? { sandboxImages: opts.sandboxImages } : {}),
     });
   }
   async function createTurnSession(
@@ -774,7 +777,7 @@ export function createAgent(opts?: AgentOptions): Agent {
             return true;
           } catch (e) {
             if (userAborted || turn.cancel?.aborted) return false;
-            fallbackFailure = fallbackFailed(failure, fallback, errMessage(e));
+            fallbackFailure = fallbackFailed(failure, fallback, e);
             throw fallbackFailure;
           }
         };
@@ -1023,7 +1026,7 @@ export function createAgent(opts?: AgentOptions): Agent {
 
         await settleGoal(false);
         const closingText = recoveryDead ? "" : (piLastAssistantTextOrThrow(entry.agentSession) ?? "");
-        const reply = entry.ref.silentRequested ? "" : closingText;
+        const reply = entry.ref.silentRequested ? "" : (turn.closingReply?.(closingText) ?? closingText);
         const closing = steps.closing(reply);
         await turn.emit({ kind: "AgentMessage", text: reply, step: closing?.step ?? null, body: { ...closing?.body } });
         const pendingApprovals = entry.ref.pendingApprovals ?? [];
@@ -1087,7 +1090,7 @@ export function createAgent(opts?: AgentOptions): Agent {
         try {
           return await summarize(fallback);
         } catch (fallbackError) {
-          throw fallbackFailed(failure, fallback, errMessage(fallbackError));
+          throw fallbackFailed(failure, fallback, fallbackError);
         }
       }
     },

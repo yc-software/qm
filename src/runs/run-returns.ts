@@ -3,7 +3,7 @@ import { claimRows, type ClaimedRow } from "../tenants/claim.ts";
 import type { Run, RunDeliveryState, RunStore } from "./run-store.ts";
 import { rowToRun } from "./run-rows.ts";
 
-export const PENDING_RETURNS = `SELECT * FROM (
+const PENDING_RETURNS = `SELECT * FROM (
            SELECT * FROM runs WHERE status IN ('done','failed') AND returned_at IS NULL
            AND session_id LIKE 'agent:main:subagent:%' AND id > $2
            UNION

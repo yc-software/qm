@@ -140,12 +140,14 @@ const fakeStage = (() => {
   return async (_bytes: Uint8Array) => ({ blobId: `blob${++n}` });
 })();
 
+const at = { where: { surface: "slack-plugin", chat: "C1" } };
+
 test("processInboundFiles forwards good files (staging each) and notes the failed ones", async () => {
   const download = async (f: SlackFile) => {
     if (f.name === "bad.txt") throw new Error("boom");
     return new Uint8Array(Buffer.from("ok"));
   };
-  const r = await processInboundFiles([{ name: "good.txt" }, { name: "bad.txt" }], download, fakeStage);
+  const r = await processInboundFiles([{ name: "good.txt" }, { name: "bad.txt" }], download, fakeStage, at);
   assert.equal(r.attachments.length, 1);
   assert.equal(r.attachments[0]!.name, "good.txt");
   assert.ok(r.attachments[0]!.blobId);
@@ -162,6 +164,7 @@ test("processInboundFiles skips an oversize file by declared size WITHOUT downlo
       return new Uint8Array();
     },
     fakeStage,
+    at,
   );
   assert.equal(called, false);
   assert.equal(r.attachments.length, 0);
@@ -170,7 +173,7 @@ test("processInboundFiles skips an oversize file by declared size WITHOUT downlo
 
 test("processInboundFiles caps the number of files per turn", async () => {
   const files = Array.from({ length: MAX_ATTACHMENTS_PER_TURN + 3 }, (_, i) => ({ name: `f${i}.txt` }));
-  const r = await processInboundFiles(files, async () => new Uint8Array(Buffer.from("x")), fakeStage);
+  const r = await processInboundFiles(files, async () => new Uint8Array(Buffer.from("x")), fakeStage, at);
   assert.equal(r.attachments.length, MAX_ATTACHMENTS_PER_TURN);
   assert.ok(r.issues.some((i) => /too many files/.test(i)));
 });
@@ -180,7 +183,7 @@ test("processInboundFiles attributes each file via resolveAuthor(file.user)", as
     [{ name: "x.png", user: "Utay" }],
     async () => new Uint8Array(Buffer.from("x")),
     fakeStage,
-    (uid) => (uid === "Utay" ? "taylor" : undefined),
+    { ...at, resolveAuthor: (uid) => (uid === "Utay" ? "taylor" : undefined) },
   );
   assert.equal(r.attachments.length, 1);
   assert.equal(r.attachments[0]!.author, "taylor");

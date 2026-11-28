@@ -6,7 +6,8 @@ import { slackMessageContent } from "./message-content.ts";
 import type { SlackCoreClient } from "../api/slack-core-client.ts";
 import type { IngestEvent } from "../surface-cache/surface-cache.ts";
 import type { BotIdentity, Directory } from "./directory.ts";
-import type { SlackMessageEvent } from "./payloads.ts";
+import { botIdentityArgs } from "./delivery.ts";
+import { slackBotName, slackCustomBotName, type SlackMessageEvent } from "./payloads.ts";
 import { MAX_NAME_LOOKUPS } from "./conversation-view.ts";
 
 export interface Mirror {
@@ -36,6 +37,8 @@ export function slackMessageToIngestEvent(
   } = {},
 ): IngestEvent {
   const content = slackMessageContent(m);
+  const self = isOwnSlackMessage(m, ids.botUserId, ids.ownBotId);
+  const authorName = self ? slackCustomBotName(m, botIdentityArgs().username) : slackBotName(m);
   return {
     container: m.channel!,
     ts: m.ts!,
@@ -48,10 +51,10 @@ export function slackMessageToIngestEvent(
       : {}),
     ...(m.bot_id ? { botId: String(m.bot_id) } : {}),
     ...(m.user ? { authorId: String(m.user) } : {}),
-    ...(m.bot_profile?.name || m.username ? { authorName: String(m.bot_profile?.name || m.username) } : {}),
+    ...(authorName ? { authorName } : {}),
     text: decodeSlackEntities(content.text),
     raw: { ...m } as Record<string, unknown>,
-    ...(isOwnSlackMessage(m, ids.botUserId, ids.ownBotId) ? { self: true, handled: true } : {}),
+    ...(self ? { self: true, handled: true } : {}),
     files: content.files
       .filter((file) => file.id)
       .map((file) => ({

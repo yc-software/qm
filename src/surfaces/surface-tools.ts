@@ -51,11 +51,12 @@ import {
 } from "../core/orchestrator/turn-helpers.ts";
 import { replyEditNote } from "../delivery/run-result-delivery.ts";
 import { editableIn, SLACK, turnCapabilities } from "./registry.ts";
+import { webTranscript } from "./web-spine.ts";
 import { sleep } from "../util/async.ts";
 import { foldPrincipalId } from "../directory/person.ts";
 import { mentionedUserIds } from "../slack/mrkdwn.ts";
 import type { DeliveryStore } from "../delivery/delivery-store.ts";
-import type { Item } from "../sessions/items.ts";
+import type { Item, NewItem } from "../sessions/items.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "../core/orchestrator/types.ts";
 
 const SURFACE_READ_MAX = 200;
@@ -106,6 +107,7 @@ export interface SpineState {
   surfaceOutboundCount: number;
   crossConversationPosts: number;
   turnUserEntrySeq: number | undefined;
+  transcript?: NewItem[];
 }
 
 export interface SurfaceToolsContext {
@@ -211,6 +213,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
   } = ctx;
   if (!surfaceToolsActive(ctx) || !defaultDestination) return undefined;
   const currentDestination = defaultDestination;
+  const transcript = spine?.transcript ? webTranscript(spine, spine.transcript, deps.sessions, session.id) : undefined;
+  const inTranscript = (d: Destination) => !!transcript && d === currentDestination;
   const textOnly = (d: Destination) => turnCapabilities(deps.surfaces.get(d.type), input)?.textOnly === true;
   const editable = (d: Destination) => editableIn(deps.surfaces, d.type, input);
   const homeSurface = deps.surfaces.get(currentDestination.type);
@@ -394,6 +398,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         return { ok: false, message: NO_FILES };
       const f = await resolveFiles(files, sandboxId);
       if (!f.ok) return { ok: false, message: f.message };
+      if (transcript)
+        return transcript.post(postText, f.attachments?.length ? postedFileMetas(f.attachments) : undefined);
       let unknownMentions: string[] | undefined;
       if (postText.includes("<@") && deliversOwnMessageTs(destination)) {
         const roster = await rosterForMentions();
@@ -465,6 +471,7 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
         ...(input.participants !== undefined ? { participants: input.participants } : {}),
       });
       if (!d.ok) return { ok: false, message: d.message };
+      if (inTranscript(d.destination)) return transcript!.edit(input.ref, input.text);
       if (!editable(d.destination))
         return { ok: false, message: "I can only edit a Slack message in a channel, group DM, or this conversation." };
       return enqueue(withEdit(d.destination, input.ref), input.text, seq);

@@ -11,6 +11,7 @@ import type { TurnRequest } from "../src/types.ts";
 import type { ModelAccount } from "../src/resolution/config-store.ts";
 import { testConfig } from "./support/test-config.ts";
 import type { SecurityScreener } from "../src/security/security-screener.ts";
+import { personalScope } from "../src/types.ts";
 
 function freshApp(securityScreener?: SecurityScreener) {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-wake-"));
@@ -363,7 +364,7 @@ test("a Slack bot's stop on its own live run leaves a person's queued turn and s
     botActor: true,
   });
   assert.ok(await built.runs.claimById(fromBot.runId!, "worker", 30_000));
-  const session = await built.sessions.getOrCreateByThread(threadRef, "channel", "personal:U1");
+  const session = await built.sessions.getOrCreateByThread(threadRef, "channel", personalScope("U1"));
   const personRequest = (sessionThread: string, text: string) => ({
     actor: person,
     conversation: { kind: "channel" as const, threadRef: sessionThread, channelRef: channel, audience: [person] },
@@ -506,8 +507,8 @@ test("a Slack message that names the agent before a bare stop stops the live run
 
 test("a bare stop stops a conversation's subagents even when its own turn is idle", async () => {
   const built = freshApp();
-  const root = await built.sessions.getOrCreateByThread("dm:D-TREE", "dm", "personal:U1");
-  const child = await built.sessions.getOrCreateByThread("agent:main:subagent:tree-child", "dm", "personal:U1");
+  const root = await built.sessions.getOrCreateByThread("dm:D-TREE", "dm", personalScope("U1"));
+  const child = await built.sessions.getOrCreateByThread("agent:main:subagent:tree-child", "dm", personalScope("U1"));
   await built.sessions.setParentSession(child.id, root.id);
   const { run: childRun } = await built.runs.enqueue({
     sessionId: child.threadRef,
@@ -533,8 +534,12 @@ test("the starter's un-mentioned bare stop reaches a conversation's subagents wh
   const channel = "C19";
   const rootTs = "1900.9";
   const threadRef = `ch:${channel}:${rootTs}`;
-  const root = await built.sessions.getOrCreateByThread(threadRef, "channel", "personal:U1");
-  const child = await built.sessions.getOrCreateByThread("agent:main:subagent:starter-child", "dm", "personal:U1");
+  const root = await built.sessions.getOrCreateByThread(threadRef, "channel", personalScope("U1"));
+  const child = await built.sessions.getOrCreateByThread(
+    "agent:main:subagent:starter-child",
+    "dm",
+    personalScope("U1"),
+  );
   await built.sessions.setParentSession(child.id, root.id);
   const { run: childRun } = await built.runs.enqueue({
     sessionId: child.threadRef,
@@ -786,7 +791,7 @@ test("an automation wake queued behind a live turn stays out of the composer que
 
 test("a queued web turn runs on its own — the sender's client need never come back", async () => {
   const built = freshApp();
-  const threadRef = "web:U1:unattended";
+  const threadRef = "web:U1:queued";
   const first = await built.app.turn(web("the long one", threadRef));
   const live = await built.runs.claimById(first.runId!, "w1", 30_000);
   const queued = await built.app.turn(web("the queued one", threadRef));

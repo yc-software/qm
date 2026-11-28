@@ -1,4 +1,4 @@
-import { previewFile } from "./file-open.ts";
+import { openFilePreview, previewFile } from "./file-open.ts";
 import { listLayoutSelect, readListLayout, saveListLayout, type ListLayout } from "./list-layout";
 import { html, nothing, render, type TemplateResult } from "lit";
 import {
@@ -16,9 +16,11 @@ import {
   Upload,
   type IconNode,
 } from "lucide";
-import { api, fileContentUrl, webFetch, withBase } from "./core-bridge";
+import { api, ApiError, fileContentUrl, webFetch, withBase } from "./core-bridge";
 import { errMessage } from "../../chassis/src/errors";
-import { browserRenderableImage, formatBytes, relTime } from "./ui";
+import { reportHandledError } from "./browser-errors";
+import { formatBytes, relTime } from "./ui";
+import { browserRenderableImage } from "./media-layout";
 import { icon } from "./icons";
 import { contextsState, ensureContexts, personalScopeId, scopeTitle } from "./contexts";
 import { appState } from "./shell";
@@ -462,8 +464,52 @@ async function loadFiles(seq: number): Promise<void> {
   drawFiles();
 }
 
+let linkedFileId: string | null = null;
+
+export function openFileById(id: string): void {
+  linkedFileId = id;
+}
+
+async function previewFileById(id: string): Promise<string | undefined> {
+  const file = await api<FileItem>(`/api/files/${encodeURIComponent(id)}`);
+  const href = fileContentUrl(file.id, file.name);
+  return openFilePreview(file.name, href, file.mimetype) ? undefined : href;
+}
+
+export function openFileLink(id: string, link: string): void {
+  void previewFileById(id).then(
+    (unpreviewed) => {
+      if (!unpreviewed) return;
+      const opened = window.open(unpreviewed, "_blank");
+      if (opened) opened.opener = null;
+      else window.location.assign(unpreviewed);
+    },
+    (error: unknown) => {
+      reportHandledError("web:file_link", error);
+      window.location.assign(link);
+    },
+  );
+}
+
+async function openLinkedFile(): Promise<void> {
+  const id = linkedFileId;
+  linkedFileId = null;
+  if (!id) return;
+  try {
+    const unpreviewed = await previewFileById(id);
+    if (unpreviewed) window.location.assign(unpreviewed);
+  } catch (e) {
+    filesNotice =
+      e instanceof ApiError && e.status === 404
+        ? "That file doesn't exist or you can't open it."
+        : errMessage(e, "Couldn't open that file.");
+    drawFiles();
+  }
+}
+
 export async function renderFiles(): Promise<void> {
   if (appState.currentView !== "files") return;
+  void openLinkedFile();
   if (scopedSession.active) {
     if (filesScope !== scopedSession.active.scopeId) {
       filesScope = scopedSession.active.scopeId;

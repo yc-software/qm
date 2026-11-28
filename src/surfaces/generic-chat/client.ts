@@ -1,10 +1,10 @@
-import type { TenantKey } from "../../tenants/lookup.ts";
 import { trimTrailingSlashes } from "../../util/text.ts";
 import {
   ACCOUNT_HEADER,
   PARTNER_CHAT,
   SIGNATURE_HEADER,
   TIMESTAMP_HEADER,
+  parseGenericChatAccount,
   signGenericChatRequest,
   type GenericChatAction,
 } from "./protocol.ts";
@@ -55,7 +55,6 @@ type Reply = Promise<Record<string, unknown>>;
 
 export interface GenericChatClient {
   readonly surface: string;
-  readonly tenantKey: TenantKey;
   readonly reactions?: readonly string[];
   readonly files?: false;
   post(account: string, message: GenericChatPost): Reply;
@@ -87,18 +86,21 @@ export function createGenericChatClient(deps: {
   const now = deps.now ?? Date.now;
 
   async function call(account: string, path: string, payload: object): Reply {
-    const body = JSON.stringify(payload);
+    const source = parseGenericChatAccount(account);
+    if (!source) throw new GenericChatHttpError(400, "invalid account");
+    const body = JSON.stringify({ ...payload, ...(source.origin ? { origin: source.origin } : {}) });
     const timestamp = String(Math.floor(now() / 1000));
     const res = await send(`${base}${path}`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        [ACCOUNT_HEADER]: account,
+        [ACCOUNT_HEADER]: source.id,
         [TIMESTAMP_HEADER]: timestamp,
-        [SIGNATURE_HEADER]: signGenericChatRequest(deps.secret, timestamp, account, path, body),
+        [SIGNATURE_HEADER]: signGenericChatRequest(deps.secret, timestamp, source.id, path, body),
       },
       body,
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      redirect: "error",
     });
     const reply = await res.text();
     const parsed = parseJson(reply);
@@ -112,7 +114,6 @@ export function createGenericChatClient(deps: {
 
   return {
     surface: PARTNER_CHAT,
-    tenantKey: "partner_chat",
     post: (account, message) => call(account, "/agent_app/messages", message),
     update: (account, message) => call(account, "/agent_app/messages/update", message),
     delete: (account, message) => call(account, "/agent_app/messages/delete", message),

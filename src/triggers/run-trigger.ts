@@ -1,4 +1,12 @@
-import type { DeliveryProvenance, Destination, Principal, ScopeId, TurnRequest, TurnResult } from "../types.ts";
+import type {
+  DeliveryProvenance,
+  Destination,
+  Principal,
+  ScopeId,
+  TurnOrigin,
+  TurnRequest,
+  TurnResult,
+} from "../types.ts";
 import type { CronScript } from "./types.ts";
 import { actsAsScope, parseScopeId } from "../types.ts";
 import type { IdentityService } from "../identity/identity-service.ts";
@@ -38,7 +46,7 @@ export interface TriggerDeps {
 
 export interface TriggerSpec extends Pick<
   TurnRequest,
-  "model" | "fastMode" | "attachments" | "infrequentCron" | "memoryNotebookOnly" | "botActor"
+  "model" | "fastMode" | "attachments" | "infrequentCron" | "memoryNotebookOnly" | "botActor" | "approval"
 > {
   runtime?: import("../agent/agent.ts").RuntimeChoice | null;
   title?: string;
@@ -53,8 +61,8 @@ export interface TriggerSpec extends Pick<
   message?: string;
   threadRef?: string;
   personaId?: string;
-  ownerFire?: boolean;
   cronScript?: CronScript;
+  cronScriptTrial?: boolean;
   shadow?: boolean;
   thinkingLevel?: string;
   readOnly?: boolean;
@@ -78,11 +86,18 @@ export interface TriggerOutcome {
 }
 
 function isTriggerFailure(outcome: TriggerOutcome): boolean {
-  return outcome.ran && outcome.status !== undefined && outcome.status !== "ok" && outcome.status !== "silent";
+  return (
+    outcome.ran &&
+    outcome.status !== undefined &&
+    outcome.status !== "ok" &&
+    outcome.status !== "silent" &&
+    outcome.status !== "pending_approval"
+  );
 }
 
 const POLL_SURFACES = new Set(["cron", "webhook", "monitor"]);
-export const isPollSurface = (surface: string): boolean => POLL_SURFACES.has(surface);
+export const firedByPoll = (turn: { origin?: Pick<TurnOrigin, "kind">; surface?: string }): boolean =>
+  turn.origin?.kind === "automation" && !!turn.surface && POLL_SURFACES.has(turn.surface);
 
 function deliveryProvenance(spec: TriggerSpec, threadRef: string, res?: TurnResult): DeliveryProvenance {
   return {
@@ -300,18 +315,18 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       text: typeof spec.input === "string" ? spec.input : spec.input(roster),
       origin: {
         kind: "automation",
-        ...(spec.ownerFire && !runsAsScope ? { ownerFire: true as const } : {}),
+        fire: true,
         ...(spec.securityScreenData !== undefined ? { screenData: spec.securityScreenData } : {}),
         ...(spec.destination ? { destination: spec.destination } : {}),
-        ...(scheduled && !runsAsScope && conversation.kind !== "dm" ? { useOwnerKeychain: true } : {}),
       },
       ...(spec.cronScript ? { cronScript: spec.cronScript } : {}),
+      ...(spec.cronScriptTrial ? { cronScriptTrial: true } : {}),
       ...(spec.personaId ? { personaId: spec.personaId } : {}),
       ...(spec.botActor ? { botActor: true } : {}),
       ...(spec.infrequentCron ? { infrequentCron: true } : {}),
       ...(spec.runtime ? { model: spec.runtime.modelId } : {}),
       ...turnModelOptions({
-        triggered: true,
+        automated: true,
         surface: spec.surface,
         infrequentCron: spec.infrequentCron,
         thinkingLevel: spec.runtime?.effortLevel ?? spec.thinkingLevel,
@@ -320,6 +335,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       ...(spec.model ? { model: spec.model } : {}),
       ...(spec.attachments?.length ? { attachments: spec.attachments } : {}),
       ...(spec.readOnly ? { readOnly: true } : {}),
+      ...(spec.approval ? { approval: spec.approval } : {}),
       ...(spec.memoryNotebookOnly ? { memoryNotebookOnly: true } : {}),
       ...(typeof spec.turnWallClockMs === "number" ? { turnWallClockMs: spec.turnWallClockMs } : {}),
       ...(liveDelivery ? { surfaceTools: true, addressed: true } : {}),
@@ -338,7 +354,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     if (res.status === "silent") return;
     if (res.status === "pending_approval") {
       const reasons = (res.pendingApprovals ?? []).map((approval) => approval.reason).join("; ");
-      note = `needed an approval with no person there to give it, so it failed closed${reasons ? `: ${reasons}` : ""}`;
+      note = `is waiting on an approval card sent to its owner${reasons ? `: ${reasons}` : ""}`;
       console.warn(`[trigger] ${spec.surface} ${spec.fireKey} ${note}`);
       return;
     }

@@ -10,16 +10,14 @@ _wears_ rather than one it _lives in_.
 
 ## Storage
 
-The tables are created by migration `users/v2/0004-personas` in the users chain, so the
-foreign keys to `users(id)` exist wherever users are merged. The authoritative shape is
-`src/personas/persona-schema.ts`; in short:
+The tables are defined in `db/schema.sql`, with foreign keys to `users(id)`. In short:
 
 - `personas`: `id`, `name`, `description`, `instructions`, `icon` (JSONB, the project icon
   shape), `created_by UUID REFERENCES users(id)`, timestamps.
 - `persona_access`: one row per `(persona_id, grantee_scope_id)` with `role` owner, write
   or read, `granted_by UUID REFERENCES users(id)`, `granted_at`. Deleting the persona
   deletes its rows.
-- `persona_versions` (migration `users/v2/0005-persona-versions`): one row per
+- `persona_versions`: one row per
   `(persona_id, version)` holding the name, description, instructions and icon as they
   were saved, `edited_by UUID REFERENCES users(id)`, `edited_at`, and `restored_from`
   when the save was a rollback. Creating a persona writes version 1; an edit that changes
@@ -46,16 +44,15 @@ read, and its grant only applies to conversations in it. A person's
 role is the highest one reaching them. Every persona keeps at least one owner.
 
 An owner can also **pin** a persona in a channel or group it's shared with (`pinned: true` on that
-channel's access entry, column `persona_access.pinned`, migration
-`users/v2/0006-persona-channel-pins`). A channel or group pins at most one persona; pinning a second
+channel's access entry, column `persona_access.pinned`). A channel or group pins at most one persona; pinning a second
 one is refused until the first is unpinned. Removing the channel's grant unpins it.
 
 Checks sit where every path already flows: turn resolution (below) and the scope checks
 (`canReadScope` / `canWriteScope` / `canManageScope`), so skill moves into a persona need
-write. Only an owner can attach a credential, only their own, and only on a turn they
-sent that is still running; readers use it through the persona but never hold it.
-Detaching a credential, changing who holds a role and deleting the persona also take an
-owner, on a turn they sent that is still running.
+write. Only an owner can attach a credential, only their own, and attaching one raises an
+approval card to them; readers use it through the persona but never hold it. Detaching a
+credential and changing who holds a role also take an owner; deleting the persona takes an
+owner and their approval card.
 
 **Owners leaving.** When a persona's last active owner is deactivated or offboarded, the
 default admin becomes an owner: the active org admin with the oldest grant, so the admins named
@@ -79,9 +76,13 @@ if the sender holds a role on the persona (counting the conversation's channel),
 - offers keychain grants to `persona:<id>` alongside the conversation's own;
 - adds a `## Persona` block after the organization and conversation instructions.
 
-If the sender has no role, the persona is skipped and the block says so. Files and crons
-stay in the conversation's scope, and so does memory in a DM or in a conversation that only
-picked the persona.
+If the sender has no role, the persona is skipped and the block says so. Files stay in the
+conversation's scope, and so does memory in a DM or in a conversation that only picked the
+persona (persona owners and write holders can also write directly to `persona:<id>` memory).
+Crons created in a DM while wearing a persona default to being owned by that persona when the
+sender holds write or owner on it (override with `persona: null`); persona-owned crons are
+managed by the persona's owners and write holders, and when posting to a DM they fan out into
+linked per-person copies when shared with teammates.
 
 A channel or group that pins a persona uses the persona's notebook in place of its own:
 automatic capture and the `memory` tool save there, and the room's own notebook is kept but
@@ -122,8 +123,9 @@ edits those messages under the persona's name and icon, ahead of any deployment-
 the app manifest requests) (a Unicode emoji maps to its Slack
 shortcode; a custom emoji is used by name; an image icon is sent as its URL; no icon keeps the default), and ends them with a
 `Persona: <name>` context line linking to the persona's page, next to the cron settings
-link when there is one. File uploads and the in-progress task card still show the app's own
-identity, since Slack doesn't let an app rename those.
+link when there is one. The in-progress task card wears the persona too: it sits inside the
+persona's latest message, or is posted under its name and icon when it stands alone. File
+uploads still show the app's own identity, since Slack doesn't let an app rename those.
 
 Unlike a project, a persona is not a place conversations live. A conversation with a
 persona stays in the scope it started in (your DM, a channel, a group), so only the

@@ -366,13 +366,11 @@ struct WorkspaceTests {
     #expect(workspace.patches("b") == [["pinned": true], ["pinned": false]])
   }
 
-  @Test func searchAndTheWebFilterAreAnsweredByTheServerAcrossPages() async throws {
+  @Test func theWebFilterIsAnsweredByTheServerAcrossPages() async throws {
     let workspace = try workspace()
     let model = workspace.model
     defer { model.signOut() }
-    let narrowed: [URLQueryItem] = [
-      .init(name: "surface", value: "web"), .init(name: "q", value: "invoice"),
-    ]
+    let narrowed: [URLQueryItem] = [.init(name: "surface", value: "web")]
     workspace.server.reply(
       workspace.sessions, page([session("a", activity: 10)], next: "10.a"))
     workspace.server.reply(
@@ -384,7 +382,7 @@ struct WorkspaceTests {
     await model.load()
     #expect(model.conversations.map(\.id) == ["a"])
 
-    await model.narrow(search: "invoice", webOnly: true)
+    await model.narrow(webOnly: true)
     #expect(model.conversations.map(\.id) == ["old"])
     #expect(!model.narrowing)
     await model.loadMore()
@@ -392,7 +390,7 @@ struct WorkspaceTests {
     await model.load(refreshIdentity: false)
     #expect(model.conversations.map(\.id) == ["old", "older"])
 
-    await model.narrow(search: "", webOnly: false)
+    await model.narrow(webOnly: false)
     #expect(model.conversations.map(\.id) == ["a"])
   }
 
@@ -459,7 +457,7 @@ struct WorkspaceTests {
     workspace.server.reply(
       workspace.sessions([.init(name: "status", value: "archived")]),
       page([session("z", activity: 8, archived: true)]))
-    func rows() -> [String] { model.visibleConversations(search: "", webOnly: false).map(\.id) }
+    func rows() -> [String] { model.visibleConversations(webOnly: false).map(\.id) }
 
     await model.load()
     #expect(rows() == ["x", "a"])
@@ -603,9 +601,6 @@ struct WorkspaceTests {
     #expect(ConversationFilter.active.includes(conversation))
     #expect(!ConversationFilter.waiting.includes(conversation))
     conversation.awaitingInput = true
-    #expect(!ConversationFilter.active.includes(conversation))
-    #expect(ConversationFilter.waiting.includes(conversation))
-    conversation.pinned = true
     #expect(ConversationFilter.active.includes(conversation))
     #expect(ConversationFilter.waiting.includes(conversation))
     conversation.archived = true

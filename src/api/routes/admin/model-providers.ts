@@ -3,6 +3,8 @@ import { cachedModelCatalog, selectableModelCatalog } from "../../../model/model
 import { sendJson } from "../../http.ts";
 import type { ApiCtx } from "../route.ts";
 import { audit, authorizeAdmin, orgScope } from "../shared.ts";
+import { moveGatewayDefaultsToProvider } from "../../../model/own-provider-defaults.ts";
+import type { ScopeId } from "../../../types.ts";
 
 const VALIDATION_REQUESTS: Record<
   ModelProvider,
@@ -50,8 +52,7 @@ export async function validateProviderApiKey(ctx: ApiCtx, provider: ModelProvide
 export async function getModelProviders(ctx: ApiCtx): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
-  await ctx.deps.refreshModels?.();
-  if (!ctx.deps.modelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
+  await ctx.deps.refreshModels();
   audit(ctx, {
     principalId: authorized.id,
     action: "model-providers.read",
@@ -75,7 +76,6 @@ export async function getModelProviders(ctx: ApiCtx): Promise<void> {
 export async function putModelProvider(ctx: ApiCtx): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
-  if (!ctx.deps.modelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
   const provider = ctx.params.provider;
   if (!isModelProvider(provider)) return sendJson(ctx.res, 404, { error: "not_found" });
   const apiKey = (ctx.body as { apiKey?: unknown }).apiKey;
@@ -86,20 +86,28 @@ export async function putModelProvider(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 400, { error: "invalid_api_key", message: `${provider} rejected this API key` });
   }
   await ctx.deps.modelCredentials.set(provider, apiKey.trim(), authorized.id);
+  const moved = ctx.deps.modelRoutes.gateway
+    ? await moveGatewayDefaultsToProvider(
+        ctx.deps.config,
+        ctx.deps.modelRoutes,
+        provider,
+        orgScope(ctx.deps) as ScopeId,
+      )
+    : [];
   audit(ctx, {
     principalId: authorized.id,
     action: "model-providers.update",
     resource: provider,
     scopeLabel: orgScope(ctx.deps),
+    ...(moved.length ? { detail: moved.map((m) => `${m.setting}: ${m.from} -> ${m.to}`).join("; ") } : {}),
   });
   const status = (await ctx.deps.modelCredentials.statuses()).find((item) => item.provider === provider);
-  return sendJson(ctx.res, 200, { ok: true, status });
+  return sendJson(ctx.res, 200, { ok: true, status, moved });
 }
 
 export async function deleteModelProvider(ctx: ApiCtx): Promise<void> {
   const authorized = await actor(ctx);
   if (!authorized) return;
-  if (!ctx.deps.modelCredentials) return sendJson(ctx.res, 404, { error: "not_found" });
   const provider = ctx.params.provider;
   if (!isModelProvider(provider)) return sendJson(ctx.res, 404, { error: "not_found" });
   await ctx.deps.modelCredentials.delete(provider, authorized.id);

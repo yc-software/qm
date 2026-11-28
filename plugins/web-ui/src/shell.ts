@@ -10,9 +10,11 @@ import {
   Box,
   Brain,
   CalendarDays,
+  ChevronDown,
   Clock,
   Files,
   Folder,
+  Ghost,
   Inbox as InboxGlyph,
   KeyRound,
   LayoutGrid,
@@ -45,7 +47,7 @@ import {
 } from "./core-bridge";
 import { seedRuntimeConfig } from "./runtime-config-store";
 import { errMessage, swallow, swallowAs } from "../../chassis/src/errors";
-import { brandMark, brandName } from "./ui";
+import { brandMark, brandName, closeFormMenus, toggleFormMenu } from "./ui";
 import { desktopHistoryNav } from "./desktop-history";
 import { beginNavigation, cancelNavigation, endNavigation, navigationInFlight } from "./url-history";
 import { icon } from "./icons";
@@ -54,8 +56,9 @@ import { markConnectorConnected } from "./chat";
 import { clearSkillsCache, resyncModelSelection } from "./composer";
 import { allConversations, ensureDeliveryStream, mainConversation, onExitCanvas } from "./conversations";
 import { reloadIntoServedRelease } from "./stale-release";
+import { notificationPrompt, onNotificationStateChange, startNotifications } from "./notifications";
 import { clearAllDrafts, newChatDraftKey, saveDraft, storedDraft } from "./drafts";
-import { deepLinkPath, isPlainLeftClick, parseDeepLink, sessionLinkTarget, UI_BASE } from "./deep-link";
+import { deepLinkPath, fileLinkTarget, isPlainLeftClick, parseDeepLink, sessionLinkTarget, UI_BASE } from "./deep-link";
 import {
   adoptRemoteSplit,
   beginPaneKindDrag,
@@ -87,13 +90,24 @@ import {
   sessionSelectionBar,
   revealSessionSurface,
   startNewChat,
+  startTemporaryChat,
   openNewChat,
+  openConversationIds,
 } from "./sessions";
 import { openCronById, renderCronsPage, resetActiveCron, routeCronsHistory } from "./crons";
 import { renderLoopsPage, resetActiveLoop } from "./loops";
 import { openWebhookById, renderWebhooksPage, resetActiveWebhook, routeWebhooksHistory } from "./webhooks";
-import { loadPersonas, openPersonaById, renderPersonasPage, routePersonasHistory } from "./personas";
-import { renderFiles } from "./files";
+import {
+  chatWithPersonaId,
+  loadPersonas,
+  openPersonaById,
+  personaGlyph,
+  personasState,
+  renderPersonasPage,
+  routePersonasHistory,
+} from "./personas";
+import { onCustomEmojiLoaded, projectIconTpl } from "./project-icon";
+import { openFileById, openFileLink, renderFiles } from "./files";
 import { setScopedSession } from "./session-scope";
 import { openChatSearch } from "./search";
 import { openSessionAtMessage, showLinkedSession } from "./open-message";
@@ -145,6 +159,32 @@ function signOutFromMenu(): void {
   void signOut();
 }
 
+onCustomEmojiLoaded(() => {
+  renderSidebarTop();
+  for (const conversation of allConversations()) conversation.redraw();
+});
+
+function startHiddenChatFromMenu(): void {
+  closeFormMenus();
+  closeSidebarOnNarrowView();
+  hideTooltip();
+  startTemporaryChat();
+}
+
+function startPersonaChatFromMenu(personaId: string): void {
+  closeFormMenus();
+  closeSidebarOnNarrowView();
+  hideTooltip();
+  void chatWithPersonaId(personaId);
+}
+
+function startProjectChatFromMenu(scopeId: string, name: string): void {
+  closeFormMenus();
+  closeSidebarOnNarrowView();
+  hideTooltip();
+  startNewChat(scopeId, name);
+}
+
 let authMode: AuthMode = "portal";
 let shellMounted = false;
 let pendingCanvasRestore: Promise<void> | null = null;
@@ -157,6 +197,7 @@ setSigninRequiredHandler((detail) => {
 onExitCanvas(() => exitSplitIfActive());
 
 export const ADMIN_HOME_URL = `${UI_BASE}/settings/history`;
+export const adminHomeUrl = (): string => (can("admin") ? ADMIN_HOME_URL : `${UI_BASE}/settings/governance`);
 
 export function syncUrlFromState(sessionOverride?: string | null, historyMode: "push" | "replace" = "replace"): void {
   if (navigationInFlight()) return;
@@ -316,7 +357,7 @@ export async function exitImpersonation(): Promise<void> {
   } catch {
     void 0;
   }
-  window.location.href = ADMIN_HOME_URL;
+  window.location.href = adminHomeUrl();
 }
 
 function impersonationBanner(by: string) {
@@ -489,12 +530,17 @@ function gateFor(mode: AuthMode): AuthGate {
   return mode === "dev" ? { kind: "dev" } : { kind: "portal" };
 }
 
+onNotificationStateChange(() => {
+  if (shellMounted) mountShell();
+});
+
 export function mountShell(): void {
   applySavedSidebarWidth();
   const impersonatedBy = appState.me?.impersonatedBy ?? null;
-  let banner: TemplateResult | typeof nothing = nothing;
+  let banner: TemplateResult | typeof nothing;
   if (impersonatedBy) banner = impersonationBanner(impersonatedBy);
   else if (authMode === "dev") banner = devBanner(appState.me?.user ?? "");
+  else banner = notificationPrompt();
   render(
     html`
       ${banner}
@@ -599,8 +645,8 @@ export function renderSidebarFooter(): void {
         }
       </div>
       ${
-        can("admin")
-          ? html`<a class="icon-btn subtle" href=${ADMIN_HOME_URL} aria-label="Admin" ${tip("Admin")}>
+        can("admin") || can("owner")
+          ? html`<a class="icon-btn subtle" href=${adminHomeUrl()} aria-label="Admin" ${tip("Admin")}>
               ${icon(ShieldUser, 17)}
             </a>`
           : nothing
@@ -641,6 +687,8 @@ export function renderSidebarTop(): void {
       ${icon(glyph, 17)}<span>${label}</span>
     </button>`;
   const newChatLabel = splitState.active ? "New session" : "Create New Chat";
+  const personas = personasState.enabled ? personasState.list : [];
+  const projects = contextsState.list.filter((c) => Boolean(c.project));
   render(
     html`
       <nav class="nav quick-nav" @click=${onNavClick}>
@@ -655,11 +703,80 @@ export function renderSidebarTop(): void {
           openBrowse();
         })}
       </nav>
-      <div class="nav new-chat-nav">
+      <div class="nav new-chat-nav menu-control form-menu-control" data-align="right" data-drop="down">
         ${actionRow(ICON.newChat, newChatLabel, () => {
+          closeFormMenus();
           hideTooltip();
           startNewChat();
         })}
+        <button
+          class="navrow menu-button new-chat-menu-btn"
+          type="button"
+          aria-label="More chat options"
+          aria-haspopup="menu"
+          aria-expanded="false"
+          ${tip("More chat options")}
+          @click=${(e: Event) => {
+            hideTooltip();
+            toggleFormMenu(e);
+            if (!contextsState.loaded) void ensureContexts();
+          }}
+        >
+          ${icon(ChevronDown, 15)}
+        </button>
+        <div class="menu-popover" role="menu" hidden>
+          <button class="menu-option" type="button" role="menuitem" @click=${startHiddenChatFromMenu}>
+            <span class="new-chat-menu-icon" aria-hidden="true">${icon(Ghost, 15)}</span>
+            <span class="menu-option-copy"><span class="menu-option-label">Hidden chat</span></span>
+          </button>
+          ${
+            personas.length
+              ? html`
+                  <div class="new-chat-menu-sep" role="separator"></div>
+                  <div class="new-chat-menu-head" role="presentation">Bots</div>
+                  ${personas.map(
+                    (persona) => html`
+                      <button
+                        class="menu-option"
+                        type="button"
+                        role="menuitem"
+                        @click=${() => startPersonaChatFromMenu(persona.id)}
+                      >
+                        <span class="new-chat-menu-icon" aria-hidden="true">${personaGlyph(persona.id, 15)}</span>
+                        <span class="menu-option-copy"
+                          ><span class="menu-option-label" dir="auto">${persona.name}</span></span
+                        >
+                      </button>
+                    `,
+                  )}
+                `
+              : nothing
+          }
+          ${
+            projects.length
+              ? html`
+                  <div class="new-chat-menu-sep" role="separator"></div>
+                  <div class="new-chat-menu-head" role="presentation">Projects</div>
+                  ${projects.map((context) => {
+                    const label = context.project!.name.trim() || context.name || "Project";
+                    return html`
+                      <button
+                        class="menu-option"
+                        type="button"
+                        role="menuitem"
+                        @click=${() => startProjectChatFromMenu(context.scopeId, label)}
+                      >
+                        <span class="new-chat-menu-icon" aria-hidden="true"
+                          >${projectIconTpl(context.project!.icon, 15) ?? icon(Folder, 15)}</span
+                        >
+                        <span class="menu-option-copy"><span class="menu-option-label" dir="auto">${label}</span></span>
+                      </button>
+                    `;
+                  })}
+                `
+              : nothing
+          }
+        </div>
       </div>
       ${sessionSelectionBar() ?? nothing}
     `,
@@ -680,10 +797,12 @@ export function syncDocumentTitle(): void {
         sessionId: state.sessionId,
         threadRef: state.threadRef,
       });
+  let title = active ? sessionTitle(active) : null;
+  if (state.ephemeral) title = "Hidden chat";
   updateDocumentTitle(
     appState.currentView,
-    active ? sessionTitle(active) : null,
-    Boolean(active || (!splitState.active && state.threadRef)),
+    title,
+    Boolean(active || (!splitState.active && (state.threadRef || state.ephemeral))),
   );
 }
 
@@ -943,6 +1062,7 @@ onPhoneChange((phone) => {
 
 function setSidebarOpen(open: boolean, moveFocus = true): void {
   if (open && isPhone()) document.dispatchEvent(new CustomEvent("qm:close-overlays"));
+  if (!open) closeFormMenus();
   sidebarOpen = open;
   (appEl as HTMLElement).querySelector(".layout")?.classList.toggle("sidebar-closed", !sidebarOpen);
   (appEl as HTMLElement).querySelector(".sidebar")?.setAttribute("data-tip-placement", open ? "top" : "right");
@@ -1019,6 +1139,7 @@ window.addEventListener("popstate", () => {
 });
 
 document.addEventListener("visibilitychange", reloadIntoServedRelease);
+window.addEventListener("online", reloadIntoServedRelease);
 
 window.addEventListener("focus", () => {
   if (!appState.me || reloadIntoServedRelease()) return;
@@ -1064,6 +1185,12 @@ document.addEventListener("click", (e) => {
   if (!shellMounted || e.defaultPrevented || !isPlainLeftClick(e)) return;
   const anchor = e.composedPath().find((node): node is HTMLAnchorElement => node instanceof HTMLAnchorElement);
   if (!anchor?.href || anchor.hasAttribute("download")) return;
+  const file = fileLinkTarget(anchor.href, location.origin, UI_BASE);
+  if (file) {
+    e.preventDefault();
+    openFileLink(file, anchor.href);
+    return;
+  }
   const target = sessionLinkTarget(anchor.href, location.origin, UI_BASE);
   if (!target) return;
   e.preventDefault();
@@ -1135,6 +1262,7 @@ export async function boot(): Promise<void> {
   appState.me = (await r.json()) as Me;
   void initializeBrowserErrors(appState.me);
   void initializeAnalytics(appState.me, isView(wanted) && canView(wanted) ? wanted : "chats");
+  void ensureContexts();
   void loadPersonas().then(() => {
     notifyPanesChanged();
     for (const conversation of allConversations()) conversation.redraw();
@@ -1147,7 +1275,7 @@ export async function boot(): Promise<void> {
     return;
   }
   const sessions = refreshSessions({ showLoading: true });
-  const personalScope = `personal:${appState.me.user}`;
+  const personalScope = appState.me.personalScope;
   const prefetchedConfig = await runtimeConfigFetch;
   const runtimeConfig =
     prefetchedConfig?.scopeId === personalScope ? prefetchedConfig : await fetchRuntimeConfig(personalScope);
@@ -1159,6 +1287,10 @@ export async function boot(): Promise<void> {
   renderList();
   shellMounted = true;
   ensureDeliveryStream();
+  startNotifications(
+    (sessionId) => void openSessionAtMessage(sessionId, null, undefined, "push"),
+    (sessionId) => openConversationIds().includes(sessionId),
+  );
   warmDeferredChunks();
   void refreshInbox({ silent: true });
   const connectedProvider = params.get("status") === "connected" ? params.get("connector") : null;
@@ -1211,6 +1343,8 @@ export async function boot(): Promise<void> {
         params.get("scope") ?? (wantedItem ? resolveProjectScope(await ensureContexts(), wantedItem) : null);
       if (scope) contextsState.selected = scope;
     }
+    const linkedFile = fileLinkTarget(location.href, location.origin, UI_BASE);
+    if (linkedFile) openFileById(linkedFile);
     openViewAt(wanted as View, wantedItem, "push");
     return;
   }

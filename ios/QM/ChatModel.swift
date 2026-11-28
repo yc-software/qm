@@ -256,18 +256,21 @@ final class ChatModel {
     }
   }
 
+  var effectiveRuntime: RuntimeSelection? { runtimeSelection ?? runtimeConfiguration?.effective }
+
   var runtimeLabel: String {
-    guard let selection = runtimeSelection ?? runtimeConfiguration?.effective else {
+    guard let selection = effectiveRuntime else {
       return "Model"
     }
-    return runtimeConfiguration?.modelCatalog[selection.modelId]?.label ?? selection.modelId
+    guard let runtimeConfiguration else { return selection.modelId }
+    return ModelBrand.label(selection.modelId, runtimeConfiguration)
   }
 
   var runtimeDetail: String? {
-    guard let selection = runtimeSelection ?? runtimeConfiguration?.effective else { return nil }
+    guard let selection = effectiveRuntime else { return nil }
     var parts: [String] = []
     if let effort = selection.effortLevel, effort != "auto" {
-      parts.append(effort == "xhigh" ? "Extra high" : effort.capitalized)
+      parts.append(RuntimeSelection.effortLabel(effort))
     }
     if selection.fastMode == true { parts.append("Fast") }
     return parts.isEmpty ? nil : parts.joined(separator: " · ")

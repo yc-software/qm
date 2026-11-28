@@ -2,6 +2,7 @@ import { replyEditNote } from "../delivery/run-result-delivery.ts";
 import type { OutgoingAttachment, TurnResult, WornPersona } from "../types.ts";
 import { errMessage, swallowAs } from "../util/errors.ts";
 import { AWAITING_APPROVAL } from "./approval-cards.ts";
+import { unreadFilesNotice } from "./attachments.ts";
 import type { ReplyReaction } from "./reactions.ts";
 import { postThenAckRunDelivery, refusalDelivery, refusalNote } from "./refusals.ts";
 import { turnFailureText, type CoreTurnBody, type TurnFlow } from "./turn-flow.ts";
@@ -17,6 +18,7 @@ export interface SurfaceTransport {
     text: string,
     opts?: {
       idempotencyKey?: string;
+      runId?: string;
       note?: string;
       notice?: boolean;
       fileIds?: readonly string[];
@@ -86,7 +88,7 @@ export async function runSurfaceTurn(
       taskManaged: !!turn.taskAck,
       postAck: async (text, persona) => {
         const ref = await transport.post(transport.render?.(text) ?? text, {
-          ...(queuedRunId ? { idempotencyKey: statusPlaceholderKey(queuedRunId) } : {}),
+          ...(queuedRunId ? { idempotencyKey: statusPlaceholderKey(queuedRunId), runId: queuedRunId } : {}),
           ...(persona ? { persona } : {}),
         });
         if (!ref || !queuedRunId || unprompted || !deps.reportEditRef) return;
@@ -120,11 +122,15 @@ export async function runSurfaceTurn(
 
   const body = await turn.prepare();
   if (!body) return settleAck();
+  if (!unprompted && body.inboundNotes?.length)
+    await transport
+      .post(unreadFilesNotice(body.inboundNotes), { notice: true, idempotencyKey: `inbound-files:${turn.trigger}` })
+      .catch(swallowAs(`${label}: unread files notice`, undefined));
 
   let result: TurnResult;
   try {
     result = await callCore(
-      { ...body, origin: turnOrigin(turn) },
+      { ...body, origin: turnOrigin(turn), ...(turn.synthetic ? { midTurn: "queue" as const } : {}) },
       {
         deferDeliveryAck: true,
         ...(turn.synthetic
@@ -228,7 +234,7 @@ export async function runSurfaceTurn(
         await transport.post(reply, {
           ...(note ? { note } : {}),
           ...(uploaded.fileIds?.length ? { fileIds: uploaded.fileIds } : {}),
-          ...(queuedRunId ? { idempotencyKey: `run:${queuedRunId}` } : {}),
+          ...(queuedRunId ? { idempotencyKey: `run:${queuedRunId}`, runId: queuedRunId } : {}),
           ...(persona ? { persona } : {}),
         });
       if (uploaded.failureNote) await transport.post(uploaded.failureNote, persona ? { persona } : undefined);

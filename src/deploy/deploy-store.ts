@@ -1,44 +1,19 @@
 import { trimTrailingSlashes } from "../util/text.ts";
 import { randomUUID } from "node:crypto";
-import type { ScopeId } from "../types.ts";
+import { scopeId, type ScopeId } from "../types.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
 import type { PgPool } from "../persistence/pg-pool.ts";
 import type { ClaimedRow } from "../tenants/claim.ts";
-import { APP_TABLES, NAME_INDEX } from "./page-views.ts";
+import { NAME_INDEX } from "./page-views.ts";
 import { tenantAppHandle } from "../tenants/settings.ts";
 import { APP_HOSTS_KEY, appAddressTakenError, appHostLabel } from "../tenants/app-handle.ts";
-import { msOf } from "../sessions/items.ts";
 import {
   createDeployGitStore,
+  type DeployGitBlobRef,
   type DeployGitInputFile,
   type DeployGitStoreOptions,
   type DeployGitTreeFile,
 } from "./deploy-git-store.ts";
-
-export const WITHDRAW_LOANS_MIGRATION = {
-  id: "durable-map/deployments/0040-withdraw-loans",
-  statements: [
-    `DO $$
-    BEGIN
-      IF to_regclass('deployments') IS NULL OR to_regclass('audit_log') IS NULL THEN
-        RETURN;
-      END IF;
-      WITH cleared AS (
-        UPDATE deployments d SET json = d.json - 'connectors'
-          FROM deployments o
-         WHERE o.tenant_id = d.tenant_id AND o.id = d.id AND d.json ? 'connectors'
-           AND d.json ->> 'ownerScopeId' IS DISTINCT FROM 'personal:' || (d.json ->> 'createdBy')
-        RETURNING d.tenant_id, d.id, d.json ->> 'ownerScopeId' AS scope, o.json -> 'connectors' AS hosts
-      ), versions AS (
-        UPDATE durable_map_versions SET v = v + 1 WHERE tbl = 'deployments' AND EXISTS (SELECT 1 FROM cleared)
-      )
-      INSERT INTO audit_log (tenant_id, at, principal_id, action, resource, scope_label, detail)
-      SELECT tenant_id, ${msOf("now()")}, 'system:migration', 'deploy_connectors', 'deployment:' || id, scope,
-             'withdrawn: the app is outside its publisher''s library; was ' || hosts::text
-        FROM cleared;
-    END $$`,
-  ],
-};
 
 export interface AppVersion {
   version: number;
@@ -126,6 +101,16 @@ export interface PublishedApp {
   versions: AppVersion[];
 }
 
+export function inPublisherLibrary(d: Pick<PublishedApp, "ownerScopeId" | "createdBy">): boolean {
+  return d.ownerScopeId === scopeId("personal", d.createdBy);
+}
+
+export function lentConnectors(
+  d: Pick<PublishedApp, "ownerScopeId" | "createdBy" | "connectors" | "public">,
+): string[] {
+  return !d.public && inPublisherLibrary(d) ? (d.connectors ?? []) : [];
+}
+
 export interface AppDraft {
   deploymentId: string;
   commit: string;
@@ -185,7 +170,7 @@ export interface DeployStore {
   treeOf(id: string, version: number): Promise<DeployGitTreeFile[] | null>;
   commitTreeOf(id: string, commit: string): Promise<DeployGitTreeFile[]>;
   filesOf(id: string, commit: string, paths?: string[]): Promise<DeployGitInputFile[]>;
-  filesIn(id: string, entries: readonly Pick<DeployGitTreeFile, "path" | "sha">[]): Promise<DeployGitInputFile[]>;
+  filesIn(id: string, entries: readonly DeployGitBlobRef[]): Promise<DeployGitInputFile[]>;
   bundleOf(id: string, commit: string): Promise<Uint8Array>;
   commitDraft(id: string, files: DeployGitInputFile[], parent: string, deletedPaths?: string[]): Promise<string>;
   keepCommit(id: string, commit: string): Promise<void>;
@@ -218,32 +203,16 @@ interface DeployAccess {
 }
 
 function createPgDeployAccess(pg: PgPool): DeployAccess {
-  for (const migration of APP_TABLES) pg.registerMigration(migration);
-  let readyP: Promise<void> | null = null;
-  function ready(): Promise<void> {
-    if (!readyP) {
-      readyP = (async () => {
-        for (const migration of APP_TABLES) await pg.migrate(migration);
-      })().catch((e) => {
-        readyP = null;
-        throw e;
-      });
-    }
-    return readyP;
-  }
   return {
     async readOne(id) {
-      await ready();
       const rows = await pg.q("SELECT last_access_at FROM deployment_access WHERE id = $1", [id]);
       return rows.length ? Number(rows[0]!.last_access_at) : null;
     },
     async readAll() {
-      await ready();
       const rows = await pg.q("SELECT id, last_access_at FROM deployment_access");
       return new Map(rows.map((row) => [row.id as string, Number(row.last_access_at)]));
     },
     async write(id, at) {
-      await ready();
       const res = await pg.query(
         `INSERT INTO deployment_access (id, last_access_at)
          SELECT d.id, $2::bigint FROM deployments d WHERE d.id = $1
@@ -253,7 +222,6 @@ function createPgDeployAccess(pg: PgPool): DeployAccess {
       return res.rowCount > 0;
     },
     async findByName(name) {
-      await ready();
       const rows = await pg.q("SELECT json FROM deployments WHERE json->>'name' = $1 ORDER BY id LIMIT 1", [name]);
       return rows.length ? (rows[0]!.json as PublishedApp) : null;
     },

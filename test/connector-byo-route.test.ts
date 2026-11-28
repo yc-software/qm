@@ -9,8 +9,8 @@ import type { AddressInfo } from "node:net";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
-import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { type Core } from "../src/wiring.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
@@ -19,13 +19,11 @@ import { testDatabaseUrl } from "./support/test-database.ts";
 
 const ADMIN = { "content-type": "application/json", "x-admin-actor": "admin-alice@default-org" };
 
-function start(socketAppId = "A-ACME", managed = false): { base: string; built: BuiltApp; close: () => Promise<void> } {
+function start(socketAppId = "A-ACME", managed = false): { base: string; built: Core; close: () => Promise<void> } {
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "byo-route-")) }));
   const server = createInsecureTestServer(built.app, {
+    ...testCore(built),
     oauthStateSecret: "byo-route-oauth-state-secret",
-    replayDedupe: built.replayDedupe,
-    connectorTokens: built.connectorTokens,
-    slackInstallation: built.slackInstallation,
     ...(managed
       ? {
           managedSlack: createManagedSlack({
@@ -33,6 +31,7 @@ function start(socketAppId = "A-ACME", managed = false): { base: string; built: 
             token: "test-token",
             appId: "A123",
             store: built.slackInstallation,
+            fetchImpl: async () => new Response("", { status: 404 }),
           }),
         }
       : {}),
@@ -51,10 +50,6 @@ function start(socketAppId = "A-ACME", managed = false): { base: string; built: 
       );
     }) as typeof fetch,
     slackInstallationSocketAppId: async () => socketAppId,
-    resolveClient: built.resolveClient,
-    config: built.config,
-    admin: built.admin,
-    auditLog: built.auditLog,
   });
   server.listen(0);
   const base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -263,6 +258,7 @@ test("an agent capability token can read the connector catalog; an unauthenticat
   const secret = "catalog-route-secret".repeat(3);
   const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "catalog-")), signingSecret: secret }));
   const server = createServer(built.app, {
+    ...testCore(built),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: secret,
   });

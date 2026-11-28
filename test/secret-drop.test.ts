@@ -9,8 +9,8 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { type Core } from "../src/wiring.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createServer } from "../src/api/server.ts";
 import { KeychainError } from "../src/credentials/keychain.ts";
 import { createSecretDropStore, SECRET_DROP_TTL_MS } from "../src/credentials/secret-drop.ts";
@@ -157,7 +157,7 @@ describe("fireDropResolution", () => {
       deliveries,
       idempotency: createIdempotencyStore(testMap<IdempotencyRecord>()),
       identity: createIdentityService(testMap(), { externalMembers: testMap() }),
-      run: async () => ({ status: "pending_approval" }) as TurnResult,
+      run: async () => ({ status: "failed" }) as TurnResult,
     };
     const destination = { type: "slack", target: "C1", audienceScopeId: scopeId("channel", "C1") } as const;
     await fireDropResolution(deps, {
@@ -206,10 +206,13 @@ describe("fireDropResolution", () => {
 describe("/v1/keychain/drops — mint, form, redeem", async () => {
   let server: Server;
   let base: string;
-  let built: BuiltApp;
+  let built: Core;
 
   const capFor = (actorId: string, scope = scopeId("personal", actorId), extra: Partial<CapabilityClaims> = {}) =>
-    mintCapabilityToken({ actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, ...extra }, SECRET);
+    mintCapabilityToken(
+      { actorId, scopeId: scope, exp: Date.now() + CAPABILITY_TTL_MS, internalAudience: true, ...extra },
+      SECRET,
+    );
   const post = (path: string, body: unknown, cap?: string) =>
     fetch(`${base}${path}`, {
       method: "POST",
@@ -240,7 +243,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     const conversation = { kind: "channel", threadRef: `ch:C1:${botId}`, channelRef: "C1" } as const;
     await built.app.turn({ surface: "test", actor: { externalId: botId }, conversation, text: "hi", botActor: true });
     const members = [{ id: botId, type: "internal" as const }];
-    return capFor(botId, scopeId("channel", "C1"), { botActor: true, liveActor: true, members });
+    return capFor(botId, scopeId("channel", "C1"), { botActor: true, personAuthority: true, members });
   };
 
   before(async () => {
@@ -253,17 +256,9 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
       ],
     );
     server = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
-      keychain: built.keychain,
-      secretDrops: built.secretDrops,
-      deliveries: built.deliveries,
-      admin: built.admin,
-      auditLog: built.auditLog,
-      runs: built.runs,
-      signals: built.signals,
-      identity: built.identity,
-      fireDropResolution: built.fireDropResolution!,
     });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
@@ -272,16 +267,16 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
-  it("a triggered turn cannot mint a drop", async () => {
+  it("a person's fire can mint a drop", async () => {
     const res = await post(
       "/v1/keychain/drops",
       { service: "stripe", purpose: "p" },
-      await capFor("U_A", scopeId("channel", "C1"), { triggered: true }),
+      await capFor("U_A", scopeId("channel", "C1"), { personAuthority: true, threadRef: "cron:c1:fire:1" }),
     );
-    assert.equal(res.status, 403);
+    assert.equal(res.status, 200, await res.text());
   });
 
-  it("mints onBehalfOf a teammate who steered this live turn, binding the link to them", async () => {
+  it("mints onBehalfOf a teammate who steered this turn, binding the link to them", async () => {
     const THREAD = "ch:C1:1700000000.000200";
     const { run } = await built.runs.enqueue({
       sessionId: THREAD,
@@ -658,10 +653,12 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
 
   it("a drop a Slack bot's turn mints resumes as the bot's work", async () => {
     const threadRef = "dm:release-bot";
+    await built.users.ensure("B-RELEASE");
+    await built.users.markApps(["B-RELEASE"]);
     const minted = await post(
       "/v1/keychain/drops",
       { service: "release-signing", purpose: "sign the release" },
-      await capFor("B-RELEASE", scopeId("personal", "B-RELEASE"), { botActor: true, liveActor: true, threadRef }),
+      await capFor("B-RELEASE", scopeId("personal", "B-RELEASE"), { botActor: true, personAuthority: true, threadRef }),
     );
     const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
     const dm = { kind: "dm", threadRef } as const;
@@ -689,7 +686,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
     const { dropId, formPath } = (await minted.json()) as { dropId: string; formPath: string };
     const token = await verifyCapabilityToken(linkToken(formPath)!, SECRET);
     assert.equal(token?.botActor, true);
-    assert.equal(token?.liveActor, true);
+    assert.equal(token?.personAuthority, true);
     assert.deepEqual(token?.members, [{ id: "B-LEGACY", type: "internal" }]);
     assert.equal((await redeem(dropId, { secret: "bot-secret" }, "B-LEGACY", linkToken(formPath))).status, 200);
   });
@@ -715,7 +712,7 @@ describe("/v1/keychain/drops — mint, form, redeem", async () => {
 
   it("bot work in a person's name can't mint a secret drop", async () => {
     await built.users.record({ id: "U_A", source: "turn", at: Date.now() });
-    const cap = await capFor("U_A", scopeId("personal", "U_A"), { botActor: true, liveActor: true });
+    const cap = await capFor("U_A", scopeId("personal", "U_A"), { botActor: true, personAuthority: true });
     const minted = await post("/v1/keychain/drops", { service: "deploy", purpose: "deploy" }, cap);
     assert.equal(minted.status, 403);
   });
@@ -733,12 +730,9 @@ describe("/v1/keychain/drops — sibling-aware resume", () => {
     const fires: DropResolution[] = [];
     let fired: (() => void) | undefined;
     const server = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
-      keychain: built.keychain,
-      secretDrops: built.secretDrops,
-      deliveries: built.deliveries,
-      auditLog: built.auditLog,
       fireDropResolution: async (drop) => {
         fires.push(drop);
         fired?.();

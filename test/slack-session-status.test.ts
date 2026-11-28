@@ -1,13 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createNoopLeaderLease } from "../src/persistence/leader-lease.ts";
-import { createFeatureFlagStore } from "../src/feature-flags.ts";
 import { createSessionWork } from "../src/sessions/session-work.ts";
 import { createSlackSessionStatus, type SlackSessionStatusState } from "../src/slack/session-status.ts";
 import { createSlackCoreClient, type SlackCoreClientDeps } from "../src/api/slack-core-client.ts";
 import { createTurnStream } from "../src/runs/turn-stream.ts";
 import type { ProcessRecord } from "../src/processes/process-registry.ts";
-import type { Session } from "../src/types.ts";
+import type { Session, WornPersona } from "../src/types.ts";
 import type { Monitor } from "../src/triggers/types.ts";
 import { isTerminal, type Run } from "../src/runs/run-store.ts";
 import { testMap } from "./support/test-database.ts";
@@ -20,10 +19,18 @@ function deferred() {
   return { promise, resolve };
 }
 
+const ACK = {
+  text: "On it.",
+  blocks: [
+    { type: "section", text: { type: "mrkdwn", text: "On it." } },
+    { type: "context", elements: [{ type: "mrkdwn", text: "From Cron Doctor" }] },
+  ],
+};
+
 function fixture() {
   let at = 1_000;
+  let persona: WornPersona | null = null;
   const store = testMap<SlackSessionStatusState>();
-  const flags = createFeatureFlagStore(testMap());
   const records = new Map<string, Run>();
   const jobs: ProcessRecord[] = [];
   const watches: Monitor[] = [];
@@ -96,10 +103,11 @@ function fixture() {
     },
     () => at,
   );
-  const manager = (rows = store) =>
-    createSlackSessionStatus(rows, createNoopLeaderLease(), runs, flags, () => at, {
+  const manager = (rows = store, publicWebUrl = "https://qm.example.test/web-ui/") =>
+    createSlackSessionStatus(rows, createNoopLeaderLease(), runs, () => at, {
       work,
-      publicWebUrl: "https://qm.example.test/web-ui/",
+      publicWebUrl,
+      persona: () => persona,
     });
   const status = manager();
   const add = (id: string) => {
@@ -152,7 +160,6 @@ function fixture() {
   };
   return {
     store,
-    flags,
     records,
     purposes,
     unreturned,
@@ -165,13 +172,16 @@ function fixture() {
     client,
     manager,
     status,
+    ride: status.card(client, "T1:B1", "C1", "1.0"),
+    wear: (worn: WornPersona) => {
+      persona = worn;
+    },
     add,
     background,
     watch,
-    enable: () => flags.setEnabled("slack_loading_indicator", "channel:C1", true, "admin"),
     start: async (id: string, account = "T1:B1") => {
       await status.start(client, account, id, "C1", "1.0");
-      at += 30_000;
+      at += 15_000;
       await status.reconcile(client, account);
     },
     reconcile: () => status.reconcile(client, "T1:B1"),
@@ -183,11 +193,9 @@ function fixture() {
   };
 }
 
-test("cards require opt-in, a reply thread and non-private engagement", async () => {
+test("cards require a reply thread and non-private engagement", async () => {
   const f = fixture();
   const run = f.add("r1");
-  await f.start(run.id);
-  await f.enable();
   await f.status.start(f.client, "T1:B1", run.id, "D1");
   run.deliveryState = null;
   await f.start(run.id);
@@ -200,7 +208,6 @@ test("cards require opt-in, a reply thread and non-private engagement", async ()
 
 test("concurrent starts share one card, terminal runs cannot clear active work, and later work gets a fresh card", async () => {
   const f = fixture();
-  await f.enable();
   const old = f.add("old");
   const next = f.add("next");
   await Promise.all([f.start(old.id), f.start(next.id), f.start(old.id)]);
@@ -223,7 +230,6 @@ test("concurrent starts share one card, terminal runs cannot clear active work, 
 
 test("restart preserves card identity and pending or expired-lease work is waiting, not working", async () => {
   const f = fixture();
-  await f.enable();
   const run = f.add("r1");
   await f.start(run.id);
   const restarted = f.manager();
@@ -231,7 +237,7 @@ test("restart preserves card identity and pending or expired-lease work is waiti
   assert.equal(f.cards.length, 1);
   run.leaseExpiresAt = 0;
   await restarted.reconcile(f.client, "T1:B1");
-  assert.equal(f.card()[0]?.title, "Queued");
+  assert.deepEqual([f.card()[0]?.title, line(f.card()[0])], ["Queued", [OPEN]]);
   run.status = "pending";
   await restarted.reconcile(f.client, "T1:B1");
   assert.equal(f.cards.length, 2);
@@ -244,11 +250,10 @@ test("restart preserves card identity and pending or expired-lease work is waiti
 
 test("background lifecycle survives restart, links to the web conversation from the start, and vanishes at the end", async () => {
   const f = fixture();
-  await f.enable();
   const run = f.add("r1");
   await f.start(run.id);
   assert.equal(f.card().length, 1);
-  assert.deepEqual(line(f.card()[0]), [{ type: "link", url: WEB, text: "Working on it" }]);
+  assert.deepEqual(line(f.card()[0]), [OPEN]);
   const job = f.background();
   run.status = "done";
   await f.reconcile();
@@ -256,6 +261,7 @@ test("background lifecycle survives restart, links to the web conversation from 
   const monitor = f.watch();
   await f.manager().reconcile(f.client, "T1:B1");
   assert.equal(f.card()[0]?.title, "Watching for updates");
+  assert.deepEqual(line(f.card()[0]), [OPEN]);
   f.advance(290_000);
   const wake = f.add("wake");
   await f.reconcile();
@@ -271,25 +277,24 @@ test("background lifecycle survives restart, links to the web conversation from 
   assert.ok(!JSON.stringify(f.cards).includes("secret-"));
 });
 
-const WEB = "https://qm.example.test/web-ui/s/canonical-uuid";
+const OPEN = { type: "link", url: "https://qm.example.test/web-ui/s/canonical-uuid", text: "Open in QM" };
 const line = (block: Record<string, unknown> | undefined) =>
   (block?.details as { elements: Array<{ elements: unknown[] }> } | undefined)?.elements[0]?.elements;
 
 test("the card shows the latest step without an emoji and vanishes once the reply has landed", async () => {
   const f = fixture();
-  await f.enable();
   const run = f.add("r1");
   await f.status.start(f.client, "T1:B1", run.id, "C1", "1.0");
   assert.deepEqual(f.cards, []);
   f.advance(30_000);
   await f.reconcile();
   assert.equal(f.card()[0]?.title, "Still working: thinking it through");
-  assert.deepEqual(line(f.card()[0]), [{ type: "link", url: WEB, text: "Working on it" }]);
+  assert.deepEqual(line(f.card()[0]), [OPEN]);
   f.purposes.set("r1", "Reading status implementation");
   f.advance(51_000);
   await f.reconcile();
   assert.equal(f.card()[0]?.title, "Still working: reading status implementation");
-  assert.deepEqual(line(f.card()[0]), [{ type: "link", url: WEB, text: "Working on it · 1m" }]);
+  assert.deepEqual(line(f.card()[0]), [OPEN, { type: "text", text: " · 1m" }]);
   const posts = f.cards.length;
   await f.reconcile();
   assert.equal(f.cards.length, posts);
@@ -298,7 +303,7 @@ test("the card shows the latest step without an emoji and vanishes once the repl
   run.status = "done";
   await f.reconcile();
   assert.equal(f.card()[0]?.title, "Waiting on CI");
-  assert.deepEqual(line(f.card()[0]), [{ type: "link", url: WEB, text: "Running in the background · 1m" }]);
+  assert.deepEqual(line(f.card()[0]), [OPEN, { type: "text", text: " · 1m" }]);
   job.status = "exited";
   f.outbox.push({ provenance: { sourceThreadRef: "ch:C1:1.0" } }, { provenance: { sourceThreadRef: "ch:C1:9.0" } });
   const shown = f.cards.length;
@@ -311,9 +316,81 @@ test("the card shows the latest step without an emoji and vanishes once the repl
   assert.deepEqual(await f.store.all(), []);
 });
 
+test("a message QM posts carries the card after fifteen quiet seconds and gets its own content back", async () => {
+  const f = fixture();
+  const run = f.add("r1");
+  run.deliveryState = null;
+  await f.ride.posted(ACK, "ack.1", run.id);
+  f.advance(14_999);
+  await f.reconcile();
+  assert.equal(f.cards.length, 0);
+  f.advance(1);
+  await f.reconcile();
+  assert.deepEqual(
+    f.cards.map((call) => [call.method, call.args.ts, call.args.text]),
+    [["chat.update", "ack.1", "On it."]],
+  );
+  assert.deepEqual([f.card().slice(0, 2), f.card()[2]?.type], [ACK.blocks, "task_card"]);
+  await f.ride.posted({ text: "Done." }, "answer.1", run.id);
+  assert.deepEqual(f.cards.at(-1)?.args, { channel: "C1", ts: "ack.1", text: "On it.", blocks: ACK.blocks });
+  run.status = "done";
+  await f.reconcile();
+  assert.deepEqual([f.cards.length, f.deleted, await f.store.all()], [2, [], []]);
+});
+
+test("a plain-text message shows as a section above the card and returns to plain text", async () => {
+  const f = fixture();
+  const run = f.add("r1");
+  await f.ride.posted({ text: "On it." }, "ack.1", run.id);
+  f.advance(15_000);
+  await f.reconcile();
+  assert.deepEqual([f.card()[0], f.card()[1]?.type], [ACK.blocks[0], "task_card"]);
+  run.status = "done";
+  await f.reconcile();
+  assert.deepEqual(f.card(), []);
+});
+
+test("with no message the card stands alone under the persona, and a message that follows takes its place", async () => {
+  const f = fixture();
+  f.wear({ id: "p1", name: "Cron Doctor" });
+  const run = f.add("r1");
+  await f.start(run.id);
+  assert.deepEqual([f.cards[0]?.method, f.cards[0]?.args.username], ["chat.postMessage", "Cron Doctor"]);
+  await f.ride.posted(ACK, "ack.1", run.id);
+  assert.deepEqual([f.deleted, f.cards.length], [["card.1"], 1]);
+  f.advance(15_000);
+  await f.reconcile();
+  assert.deepEqual(
+    [f.cards.at(-1)?.method, f.cards.at(-1)?.args.ts, f.card().map((block) => block.type)],
+    ["chat.update", "ack.1", ["section", "context", "task_card"]],
+  );
+});
+
+test("a message released before another writer rewrites it is never written to again", async () => {
+  const f = fixture();
+  const run = f.add("r1");
+  await f.ride.posted(ACK, "ack.1", run.id);
+  f.advance(15_000);
+  await f.reconcile();
+  await f.ride.release("another.message");
+  assert.equal((await f.store.all())[0]?.cardTs, "ack.1");
+  await f.ride.release("ack.1");
+  assert.deepEqual([f.cards.at(-1)?.method, f.card().length], ["chat.postMessage", 1]);
+  run.status = "done";
+  await f.reconcile();
+  assert.deepEqual([f.cards.filter((call) => call.args.ts === "ack.1").length, f.deleted], [1, ["card.2"]]);
+});
+
+test("without a web URL the details line is the plain-text state", async () => {
+  const f = fixture();
+  await f.start(f.add("r1").id);
+  f.advance(60_000);
+  await f.manager(f.store, "").reconcile(f.client, "T1:B1");
+  assert.deepEqual(line(f.card()[0]), [{ type: "text", text: "Working on it · 1m" }]);
+});
+
 test("work that ends before the card is due posts nothing", async () => {
   const f = fixture();
-  await f.enable();
   const quick = f.add("quick");
   quick.sessionId = "ch:C1:2.0";
   await f.status.start(f.client, "T1:B1", quick.id, "C1", "2.0");
@@ -326,7 +403,6 @@ test("work that ends before the card is due posts nothing", async () => {
 
 test("running subagents keep one flat card titled with their latest step", async () => {
   const f = fixture();
-  await f.enable();
   const run = f.add("r1");
   await f.start(run.id);
   const child = f.subagent("c1", "Slack status card personality");
@@ -337,7 +413,7 @@ test("running subagents keep one flat card titled with their latest step", async
   assert.equal(f.card().length, 1);
   assert.equal(f.card()[0]?.type, "task_card");
   assert.equal(f.card()[0]?.title, "Still working: reading Slack docs");
-  assert.deepEqual(line(f.card()[0]), [{ type: "link", url: WEB, text: "Working on it" }]);
+  assert.deepEqual(line(f.card()[0]), [OPEN]);
   f.purposes.set(child.id, "PR checks for the card");
   await f.reconcile();
   assert.equal(f.card()[0]?.title, "Still working: PR checks for the card");
@@ -358,7 +434,6 @@ test("running subagents keep one flat card titled with their latest step", async
 
 test("a turn that hands work to a subagent and finishes before the card starts still gets a card while that work runs", async () => {
   const f = fixture();
-  await f.enable();
   const run = f.add("r1");
   run.status = "done";
   const child = f.subagent("c1", "Worker");
@@ -378,7 +453,6 @@ test("a turn that hands work to a subagent and finishes before the card starts s
 
 test("a finished subagent whose result has not reached the parent yet keeps the card working", async () => {
   const f = fixture();
-  await f.enable();
   const run = f.add("r1");
   await f.start(run.id);
   const child = f.subagent("c1", "Worker");
@@ -395,7 +469,6 @@ test("a finished subagent whose result has not reached the parent yet keeps the 
 
 test("a busy grandchild's step titles the card", async () => {
   const f = fixture();
-  await f.enable();
   const run = f.add("r1");
   await f.start(run.id);
   const child = f.subagent("c1", "Coordinator");
@@ -410,7 +483,6 @@ test("a busy grandchild's step titles the card", async () => {
 
 test("an unchanged live card costs no store writes or Slack calls per sweep", async () => {
   const f = fixture();
-  await f.enable();
   const run = f.add("r1");
   await f.start(run.id);
   let writes = 0;
@@ -434,7 +506,6 @@ test("an unchanged live card costs no store writes or Slack calls per sweep", as
 
 test("unrelated, expired, disabled and private work never keeps a card active", async () => {
   const f = fixture();
-  await f.enable();
   const run = f.add("r1");
   await f.start(run.id);
   f.background("other-thread");
@@ -452,26 +523,8 @@ test("unrelated, expired, disabled and private work never keeps a card active", 
   assert.deepEqual(f.deleted, ["card.1"]);
 });
 
-test("opt-out settles only this account's card without cancelling work", async () => {
-  const f = fixture();
-  await f.enable();
-  f.add("r1");
-  await f.start("r1");
-  await f.start("r1", "T2:B2");
-  const job = f.background();
-  await f.flags.setEnabled("slack_loading_indicator", "channel:C1", false, "admin");
-  await f.reconcile();
-  assert.deepEqual(f.deleted, ["card.1"]);
-  assert.equal(job.status, "running");
-  assert.deepEqual(
-    (await f.store.all()).map((row) => row.account),
-    ["T2:B2"],
-  );
-});
-
 test("transient failures retry the same card after restart; inaccessible threads retire", async () => {
   const f = fixture();
-  await f.enable();
   const run = f.add("r1");
   await f.start(run.id);
   const call = f.client.apiCall;
@@ -495,7 +548,6 @@ test("transient failures retry the same card after restart; inaccessible threads
 
 test("delayed insert after lease loss cannot replace a newer card", async () => {
   const f = fixture();
-  await f.enable();
   const old = f.add("old");
   const lost = deferred(),
     blocked = deferred(),
@@ -511,7 +563,6 @@ test("delayed insert after lease loss cannot replace a newer card", async () => 
     },
     { hold: async (_key, fn) => fn(lost.promise) },
     f.runs,
-    f.flags,
     f.now,
     { work: f.work },
   );
@@ -531,19 +582,13 @@ test("delayed insert after lease loss cannot replace a newer card", async () => 
 for (const method of ["chat.postMessage", "chat.update"]) {
   test(`late ${method} after lease loss retains its receipt and repairs stale content`, async () => {
     const f = fixture();
-    await f.enable();
     const run = f.add("r1");
     const lost = deferred(),
       blocked = deferred(),
       begun = deferred();
-    const first = createSlackSessionStatus(
-      f.store,
-      { hold: async (_key, fn) => fn(lost.promise) },
-      f.runs,
-      f.flags,
-      f.now,
-      { work: f.work },
-    );
+    const first = createSlackSessionStatus(f.store, { hold: async (_key, fn) => fn(lost.promise) }, f.runs, f.now, {
+      work: f.work,
+    });
     if (method === "chat.update") {
       await f.start(run.id);
       run.status = "done";

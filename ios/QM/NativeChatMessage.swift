@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct NativeChatMessageView: View {
+  static let agentName = "QM"
   let message: ChatMessage
   let client: APIClient
   let showSpeaker: Bool
@@ -10,6 +11,7 @@ struct NativeChatMessageView: View {
   var onAskAbout: ((ChatMessage) -> Void)? = nil
   var forking = false
   var streaming = false
+  var slack: NativeSlackRowStyle? = nil
 
   @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
@@ -34,6 +36,10 @@ struct NativeChatMessageView: View {
   var body: some View {
     if let notice = message.notice {
       noticeView(notice)
+    } else if let slack {
+      NativeSlackRow(message: message, client: client, style: slack) { content }
+        .tint(.brown)
+        .contextMenu { if !streaming { messageActions } }
     } else {
       messageBody
     }
@@ -50,32 +56,10 @@ struct NativeChatMessageView: View {
           Label("Task failed", systemImage: "exclamationmark.circle")
             .font(.subheadline.weight(.medium)).foregroundStyle(.red)
         } else if showSpeaker {
-          Text(isUser ? message.speaker ?? "Input" : "QM")
+          Text(isUser ? message.speaker ?? "Input" : Self.agentName)
             .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
         }
-        if !message.text.isEmpty {
-          MessageMarkdown(text: message.text, client: client, files: message.referencedFiles)
-            .lineSpacing(3)
-        }
-        if message.deleted || message.edited {
-          Label(
-            message.deleted ? "Deleted in Slack" : "Edited in Slack",
-            systemImage: message.deleted ? "trash" : "pencil"
-          )
-          .font(.caption).foregroundStyle(.secondary)
-        }
-        ForEach(message.playgrounds) { artifact in
-          NativePlaygroundCard(artifact: artifact, client: client)
-        }
-        ForEach(Array(message.files.enumerated()), id: \.offset) { _, file in
-          FileAttachmentView(file: file, client: client)
-        }
-        if forking {
-          NativeActionLabel(
-            title: "Fork from here", busyTitle: "Forking conversation…", busy: true
-          )
-          .font(.footnote).foregroundStyle(.secondary)
-        }
+        content
       }
       .padding(.horizontal, isUser ? 14 : 0)
       .padding(.vertical, isUser ? 10 : 0)
@@ -86,6 +70,32 @@ struct NativeChatMessageView: View {
     }
     .tint(.brown)
     .contextMenu { if !streaming { messageActions } }
+  }
+
+  @ViewBuilder private var content: some View {
+    if !message.text.isEmpty {
+      MessageMarkdown(text: message.text, client: client, files: message.referencedFiles)
+        .lineSpacing(3)
+    }
+    if message.deleted || message.edited {
+      Label(
+        message.deleted ? "Deleted in Slack" : "Edited in Slack",
+        systemImage: message.deleted ? "trash" : "pencil"
+      )
+      .font(.caption).foregroundStyle(.secondary)
+    }
+    ForEach(message.playgrounds) { artifact in
+      NativePlaygroundCard(artifact: artifact, client: client)
+    }
+    ForEach(Array(message.files.enumerated()), id: \.offset) { _, file in
+      FileAttachmentView(file: file, client: client)
+    }
+    if forking {
+      NativeActionLabel(
+        title: "Fork from here", busyTitle: "Forking conversation…", busy: true
+      )
+      .font(.footnote).foregroundStyle(.secondary)
+    }
   }
 
   @ViewBuilder private func noticeView(_ notice: ChatNotice) -> some View {

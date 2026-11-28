@@ -17,6 +17,7 @@ import {
   chatContainer,
   findMessage,
   genericChatRef,
+  genericChatAccount,
   genericChatTs,
   parseGenericChatEvent,
   parseGenericChatRef,
@@ -54,12 +55,10 @@ export function signedGenericChatHandler(
   };
 }
 
-type InboundApp = Pick<
-  App,
-  "turn" | "ingestSurfaceEvents" | "onContextRequestCreated" | "fulfillContextRequest" | "tenantFor"
->;
+type InboundApp = Pick<App, "turn" | "ingestSurfaceEvents" | "onContextRequestCreated" | "fulfillContextRequest">;
 
 export function createGenericChatInbound(deps: {
+  accountTenant: (account: string) => Promise<string | undefined>;
   client: GenericChatClient;
   stageBlob: (bytes: Uint8Array) => Promise<{ blobId: string }>;
   storageFetch?: AddressFetch;
@@ -75,7 +74,7 @@ export function createGenericChatInbound(deps: {
 }) {
   const now = deps.now ?? Date.now;
   const cache = deps.surfaceCache;
-  const { surface, tenantKey } = deps.client;
+  const { surface } = deps.client;
   const containerOf = (event: Pick<GenericChatEvent, "account" | "chat">) => eventContainer(surface, event);
   const registered = new LRUCache<string, string>({ max: 10_000 });
 
@@ -120,11 +119,12 @@ export function createGenericChatInbound(deps: {
         body: { error: "bad_request", issues: result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) },
       };
     const event = result.data;
-    const tenant = resolved ?? (await deps.app.tenantFor(tenantKey, event.account));
+    const tenant = resolved ?? (await deps.accountTenant(event.account));
     if (!tenant) {
       console.log(`[${surface}] ignoring an event for account ${event.account}: no serving workspace is bound to it`);
       return { status: 404, body: { error: "unknown_account" } };
     }
+    if (event.origin !== undefined) event.account = genericChatAccount(event.account, event.origin);
     return inTenant(tenant, (): Promise<Reply> => {
       switch (event.type) {
         case "reaction.added":
@@ -325,7 +325,7 @@ export function createGenericChatInbound(deps: {
     }
     const ts = own?.ts ?? genericChatTs(message.created_at, message.id);
     const startsTurn = event.type === "message.created" && !bot;
-    const direct = chat.kind === "dm" || message.mentions_agent;
+    const direct = chat.kind === "dm" || chat.participation === "always" || message.mentions_agent;
     const followed =
       startsTurn && !direct && !guests && thread !== undefined ? await followedThread(container, thread) : undefined;
     const addressed = startsTurn && (direct || followed !== undefined);
@@ -353,7 +353,13 @@ export function createGenericChatInbound(deps: {
       ],
       surface,
     );
-    if (!addressed) return { status: 200, body: { ok: true } };
+    if (!addressed) {
+      if (startsTurn && chat.kind === "group")
+        console.log(
+          `[generic-chat] chat ${chat.id} message ${message.id} names no agent and is in no followed thread: left to ambient judgment`,
+        );
+      return { status: 200, body: { ok: true } };
+    }
     const replyThread = thread ?? (chat.kind === "group" ? message.id : undefined);
     const frame = turnFrame(event, author, message.user.id, humans, replyThread, guests);
     const replyTarget = frame.deliveryTarget;
@@ -367,7 +373,7 @@ export function createGenericChatInbound(deps: {
     const staged = message.files.length
       ? await stageGenericChatFiles(
           deps.client,
-          event.account,
+          { account: event.account, chat: chat.id },
           message.files,
           deps.stageBlob,
           author.displayName,

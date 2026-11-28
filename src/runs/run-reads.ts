@@ -6,16 +6,50 @@ export function createRunReads(
   pg: PgPool,
 ): Pick<
   RunStore,
-  "getByDedupKey" | "activeForThreads" | "activeForThread" | "inFlightForThread" | "activeSessionIds" | "list"
+  | "getByDedupKey"
+  | "requestSources"
+  | "activeForThreads"
+  | "activeForThread"
+  | "inFlightForThread"
+  | "inFlight"
+  | "activeSessionIds"
+  | "list"
 > {
   const { query: q } = pg;
   const reads: Pick<
     RunStore,
-    "getByDedupKey" | "activeForThreads" | "activeForThread" | "inFlightForThread" | "activeSessionIds" | "list"
+    | "getByDedupKey"
+    | "requestSources"
+    | "activeForThreads"
+    | "activeForThread"
+    | "inFlightForThread"
+    | "inFlight"
+    | "activeSessionIds"
+    | "list"
   > = {
     async getByDedupKey(dedupKey) {
       const { rows } = await q(`SELECT * FROM runs WHERE idempotency_key = $1`, [dedupKey]);
       return rows[0] ? rowToRun(rows[0]) : null;
+    },
+
+    async requestSources(tenant, runIds) {
+      if (!runIds.length) return new Map();
+      const rows = await pg.forTenant(tenant).q(
+        `SELECT id, request::jsonb -> 'actor' ->> 'id' AS actor, request::jsonb -> 'origin' ->> 'kind' AS origin,
+                request::jsonb ->> 'surface' AS surface
+         FROM runs WHERE tenant_id = $1 AND id = ANY($2::text[])`,
+        [tenant.id, [...new Set(runIds)]],
+      );
+      return new Map(
+        rows.map((row) => [
+          row.id as string,
+          {
+            actorId: row.actor as string,
+            ...(row.origin ? { origin: { kind: row.origin } } : {}),
+            ...(row.surface ? { surface: row.surface as string } : {}),
+          },
+        ]),
+      );
     },
 
     async activeForThreads(threadRefs) {
@@ -43,6 +77,15 @@ export function createRunReads(
       const { rows } = await q(
         `SELECT * FROM runs WHERE session_id = $1 AND status IN ('pending','running') ORDER BY (status = 'running') DESC, ${turnOrder("runs")}`,
         [sessionId],
+      );
+      return rows.map(rowToRun);
+    },
+
+    async inFlight(tenant, actorIds) {
+      const rows = await pg.forTenant(tenant).q(
+        `SELECT * FROM runs WHERE tenant_id = $1 AND status IN ('pending','running')
+           AND request::jsonb -> 'actor' ->> 'id' = ANY($2::text[])`,
+        [tenant.id, actorIds],
       );
       return rows.map(rowToRun);
     },

@@ -10,7 +10,7 @@ import { encodeRef, serviceCredRef } from "../src/acl/resource-ref.ts";
 import { verifyCapabilityToken, type CapabilityClaims } from "../src/auth/capability-token.ts";
 import { externalTools } from "../src/core/orchestrator/external-tools.ts";
 import type { ToolContext } from "../src/tools/primitives.ts";
-import { scopeId, type TurnRequest } from "../src/types.ts";
+import { scopeId, type TurnRequest, personalScope } from "../src/types.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -52,15 +52,14 @@ test("external Slack strips private and org preloads before the prompt, but keep
   );
   await b.config.hydrate?.();
   await b.identity.refresh();
-  await b.deploymentLayerReady;
+  await b.deploymentLayerReady();
   t.after(async () => {
     b.scheduler.stop();
-    b.deploymentLayerRefresh.stop();
     await b.runtime.stop();
   });
   await b.config.setSharingPosture("org:default-org", "open");
   await b.config.setSoul("org:default-org", "ORG_SOUL_SENTINEL");
-  await b.memory.capture("personal:U1", ["PERSONAL_MEMORY_SENTINEL"], Date.now(), {
+  await b.memory.capture(personalScope("U1"), ["PERSONAL_MEMORY_SENTINEL"], Date.now(), {
     actorId: "U1",
     context: "conversation",
   });
@@ -212,7 +211,7 @@ test("external broker requires the current run lease and both external-safe and 
     { credentials: ["confidential"] },
     { runLeaseToken: "stale" },
     { actorId: "U2" },
-    { scopeId: "personal:U1" },
+    { scopeId: personalScope("U1") },
     { runAttempt: run.attempts + 1 },
   ])
     assert.equal(
@@ -295,13 +294,11 @@ test("external account DMs require admission under the current policy", async ()
 test("external sandbox API token cannot reach private APIs, while its safe broker token works", async (t) => {
   const { createServer } = await import("../src/api/server.ts");
   const { mintCapabilityToken } = await import("../src/auth/capability-token.ts");
-  const { serverDeps } = await import("../src/wiring.ts");
   const config = testConfig({ signingSecret: "synthetic-signing-key-for-http-test", externalSlackPolicies });
   const b = buildApp(config);
   await b.identity.refresh();
   t.after(async () => {
     b.scheduler.stop();
-    b.deploymentLayerRefresh.stop();
     await b.runtime.stop();
   });
   await b.serviceCreds.setServiceCredential("org:default-org", {
@@ -331,7 +328,7 @@ test("external sandbox API token cannot reach private APIs, while its safe broke
   const run = (await b.runs.claimById(queued.id, "test-worker", 60_000))!;
   let forwarded = 0;
   const server = createServer(b.app, {
-    ...serverDeps(config, b),
+    ...b,
     brokerFetch: async () => {
       forwarded++;
       return { status: 200, contentType: "application/json", text: async () => '{"public":"ok"}' };

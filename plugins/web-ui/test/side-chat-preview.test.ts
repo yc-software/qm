@@ -85,15 +85,13 @@ test("side-chat previews show pending work and open loaded replies immediately",
     document
       .querySelector(".side-chat-panel")!
       .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    await until(() => document.querySelector(".side-chat-preview")?.textContent?.trim() === "No reply yet.");
+    await until(() => document.querySelector(".side-chat-preview")?.textContent?.trim() === "No reply.");
     narration = "On it: I will build both halves and test them.";
     h.visibleConversation().onDelivery(side.threadRef);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(document.querySelector(".side-chat-preview")?.textContent?.trim(), "No reply yet.");
     await until(() => document.querySelector(".side-chat-preview")?.textContent?.trim() === narration);
     retracted = true;
     h.visibleConversation().onDelivery(side.threadRef);
-    await until(() => document.querySelector(".side-chat-preview")?.textContent?.trim() === "No reply yet.");
+    await until(() => document.querySelector(".side-chat-preview")?.textContent?.trim() === "No reply.");
     finalized = true;
     h.visibleConversation().onDelivery(side.threadRef);
     await until(() => document.querySelector(".side-chat-preview")?.textContent?.trim() === "Both halves are tested.");

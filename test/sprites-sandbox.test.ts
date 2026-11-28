@@ -13,7 +13,7 @@ import { execFailureDetail, supportsProcessSessions, supportsBlobStaging } from 
 import { createMemorySnapshotStore } from "../src/sandbox/home-snapshot.ts";
 import { sleep } from "../src/util/async.ts";
 import { createMemoryBlobTransferStore } from "../src/persistence/blob-transfer.ts";
-import { scopeId } from "../src/types.ts";
+import { scopeId, personalScope } from "../src/types.ts";
 import { mintCapabilityToken, EGRESS_PROXY_AUD } from "../src/auth/capability-token.ts";
 import { installFakeSprites, FAKE_SPRITES_TOKEN, type FakeSprites } from "./support/fake-sprites.ts";
 import type { Sandbox } from "../src/sandbox/sandbox.ts";
@@ -574,7 +574,7 @@ test("a computer's memory size is its sprite resources policy and a restart resi
   assert.deepEqual(fake.resources(h.id), { limitMB: 4096 });
   await sandbox.restartComputer!(scope, 6);
   assert.deepEqual(fake.resources(h.id), { limitMB: 6144 });
-  const unsized = await sandbox.provision("personal:unsized");
+  const unsized = await sandbox.provision(personalScope("unsized"));
   assert.equal(fake.resources(unsized.id) ?? undefined, undefined);
 });
 

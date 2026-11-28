@@ -31,7 +31,6 @@ test(
       const claims = (actorId: string): CapabilityClaims => ({
         actorId,
         scopeId: room,
-        privateScope: true,
         destination,
         destinations: [{ key: "k-room", label: "#room", ...destination }],
         defaultDestinationKey: "k-room",

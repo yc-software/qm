@@ -18,7 +18,7 @@ let appState: {
   currentView: string;
   viewRenderSeq: number;
   mainEl: HTMLElement | null;
-  me: { user: string; org: string } | null;
+  me: { user: string; personalScope: string; org: string } | null;
 };
 let renderApps: () => Promise<void>;
 let openAppById: (id: string) => void;
@@ -33,7 +33,7 @@ beforeEach(async () => {
   ({ renderApps, openAppById } = await vite.ssrLoadModule("/src/apps-page.ts"));
   appState.currentView = "apps";
   appState.mainEl = main;
-  appState.me = { user: "tester", org: "test" };
+  appState.me = { user: "tester", personalScope: "personal:tester", org: "test" };
 });
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));

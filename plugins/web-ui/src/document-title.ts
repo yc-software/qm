@@ -26,7 +26,7 @@ const VIEW_TITLES: Record<View, string> = {
   apps: "Apps",
   memory: "Memory",
   skills: "Skills",
-  personas: "Personas",
+  personas: "Bots",
   settings: "Settings",
 };
 

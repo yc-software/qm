@@ -1,6 +1,7 @@
 import { appView } from "../app.ts";
 import { sendJson } from "../http.ts";
-import { livePersonTurn } from "./shared.ts";
+import { requirePersonAuthority } from "./shared.ts";
+import { routeSignOff } from "../action-approval.ts";
 import type { ApiCtx, Route } from "./route.ts";
 import { sendShareFailure } from "./sharing.ts";
 
@@ -10,14 +11,16 @@ async function setAppConnectors(ctx: ApiCtx): Promise<void> {
   if (!principalId)
     return sendJson(res, 403, {
       error: "forbidden",
-      message: "only the publisher, in a live conversation or signed in, can lend an app their connectors",
+      message: "only the app's publisher can lend it their connectors",
     });
-  if (!livePersonTurn(ctx)) return;
+  if (!requirePersonAuthority(ctx)) return;
   const connectors = (body as { connectors?: unknown }).connectors;
   if (!Array.isArray(connectors) || !connectors.every((host) => typeof host === "string"))
     return sendJson(res, 400, { error: "bad_request", message: "connectors (array of connected-app hosts) required" });
+  const { signOff, held } = routeSignOff(ctx);
   try {
-    const publishedApp = await app.setAppConnectors(params.id!, connectors, { createdBy: principalId });
+    const publishedApp = await app.setAppConnectors(params.id!, connectors, { createdBy: principalId, signOff });
+    if (held()) return;
     return sendJson(res, 200, { app: appView(publishedApp) });
   } catch (e) {
     return sendShareFailure(res, e);

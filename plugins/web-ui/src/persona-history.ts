@@ -23,6 +23,7 @@ interface HistoryEntry {
   loading: boolean;
   viewing: number | null;
   error: string;
+  seq: number;
 }
 
 interface HistoryPersona {
@@ -47,13 +48,15 @@ const historyState = new Map<string, HistoryEntry>();
 function historyFor(id: string): HistoryEntry {
   let entry = historyState.get(id);
   if (!entry) {
-    entry = { open: false, versions: null, more: false, loading: false, viewing: null, error: "" };
+    entry = { open: false, versions: null, more: false, loading: false, viewing: null, error: "", seq: 0 };
     historyState.set(id, entry);
   }
   return entry;
 }
 
 function reset(entry: HistoryEntry): void {
+  entry.seq += 1;
+  entry.loading = false;
   entry.versions = null;
   entry.more = false;
   entry.viewing = null;
@@ -64,6 +67,7 @@ const base = (id: string) => `/api/personas/${encodeURIComponent(id)}/versions`;
 
 async function loadPage(persona: HistoryPersona, redraw: () => void): Promise<void> {
   const entry = historyFor(persona.id);
+  const seq = ++entry.seq;
   const before = entry.versions?.at(-1)?.version;
   entry.loading = true;
   redraw();
@@ -71,10 +75,12 @@ async function loadPage(persona: HistoryPersona, redraw: () => void): Promise<vo
     const page = await api<{ versions: Version[]; more: boolean }>(
       `${base(persona.id)}?full=1&limit=${PAGE}${before ? `&before=${before}` : ""}`,
     );
+    if (seq !== entry.seq || !entry.open) return;
     entry.versions = [...(entry.versions ?? []), ...page.versions];
     entry.more = page.more;
     entry.error = "";
   } catch (e) {
+    if (seq !== entry.seq || !entry.open) return;
     entry.versions ??= [];
     entry.error = errMessage(e, "Couldn't load history.");
   }
@@ -108,6 +114,7 @@ function summaryLine(version: Version): string {
 export function historySectionTpl(opts: HistoryOptions): TemplateResult {
   const { persona, redraw } = opts;
   const entry = historyFor(persona.id);
+  if (entry.open && entry.versions && entry.versions[0] && entry.versions[0].version < persona.version) reset(entry);
   if (entry.open && entry.versions === null && !entry.loading) void loadPage(persona, redraw);
   const toggle = () => {
     entry.open = !entry.open;

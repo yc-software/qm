@@ -143,6 +143,13 @@ test("turnAtSeq reports an unanswered turn with its recorded work so the retry r
   assert.deepEqual(turnAtSeq(entries, 1), { userSeq: 1, workEntries: 2 });
 });
 
+test("a message posted through the surface tool does not answer its turn, so a retry resumes", () => {
+  const posted = item({ kind: "AgentMessage", text: "On it", turnId: RUN_1, body: { callId: "c2" } }, 4);
+  const entries = [user("do the thing", 1), toolCall(2), toolResult(3), posted];
+  assert.deepEqual(turnAtSeq(entries, 1), { userSeq: 1, workEntries: 2 });
+  assert.deepEqual(findTrailingPartialTurn(entries, RUN_1), { userSeq: 1, workEntries: 2 });
+});
+
 test("turnAtSeq ignores an assistant entry that precedes the turn's own user entry", () => {
   const entries = [user("earlier ask", 1), assistant("earlier reply", 2), user("do the thing", 3), toolCall(4)];
   assert.deepEqual(turnAtSeq(entries, 3), { userSeq: 3, workEntries: 1 });

@@ -7,10 +7,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
-import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { type Core } from "../src/wiring.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { signRequest } from "../src/auth/source-auth.ts";
-import { PROVIDERS, setPublicOAuthClients, type FetchLike } from "../src/connectors/oauth.ts";
+import {
+  PROVIDERS,
+  createSecretClientResolver,
+  setPublicOAuthClients,
+  withPublicOAuthClients,
+  type FetchLike,
+} from "../src/connectors/oauth.ts";
+import { createEnvSecretSource } from "../src/credentials/secret-source.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
 
@@ -32,20 +39,17 @@ function sign(method: string, pathWithQuery: string, body = ""): Record<string, 
 function start(
   fetchImpl: FetchLike,
   opts: { oauthEnv?: NodeJS.ProcessEnv } = {},
-): { base: string; built: BuiltApp; close: () => Promise<void> } {
+): { base: string; built: Core; close: () => Promise<void> } {
   const built = buildApp(
     testConfig({
       dataDir: mkdtempSync(join(tmpdir(), "oauth-routes-")),
     }),
   );
   const server = createServer(built.app, {
+    ...testCore(built),
     ...browserSessionDeps,
     signingSecret: SECRET,
-    replayDedupe: built.replayDedupe,
-    connectorTokens: built.connectorTokens,
-    oauthFlows: built.oauthFlows,
-    auditLog: built.auditLog,
-    oauthEnv: opts.oauthEnv ?? oauthEnv,
+    resolveClient: withPublicOAuthClients(createSecretClientResolver(createEnvSecretSource(opts.oauthEnv ?? oauthEnv))),
     oauthFetch: fetchImpl,
   });
   server.listen(0);

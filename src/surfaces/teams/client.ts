@@ -132,7 +132,6 @@ export function createTeamsClient(deps: { networkClient?: INetworkModule; servic
 
   const client: GenericChatClient & { members: typeof members; member: typeof member } = {
     surface: TEAMS,
-    tenantKey: "teams_tenant",
     reactions: REACTION_NAMES,
     files: false,
     members,

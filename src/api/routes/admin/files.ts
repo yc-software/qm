@@ -17,7 +17,6 @@ export async function readAdminFile(ctx: ApiCtx): Promise<void> {
   const { res, deps, url } = ctx;
   const id = url.searchParams.get("id") ?? "";
   if (!id) return sendJson(res, 400, { error: "bad_request", message: "id required" });
-  if (!deps.files) return sendJson(res, 404, { error: "not_found" });
   const art = await deps.files.get(id);
   if (!art) return sendJson(res, 404, { error: "not_found" });
   const actor = await authorizeAdmin(ctx, art.ownerScopeId);
@@ -55,7 +54,6 @@ export async function downloadAdminFile(ctx: ApiCtx): Promise<void> {
   const { res, deps, url } = ctx;
   const id = url.searchParams.get("id") ?? "";
   if (!id) return sendJson(res, 400, { error: "bad_request", message: "id required" });
-  if (!deps.files) return sendJson(res, 404, { error: "not_found" });
   const art = await deps.files.get(id);
   if (!art) return sendJson(res, 404, { error: "not_found" });
   const actor = await authorizeAdmin(ctx, art.ownerScopeId);
@@ -88,7 +86,6 @@ export async function listAdminFiles(ctx: ApiCtx): Promise<void> {
   const { actor, scope } = authz;
   const nameQuery = (url.searchParams.get("q") ?? "").trim();
   audit(ctx, { principalId: actor.id, action: "files.read", resource: "files", scopeLabel: scope });
-  if (!deps.files) return sendJson(res, 200, { scopeId: scope, files: [] });
   const orgWide = parseScopeId(scope).kind === "org";
   const scopes = orgWide ? [...(await discoverScopes(app, deps, tenantOf(ctx))).keys()] : [scope];
   const files: Array<{
@@ -131,9 +128,6 @@ export async function uploadAdminFile(ctx: ApiCtx): Promise<void> {
   const { res, deps, body } = ctx;
   const authz = await requireScopedAdmin(ctx);
   if (!authz) return;
-  if (!deps.files) return sendJson(res, 404, { error: "not_found", message: "file store not wired" });
-  if (!deps.blobTransfer)
-    return sendJson(res, 501, { error: "not_configured", message: "blob transfer store not wired" });
   const { actor, scope } = authz;
   const streamed = usesBrowserSession(ctx.req, { browser: "self" });
   const staged = streamed ? await stageBrowserUpload(ctx) : null;

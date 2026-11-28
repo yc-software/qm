@@ -1,7 +1,8 @@
-import { test, before } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresDeliveryStore } from "../src/delivery/postgres-delivery-store.ts";
-import { currentTenant } from "../src/tenants/context.ts";
+import { currentTenant, withTenant } from "../src/tenants/context.ts";
+import type { Delivery } from "../src/types.ts";
 import {
   exerciseDeliveryExpiry,
   exerciseDeliveryExpiryRevive,
@@ -11,15 +12,6 @@ import {
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres delivery-store tests";
-
-before(async () => {
-  if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query("DROP TABLE IF EXISTS deliveries CASCADE");
-  await p.end();
-});
 
 test("pg delivery store: idempotent enqueue, pending-by-type, ack, get", { skip }, async () => {
   await exerciseDeliveryStore(createPostgresDeliveryStore(URL!));
@@ -89,6 +81,28 @@ test(
     await oldTask.ack(queued.id, 111);
   },
 );
+
+test("pg delivery store: one target's same-millisecond rows are claimed in creation order", { skip }, async (t) => {
+  const store = createPostgresDeliveryStore(URL!);
+  const enqueue = (i: number, text: string) =>
+    store.enqueue({ destination: { type: "webhook", target: `tie-${i}` }, text, idempotencyKey: `tie-${i}-${text}` });
+  for (let i = 0; i < 20; i += 2) await enqueue(i, "second");
+  await createPostgresDeliveryStore(URL!, { maxAgeMs: 0 }).claimDue("webhook", 60_000);
+  const now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  for (let i = 0; i < 20; i++) for (const text of ["first", "second"]) await enqueue(i, text);
+  t.mock.restoreAll();
+  const sent = new Map<string, string[]>();
+  const send = async (d: Delivery) => {
+    sent.set(d.destination.target, [...(sent.get(d.destination.target) ?? []), d.text]);
+    await store.ack(d.id, now);
+  };
+  const head = (i: number) =>
+    withTenant(currentTenant(), (tenant) => store.claimHead(tenant, "webhook", `tie-${i}`, 60_000));
+  for (let i = 0; i < 20; i++) if (i % 4 < 2) for (let h; (h = await head(i));) await send(h.delivery);
+  for (let rows; (rows = await store.claimDue("webhook", 60_000)).length;) for (const d of rows) await send(d);
+  assert.deepEqual(new Set([...sent.values()].map(String)), new Set(["first,second"]));
+});
 
 test("pg delivery store: undelivered rows expire after the TTL instead of clogging the queue", { skip }, async () => {
   await exerciseDeliveryExpiry((opts) => createPostgresDeliveryStore(URL!, opts));

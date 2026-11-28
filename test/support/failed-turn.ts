@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { testTenant } from "./test-tenant.ts";
-import type { BuiltApp } from "../../src/wiring.ts";
+import type { Core } from "../../src/wiring.ts";
 import type { TurnRequest } from "../../src/types.ts";
 
 export async function failedTurnError(
-  built: Pick<BuiltApp, "app" | "runs" | "errors">,
+  built: Pick<Core, "app" | "runs" | "errors">,
   request: TurnRequest,
 ): Promise<string> {
   const result = await built.app.turn(request);

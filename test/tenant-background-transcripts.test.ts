@@ -10,9 +10,10 @@ import { currentTenant, withTenant } from "../src/tenants/context.ts";
 import type { ScopeId } from "../src/types.ts";
 import { testRuns } from "./support/live-run.ts";
 import { describeTwoTenants } from "./support/two-tenants.ts";
+import { personalScope } from "../src/types.ts";
 
 const THREAD = "web:alice@example.com:conv-1";
-const SCOPE = "personal:alice@example.com" as ScopeId;
+const SCOPE = personalScope("alice@example.com") as ScopeId;
 
 describeTwoTenants("cron replies reach each tenant's web conversation and its open tabs without a web poll", (db) => {
   let sessions: ReturnType<typeof createPostgresSessionStore>;

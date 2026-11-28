@@ -6,6 +6,7 @@ import { audit, authorizeAdmin, orgScope } from "../shared.ts";
 import type { ApiCtx } from "../route.ts";
 import { errMessage } from "../../../util/errors.ts";
 import { validateSlackInstallation } from "../../../surfaces/slack-installation.ts";
+import { SlackInstallStartError } from "../../../surfaces/slack-managed.ts";
 import { slackBotManifestCreationUrl } from "../../../surfaces/slack-manifest.ts";
 import { resolveBranding } from "../../../resolution/branding.ts";
 import emojiData from "emoji-datasource/emoji.json" with { type: "json" };
@@ -30,7 +31,6 @@ export async function getSlackInstallation(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(ctx.deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  if (!ctx.deps.slackInstallation) return sendJson(ctx.res, 404, { error: "not_configured" });
   audit(ctx, {
     principalId: actor.id,
     action: "slack-installation.read",
@@ -61,16 +61,17 @@ export async function getSlackInstallation(ctx: ApiCtx): Promise<void> {
           statusUrl: new URL("/api/admin/slack-installation", origin).href,
         };
       }
-    } catch {
+    } catch (error) {
       setupUnavailable = true;
+      console.warn(`[slack-installation] setup status unavailable: ${errMessage(error)}`);
     }
     return sendJson(ctx.res, 200, {
       ...status,
       setup,
       setupUnavailable,
       source: installation?.appToken ? "admin" : "service",
-      installAvailable: true,
-      installUrl,
+      installAvailable: !setupUnavailable,
+      ...(setupUnavailable ? {} : { installUrl }),
       createUrl,
     });
   }
@@ -91,11 +92,27 @@ export async function putSlackInstallation(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(ctx.deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  if (!ctx.deps.slackInstallation) return sendJson(ctx.res, 404, { error: "not_configured" });
-  const body = ctx.body as { botToken?: unknown; appToken?: unknown };
+  const body = ctx.body as { botToken?: unknown; appToken?: unknown; signingSecret?: unknown; appId?: unknown };
   const botToken = typeof body.botToken === "string" ? body.botToken.trim() : "";
   const appToken = typeof body.appToken === "string" ? body.appToken.trim() : "";
+  const signingSecret = typeof body.signingSecret === "string" ? body.signingSecret.trim() : "";
+  const appId = typeof body.appId === "string" ? body.appId.trim() : undefined;
   try {
+    if (signingSecret && !appToken) {
+      const prov = await ctx.deps.slackInstallation.attachHttpApp({
+        botToken,
+        signingSecret,
+        ...(appId ? { appId } : {}),
+        updatedBy: actor.id,
+      });
+      audit(ctx, {
+        principalId: actor.id,
+        action: "slack-installation.update",
+        resource: "slack-installation",
+        scopeLabel: scope,
+      });
+      return sendJson(ctx.res, 200, { ...prov, configured: true, managed: true, source: "admin" });
+    }
     const workspace = await validateSlackInstallation(
       botToken,
       appToken,
@@ -119,8 +136,10 @@ export async function deleteSlackInstallation(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(ctx.deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  if (!ctx.deps.slackInstallation) return sendJson(ctx.res, 404, { error: "not_configured" });
-  await ctx.deps.slackInstallation.delete(actor.id);
+  const deleteRemote =
+    ctx.url.searchParams.get("deleteRemote") === "true" ||
+    Boolean((ctx.body as { deleteRemote?: unknown } | undefined)?.deleteRemote === true);
+  await ctx.deps.slackInstallation.deleteApp({ updatedBy: actor.id, deleteRemote });
   audit(ctx, {
     principalId: actor.id,
     action: "slack-installation.delete",
@@ -134,10 +153,10 @@ export async function getSlackEmojiList(ctx: ApiCtx): Promise<void> {
   const scope = orgScope(ctx.deps);
   const actor = await authorizeAdmin(ctx, scope);
   if (!actor) return;
-  const managed = await ctx.deps.slackInstallation?.get();
+  const managed = await ctx.deps.slackInstallation.get();
   const botToken = managed?.botToken ?? ctx.deps.slackEnvBotToken ?? "";
   if (!botToken) {
-    const cached = await ctx.deps.config?.getSlackEmojiCatalogDurable(scope);
+    const cached = await ctx.deps.config.getSlackEmojiCatalogDurable(scope);
     if (cached && Object.keys(cached.emoji).length) {
       return sendJson(ctx.res, 200, { emoji: cached.emoji, standard: standardEmoji() });
     }
@@ -172,8 +191,15 @@ export async function startSlackInstallation(ctx: ApiCtx): Promise<void> {
     const origin = ctx.req.headers.origin;
     const result = await ctx.deps.managedSlack.start(step, typeof origin === "string" ? origin : undefined);
     return sendJson(ctx.res, 200, result);
-  } catch {
-    return sendJson(ctx.res, 502, { error: "slack_installation_unavailable" });
+  } catch (error) {
+    console.warn(`[slack-installation] start failed: ${errMessage(error)}`);
+    return sendJson(ctx.res, 502, {
+      error: "slack_installation_unavailable",
+      message:
+        error instanceof SlackInstallStartError
+          ? error.message
+          : "The Slack installation service didn't respond. Try again in a few minutes.",
+    });
   }
 }
 
@@ -211,9 +237,120 @@ export async function managedSlackRequest(ctx: ApiCtx): Promise<void> {
 export async function managedSlackEvent(ctx: ApiCtx): Promise<void> {
   const slack = ctx.deps.managedSlack;
   if (!slack) return sendJson(ctx.res, 404, { error: "not_configured" });
-  const tenant = await managedSlackTenant(ctx, slackTeam(ctx.body));
+  const teamId = slackTeam(ctx.body);
+  const tenant = await managedSlackTenant(ctx, teamId);
   if (!tenant) return sendJson(ctx.res, 401, { error: "unauthorized" });
-  if ((await ctx.app.tenantFor("slack_team", slackTeam(ctx.body))) !== tenant)
+  const resolvedTenant = await ctx.app.tenantFor("slack_team", teamId);
+  if (resolvedTenant !== tenant) {
+    console.warn(
+      "[slack-installation] installation_mismatch",
+      JSON.stringify({ teamId: teamId ?? null, tenant, resolvedTenant: resolvedTenant ?? null }),
+    );
     return sendJson(ctx.res, 409, { error: "installation_mismatch" });
+  }
   return inTenant(tenant, () => slack.handle(ctx.req, ctx.res, ctx.body));
+}
+
+export async function createSlackInstallation(ctx: ApiCtx): Promise<void> {
+  const scope = orgScope(ctx.deps);
+  const actor = await authorizeAdmin(ctx, scope);
+  if (!actor) return;
+  const body = (ctx.body ?? {}) as {
+    name?: unknown;
+    description?: unknown;
+    configToken?: unknown;
+    refreshToken?: unknown;
+    saveOrgConfigToken?: unknown;
+    orgDeploy?: unknown;
+  };
+  const branding = await resolveBranding(ctx.deps.config, scope, ctx.deps.brandingDefault);
+  const name = typeof body.name === "string" && body.name.trim() ? body.name.trim() : (branding.selfLabel ?? "qm");
+  let configToken: string | undefined;
+  if (typeof body.refreshToken === "string" && body.refreshToken.trim()) configToken = body.refreshToken;
+  else if (typeof body.configToken === "string") configToken = body.configToken;
+  try {
+    const created = await ctx.deps.slackInstallation.createApp({
+      name,
+      ...(typeof body.description === "string" ? { description: body.description } : {}),
+      ...(configToken ? { configToken } : {}),
+      saveOrgConfigToken: body.saveOrgConfigToken !== false,
+      ...(body.orgDeploy === true ? { orgDeploy: true } : {}),
+      updatedBy: actor.id,
+    });
+    audit(ctx, {
+      principalId: actor.id,
+      action: "slack-installation.create",
+      resource: "slack-installation",
+      scopeLabel: scope,
+    });
+    return sendJson(ctx.res, 200, created.status);
+  } catch (error) {
+    return sendJson(ctx.res, 400, { error: "slack_app_create_failed", message: errMessage(error) });
+  }
+}
+
+export async function slackOAuthCallback(ctx: ApiCtx): Promise<void> {
+  const slackErr = ctx.url.searchParams.get("error");
+  const state = ctx.url.searchParams.get("state") ?? "";
+  const dot = state.indexOf(".");
+  const target = dot > 0 ? state.slice(0, dot) : "base";
+  const destPath = target === "base" ? "/settings/slack-settings" : `/personas/${encodeURIComponent(target)}`;
+  const base = (ctx.deps.publicUrl ?? ctx.deps.portalUrl ?? "").replace(/\/+$/, "");
+  const redirectTo = (query: string) => {
+    ctx.res.writeHead(302, { location: `${base}${destPath}?${query}` });
+    ctx.res.end();
+  };
+  if (slackErr) return redirectTo(`slack_error=${encodeURIComponent(slackErr)}`);
+  const code = ctx.url.searchParams.get("code") ?? "";
+  if (!code || !state) return redirectTo("slack_error=missing_oauth_params");
+  try {
+    await ctx.deps.slackInstallation.completeOAuth({ code, state });
+    return redirectTo("slack=connected");
+  } catch (error) {
+    return redirectTo(`slack_error=${encodeURIComponent(errMessage(error))}`);
+  }
+}
+
+export async function getSlackConfigToken(ctx: ApiCtx): Promise<void> {
+  const scope = orgScope(ctx.deps);
+  const actor = await authorizeAdmin(ctx, scope);
+  if (!actor) return;
+  return sendJson(ctx.res, 200, await ctx.deps.slackInstallation.configTokenStatus());
+}
+
+export async function putSlackConfigToken(ctx: ApiCtx): Promise<void> {
+  const scope = orgScope(ctx.deps);
+  const actor = await authorizeAdmin(ctx, scope);
+  if (!actor) return;
+  const body = (ctx.body ?? {}) as { accessToken?: unknown; refreshToken?: unknown };
+  try {
+    const status = await ctx.deps.slackInstallation.setConfigToken({
+      ...(typeof body.accessToken === "string" ? { accessToken: body.accessToken } : {}),
+      ...(typeof body.refreshToken === "string" ? { refreshToken: body.refreshToken } : {}),
+      updatedBy: actor.id,
+    });
+    audit(ctx, {
+      principalId: actor.id,
+      action: "slack-config-token.update",
+      resource: "slack-config-token",
+      scopeLabel: scope,
+    });
+    return sendJson(ctx.res, 200, status);
+  } catch (error) {
+    return sendJson(ctx.res, 400, { error: "invalid_config_token", message: errMessage(error) });
+  }
+}
+
+export async function deleteSlackConfigToken(ctx: ApiCtx): Promise<void> {
+  const scope = orgScope(ctx.deps);
+  const actor = await authorizeAdmin(ctx, scope);
+  if (!actor) return;
+  await ctx.deps.slackInstallation.deleteConfigToken();
+  audit(ctx, {
+    principalId: actor.id,
+    action: "slack-config-token.delete",
+    resource: "slack-config-token",
+    scopeLabel: scope,
+  });
+  return sendJson(ctx.res, 200, { configured: false, hasRefreshToken: false });
 }

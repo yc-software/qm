@@ -8,6 +8,10 @@ import { INTERRUPTED_TOOL_RESULT } from "./context-compaction.ts";
 import type { Item, NewItem } from "../sessions/items.ts";
 import { DuplicateCallError } from "../sessions/session-store.ts";
 import type { StepFields } from "./step-recorder.ts";
+import type { SelfApiCall } from "../tools/self-api.ts";
+import { APPROVED_ACTION_HEADER, API_ACTION_TOOL } from "../api/contract.ts";
+
+type SelfApiMethod = Parameters<SelfApiCall>[0];
 
 export type BridgedTool = {
   name: string;
@@ -236,12 +240,32 @@ export async function resumeInterruptedToolCall(
   };
 }
 
+function approvedApiTool(call: ApprovedToolCall, ref: ToolContextRef): BridgedTool {
+  return {
+    name: API_ACTION_TOOL,
+    description: "",
+    parameters: {},
+    async execute() {
+      const selfApi = ref.current?.selfApi;
+      if (!selfApi) throw new Error("the approved request can't be sent from this turn");
+      const { method, path, body } = call.input as { method: SelfApiMethod; path: string; body?: unknown };
+      const response = await selfApi(method, path, body, ref.abortSignal, {
+        [APPROVED_ACTION_HEADER]: call.requestId,
+      });
+      const text = `HTTP ${response.status}\n${typeof response.body === "string" ? response.body : JSON.stringify(response.body)}`;
+      if (response.status >= 400) throw new Error(text);
+      return { content: [{ type: "text", text }] };
+    },
+  };
+}
+
 export async function runApprovedToolCall(
   call: ApprovedToolCall,
   ref: ToolContextRef,
   tools: readonly BridgedTool[],
   opts: { cancel?: AbortSignal },
 ): Promise<ApprovedToolCallOutcome> {
+  if (call.tool === API_ACTION_TOOL) tools = [approvedApiTool(call, ref)];
   const { items, text, isError } = await runToolCallOnce(call, ref, tools, {
     ...opts,
     fresh: { approvedRequestId: call.requestId },
@@ -267,5 +291,5 @@ export function approvedCallSteerNote(
 }
 
 export function deniedCallSteerNote(outcome: { summary: string; approver: string }): string {
-  return `[system] ${outcome.approver} denied the pending call ${outcome.summary}, so it did not run. Do not retry it unless they ask again.`;
+  return `[system] ${outcome.approver} declined the pending call ${outcome.summary}, so it did not run. Do not retry it unless they ask again.`;
 }

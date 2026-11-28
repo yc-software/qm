@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { signedHeaders } from "../plugins/chassis/src/core-client.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import type { Principal, TurnRequest } from "../src/types.ts";
@@ -24,14 +24,11 @@ const SECRET = "core-signing-secret".repeat(3);
 const built = buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "run-signal-")) }));
 const portalSession = { ...browserSessionDeps.portalSession };
 const core = createServer(built.app, {
+  ...testCore(built),
   ...browserSessionDeps,
   portalSession,
   replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
   signingSecret: SECRET,
-  webhookReceiver: built.webhookReceiver,
-  featureFlags: built.featureFlags,
-  loops: built.loops,
-  uiState: built.uiState,
 });
 core.listen(0);
 const corePort = (core.address() as AddressInfo).port;
@@ -133,7 +130,7 @@ test("core route: a malformed request is rejected 400, and privileged fields are
 
   const smuggled = {
     ...steererRequest("internal:U1", "t-sanitize", "x"),
-    origin: { kind: "automation", useOwnerKeychain: true },
+    origin: { kind: "automation" },
     spawned: true,
   };
   const r = await coreSignal(run.id, { kind: "steer", text: "x", request: smuggled });
@@ -936,9 +933,10 @@ test("signalRun refuses a client_result from anyone but the run's own actor", as
 
 test("core route: a client_result is accepted once, with a per-call dedupe key", async () => {
   const { run } = await built.runs.enqueue({ sessionId: "t-client", request: withPageTools("t-client") });
+  const callId = `call-1__${"a/b+".repeat(400)}`;
   const body = {
     kind: "client_result",
-    callId: "call-1",
+    callId,
     result: { content: "rows 3-5", structured: { rows: [3, 4, 5] }, isError: false },
   };
   const first = await coreSignal(run.id, body);
@@ -950,8 +948,8 @@ test("core route: a client_result is accepted once, with a per-call dedupe key",
   const signals = await built.signals.takePending(run.id);
   assert.equal(signals.length, 1);
   assert.equal(signals[0]!.kind, "client_result");
-  assert.equal(signals[0]!.callId, "call-1");
-  assert.equal(signals[0]!.dedupeKey, `client:${run.id}:call-1`);
+  assert.equal(signals[0]!.callId, callId);
+  assert.equal(signals[0]!.dedupeKey, `client:${run.id}:${callId}`);
   assert.deepEqual(signals[0]!.result, body.result);
 });
 
@@ -960,7 +958,6 @@ test("core route: malformed client_result signals are rejected 400", async () =>
   for (const body of [
     { kind: "client_result", result: { content: "x" } },
     { kind: "client_result", callId: "", result: { content: "x" } },
-    { kind: "client_result", callId: "c".repeat(257), result: { content: "x" } },
     { kind: "client_result", callId: "c1" },
     { kind: "client_result", callId: "c1", result: "x" },
     { kind: "client_result", callId: "c1", result: { content: 5 } },

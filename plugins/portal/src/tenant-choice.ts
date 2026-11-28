@@ -32,7 +32,6 @@ export interface EmailTenants {
 export interface ExternalOrg {
   id: string;
   name: string;
-  partnerChatAccount?: string;
 }
 
 interface ChoiceClaims {

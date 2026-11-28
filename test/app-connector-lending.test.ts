@@ -4,14 +4,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
-import { createApp } from "../src/api/app.ts";
+import { appView, createApp } from "../src/api/app.ts";
 import { createServer } from "../src/api/server.ts";
-import { createDeployStore, WITHDRAW_LOANS_MIGRATION, type PublishedApp } from "../src/deploy/deploy-store.ts";
-import { APP_TABLES } from "../src/deploy/page-views.ts";
-import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
-import { createPgPool } from "../src/persistence/pg-pool.ts";
-import { createPostgresAuditLog } from "../src/admin/postgres-audit-log.ts";
-import { testTenant } from "./support/test-tenant.ts";
+import { createDeployStore } from "../src/deploy/deploy-store.ts";
 import { createDeployService } from "../src/deploy/deploy-service.ts";
 import { createAclStore } from "../src/acl/acl-store.ts";
 import { createIdentityService } from "../src/identity/identity-service.ts";
@@ -27,10 +22,14 @@ import { singleProcessDeps } from "./support/single-process.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 import { testDatabaseUrl, testMap, testDeployBackings } from "./support/test-database.ts";
+import { testTenant } from "./support/test-tenant.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { liveRunClaims, liveRunStore } from "./support/live-run.ts";
+import { signOffs } from "./support/signed-off-action.ts";
+import type { PendingApprovalRecord } from "../src/types.ts";
 import { createControlService } from "../src/api/control-service.ts";
+import { testCore } from "./support/build-app.ts";
 
 const SIGNING = "s".repeat(64);
 const PUBLISHER = "pub@example.com";
@@ -76,7 +75,11 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
     name: "mailer",
   });
   const upstream: Array<{ url: string; method: string; headers: Record<string, string>; body?: string }> = [];
+  const signOff = signOffs({ getItems: async () => [] });
   const server = createServer(app, {
+    ...testCore(),
+    sessions: signOff.sessions as never,
+    approvals: testMap<PendingApprovalRecord>(),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SIGNING,
     auditLog,
@@ -93,10 +96,10 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
   await new Promise<void>((resolve) => server.listen(0, resolve));
   const port = (server.address() as AddressInfo).port;
   t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
-  const call = async (path: string, token: string, body: unknown) => {
+  const call = async (path: string, token: string, body: unknown, headers: Record<string, string> = {}) => {
     const res = await fetch(`http://localhost:${port}${path}`, {
       method: "POST",
-      headers: { "x-agent-capability": token, "content-type": "application/json" },
+      headers: { "x-agent-capability": token, "content-type": "application/json", ...headers },
       body: JSON.stringify(body),
     });
     return { status: res.status, json: (await res.json()) as Record<string, unknown> };
@@ -113,7 +116,7 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
     SIGNING,
   );
   const broker = (body: Record<string, unknown>) => call("/v1/credentials/broker", appToken, body);
-  const control = async (path: string, body: unknown, claims: object = {}, actorId = PUBLISHER) =>
+  const control = async (path: string, body: unknown, claims: object = {}, actorId = PUBLISHER, approved = false) =>
     call(
       path,
       await mintCapabilityToken(
@@ -122,25 +125,39 @@ async function agent(t: { after: (fn: () => Promise<void>) => void }) {
           scopeId: personalScope(actorId),
           aud: CONTROL_PLANE_AUD,
           ...liveRunClaims(actorId),
+          sessionId: "dm:live",
           ...claims,
           exp: Date.now() + 60_000,
         },
         SIGNING,
       ),
       body,
+      approved
+        ? signOff.approve({ actorId, sessionId: "dm:live", runId: `live:${actorId}` }, { method: "POST", path, body })
+        : {},
     );
-  const lend = (actorId: string, connectors: unknown, liveActor = true, run: object = {}) =>
-    control(`/v1/apps/${d.id}/connectors`, { connectors }, { ...run, liveActor }, actorId);
+  const lend = (actorId: string, connectors: unknown, approved = true) =>
+    control(`/v1/apps/${d.id}/connectors`, { connectors }, {}, actorId, approved);
   return { d, app, deploy, deployStore, audits, upstream, broker, lend, control };
 }
 
 const get = (host: string, path = "/v1/me") => ({ connector: host, url: `https://${host}${path}` });
 
-test("only the live publisher can lend, per app and per connected-app host", async (t) => {
+test("only the publisher can lend, with a signed-off card, per app and per connected-app host", async (t) => {
   const h = await agent(t);
   assert.equal((await h.broker(get("slack.com"))).json.error, "connector_not_lent", "nothing is lent by default");
   assert.equal((await h.lend(CO_MANAGER, ["slack.com"])).status, 403, "a co-manager cannot lend the publisher's");
-  assert.equal((await h.lend(PUBLISHER, ["slack.com"], false)).status, 403, "an unattended turn cannot lend");
+  const card = await h.lend(PUBLISHER, ["slack.com"], false);
+  assert.deepEqual([card.status, card.json.error], [202, "approval_required"], "lending raises an approval card");
+  assert.equal((await h.broker(get("slack.com"))).json.error, "connector_not_lent", "an unapproved card lends nothing");
+  const withoutAuthority = await h.control(
+    `/v1/apps/${h.d.id}/connectors`,
+    { connectors: ["slack.com"] },
+    {
+      personAuthority: false,
+    },
+  );
+  assert.equal(withoutAuthority.json.error, "authority_required");
   assert.equal((await h.lend(PUBLISHER, ["evil.example.com"])).json.error, "unknown_connector");
 
   const lent = await h.lend(PUBLISHER, ["Slack.com", "gmail.googleapis.com"]);
@@ -196,31 +213,34 @@ test("only the live publisher can lend, per app and per connected-app host", asy
       exp: Date.now() + 60_000,
     },
   );
-  assert.equal(viaTool.ok || viaTool.code, "human_consent_required");
+  assert.equal(viaTool.ok || viaTool.code, "forbidden");
   assert.deepEqual(await h.app.appGrantees(h.d.id), unshared);
   for (const [path, body, claims] of [
-    [`/v1/shares/deploy/${h.d.id}`, { scope: "org" }, { triggered: true }],
+    [`/v1/shares/deploy/${h.d.id}`, { scope: "org" }, { personAuthority: false }],
     ["/v1/share", { type: "deploy", id: h.d.id, toScope: personalScope(CO_MANAGER) }, { botActor: true }],
-    ["/v1/share", { type: "deploy", id: h.d.id, toScope: "personal:x@example.com", move: true }, { triggered: true }],
+    [
+      "/v1/share",
+      { type: "deploy", id: h.d.id, toScope: personalScope("x@example.com"), move: true },
+      { personAuthority: false },
+    ],
   ] as const) {
     const before = await h.app.appGrantees(h.d.id);
-    assert.equal((await h.control(path, body, claims)).json.error, "human_consent_required");
+    assert.equal((await h.control(path, body, claims)).status, 403);
+    assert.equal((await h.control(path, body)).json.error, "approval_required");
     assert.deepEqual(await h.app.appGrantees(h.d.id), before);
-    assert.equal((await h.control(path, body)).status, 200);
+    assert.equal((await h.control(path, body, {}, PUBLISHER, true)).status, 200);
     assert.notDeepEqual(await h.app.appGrantees(h.d.id), before);
   }
 });
 
 test("public apps cannot borrow connectors", async (t) => {
   const h = await agent(t);
-  await h.app.setAppPublic(h.d.id, true, { createdBy: PUBLISHER, personAtKeyboard: true });
+  const publisher = { createdBy: PUBLISHER, signOff: async () => true };
+  await h.app.setAppPublic(h.d.id, true, publisher);
   assert.match(String((await h.lend(PUBLISHER, ["slack.com"])).json.message), /public app cannot borrow/);
-  await h.app.setAppPublic(h.d.id, false, { createdBy: PUBLISHER, personAtKeyboard: true });
+  await h.app.setAppPublic(h.d.id, false, publisher);
   await h.lend(PUBLISHER, ["slack.com"]);
-  await assert.rejects(
-    h.app.setAppPublic(h.d.id, true, { createdBy: PUBLISHER, personAtKeyboard: true }),
-    /cannot be public/,
-  );
+  await assert.rejects(h.app.setAppPublic(h.d.id, true, publisher), /cannot be public/);
 });
 
 test("a new running version from anyone but the publisher withdraws the loan", async (t) => {
@@ -248,6 +268,17 @@ test("moving the app out of its publisher's library withdraws the loan", async (
   assert.equal((await h.lend(PUBLISHER, [])).status, 200, "withdrawing still works");
 });
 
+test("a loan left on an app outside its publisher's library is refused at use", async (t) => {
+  const h = await agent(t);
+  await h.lend(PUBLISHER, ["slack.com"]);
+  assert.equal((await h.broker(get("slack.com"))).status, 200, "in the publisher's own library the loan works");
+  await h.deployStore.setOwnerScope(h.d.id, scopeId("group", "home"));
+  const sent = h.upstream.length;
+  assert.equal((await h.broker(get("slack.com"))).json.error, "connector_not_lent");
+  assert.equal(h.upstream.length, sent, "nothing leaves");
+  assert.equal(appView((await h.app.getApp(h.d.id))!).connectors, undefined, "and the app lists no loan");
+});
+
 test("while the app borrows connectors, only the publisher can share it", async (t) => {
   const h = await agent(t);
   const d = await h.app.deploy({
@@ -256,7 +287,8 @@ test("while the app borrows connectors, only the publisher can share it", async 
     entrypoint: "x",
     files: [],
   });
-  const lend = (connectors: string[]) => h.deploy.setAppConnectors(d.id, connectors, { createdBy: PUBLISHER });
+  const lend = (connectors: string[]) =>
+    h.deploy.setAppConnectors(d.id, connectors, { createdBy: PUBLISHER, signOff: async () => true });
   const share = (grantedBy: string) =>
     h.app.grant(
       testTenant,
@@ -274,23 +306,4 @@ test("while the app borrows connectors, only the publisher can share it", async 
   await share(PUBLISHER);
   await lend([]);
   await share(CO_MANAGER);
-});
-
-test("an upgrade withdraws loans on apps outside their publisher's library", async () => {
-  const url = testDatabaseUrl();
-  const apps = createPostgresMapFactory(url).map<PublishedApp>("deployments", undefined, APP_TABLES);
-  const lent = (id: string, owner: string) =>
-    ({ id, createdBy: PUBLISHER, ownerScopeId: personalScope(owner), connectors: ["slack.com"] }) as PublishedApp;
-  await apps.put("kept", lent("kept", PUBLISHER));
-  await apps.put("moved", lent("moved", CO_MANAGER));
-  const audit = createPostgresAuditLog(url);
-  await audit.events(testTenant);
-  const pg = createPgPool(url);
-  await pg.migrate(WITHDRAW_LOANS_MIGRATION).finally(() => pg.close());
-  assert.deepEqual((await apps.get("kept"))?.connectors, ["slack.com"]);
-  assert.equal((await apps.get("moved"))?.connectors, undefined);
-  assert.deepEqual(
-    (await audit.events(testTenant)).map((e) => e.resource),
-    ["deployment:moved"],
-  );
 });

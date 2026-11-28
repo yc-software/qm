@@ -4,6 +4,7 @@ import { handbackStop } from "../../runs/run-store.ts";
 import { createKeyedQueue } from "../../util/async.ts";
 import type { ScopeId } from "../../types.ts";
 import { swallowAs } from "../../util/errors.ts";
+import { tracePhase } from "../../../plugins/chassis/src/error-reporting.ts";
 import { isObj } from "../../util/objects.ts";
 import { headSlice, tailSlice } from "../../util/text.ts";
 import { GOAL_INBOX_POLL_MS, goalInboxHeld, GOAL_SWARM_HELD_NOTE, takeGoalMessages } from "../goal.ts";
@@ -60,7 +61,7 @@ function capPayloadStrings(v: unknown): unknown {
   return v;
 }
 
-export function createRecorder(ref: ToolContextRef) {
+export function createRecorder(ref: ToolContextRef, holdMailWhenTurnEnds = false) {
   const logResult = async (
     summary: { callId: string; isError: boolean; result: string } & Record<string, unknown>,
   ): Promise<void> => {
@@ -147,7 +148,7 @@ export function createRecorder(ref: ToolContextRef) {
     return { text: appended, delivered };
   };
 
-  const recordResult = async <T extends { content: Array<{ type: string; text?: string }>; details?: unknown }>(
+  const recordResultNow = async <T extends { content: Array<{ type: string; text?: string }>; details?: unknown }>(
     callId: string,
     summary: Record<string, unknown>,
     ret: T,
@@ -259,7 +260,10 @@ export function createRecorder(ref: ToolContextRef) {
         }
       }
       if (stopped()) return ret;
-      const mail = await deliverMessages(ret);
+      const mail =
+        holdMailWhenTurnEnds && (ret as { terminate?: boolean }).terminate === true
+          ? { text: "", delivered: [] }
+          : await deliverMessages(ret);
       result += mail.text;
       const goal = ref.goal;
       const goalInbox =
@@ -294,6 +298,7 @@ export function createRecorder(ref: ToolContextRef) {
         await ref.current?.sessionSyscalls?.acknowledge?.(mail.delivered).catch(() => undefined);
       return ret;
     });
+  const recordResult: typeof recordResultNow = (...args) => tracePhase("tool.result", () => recordResultNow(...args));
 
   const recordCoreAuthoredResult = <T extends { content: Array<{ type: string; text?: string }>; details?: unknown }>(
     callId: string,
