@@ -1,5 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { ChevronRight, Download, Maximize2, X } from "lucide";
+import { ChevronRight, Download, ExternalLink, Maximize2, X } from "lucide";
 import "./html-preview.css";
 import { animateDetailsToggle } from "./details-motion";
 import { trapDialogFocus } from "./dialog-focus";
@@ -53,8 +53,24 @@ function onToggleClick(event: Event): void {
   setExpanded(layer, !layer.matches(":popover-open"));
 }
 
-export function htmlPreviewCard(name: string, src: string, size?: number, href?: string): TemplateResult {
-  const key = `${href ?? src}:${name}`;
+export interface PreviewCard {
+  name: string;
+  src: string;
+  size?: number;
+  download?: string;
+  open?: string;
+  sandbox?: string;
+}
+
+export function htmlPreviewCard({
+  name,
+  src,
+  size,
+  download,
+  open,
+  sandbox = "allow-scripts",
+}: PreviewCard): TemplateResult {
+  const key = `${download ?? src}:${name}`;
   return html`<div class="file-html-slot">
     <div class="file-html-layer" popover="manual" tabindex="-1" @click=${onScrimClick} @keydown=${onLayerKeydown}>
       <details
@@ -69,14 +85,15 @@ export function htmlPreviewCard(name: string, src: string, size?: number, href?:
           <span class="activity-chevron">${icon(ChevronRight, 14)}</span>
           <span class="file-html-title">${fileLabel(name, size)}</span>
           <span class="file-html-actions">
-            ${href ? html`<a href=${href} download=${name}>${icon(Download, 14)} Download</a>` : nothing}
+            ${download ? html`<a href=${download} download=${name}>${icon(Download, 14)} Download</a>` : nothing}
+            ${open ? html`<a href=${open} target="_blank" rel="noreferrer">${icon(ExternalLink, 14)} Open</a>` : nothing}
             <button type="button" @click=${onToggleClick}>
               <span class="file-html-expand">${icon(Maximize2, 14)} Expand</span>
               <span class="file-html-close">${icon(X, 14)} Close</span>
             </button>
           </span>
         </summary>
-        <iframe sandbox="allow-scripts" src=${src} title=${name} loading="lazy" tabindex="0"></iframe>
+        <iframe sandbox=${sandbox} src=${src} title=${name} loading="lazy" tabindex="0"></iframe>
       </details>
     </div>
   </div>`;

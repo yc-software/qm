@@ -66,6 +66,7 @@ test("/me describes the signed-in person, the company and the web app's settings
     slackWorkspaceUrl: "https://acme.slack.com",
     slackAppIconUrl: "https://avatars.slack-edge.com/app_72.png",
     chatSurfaces: [{ kind: "slack", label: "Slack" }],
+    appsDomain: null,
     individualModelAuth: false,
     modelAuthConnected: false,
     impersonatedBy: null,
