@@ -47,7 +47,7 @@ describe("runTrigger: a cron runs as whoever owns it", () => {
     const req = seen[0]!;
     assert.equal(req.actor.externalId, "U-carol");
     assert.equal(req.conversation.kind, "channel");
-    assert.equal((await deps.deliveries.pending("slack")).length, 1);
+    assert.equal(req.surfaceTools, true, "posts to the channel itself");
   });
 
   it("a webhook in a channel runs as its owner", async () => {

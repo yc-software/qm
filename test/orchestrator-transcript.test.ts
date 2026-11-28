@@ -208,7 +208,7 @@ test("a cron-delivered digest lands as a delivery event with origin, not recipie
   const pending = await built.deliveries.pending("principal");
   assert.equal(pending.length, 1);
   assert.match(pending[0]!.text, /deploy digest ready/);
-  assert.match(pending[0]!.provenance?.fireKey ?? "", new RegExp(`^cron:${cron.id}:manual:`));
+  assert.equal(pending[0]!.provenance?.sourceId, cron.id);
 
   await built.app.recordPrincipalDelivery(pending[0]!.id, "dm:D-alice");
   const recipient = await built.sessions.getByThread("dm:D-alice");

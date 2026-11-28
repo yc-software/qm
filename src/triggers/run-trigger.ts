@@ -1,3 +1,4 @@
+import { FIRE_UNPOSTED } from "../core/orchestrator/reply-check.ts";
 import type {
   DeliveryProvenance,
   Destination,
@@ -181,6 +182,7 @@ export async function destinationVisible(
 }
 
 const SCHEDULED_SURFACES = new Set(["cron", "loop", "keychain-ask"]);
+const LIVE_SURFACES = new Set(["monitor", "cron"]);
 
 function homeRoster(
   kind: string | null,
@@ -262,7 +264,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ? (destinationIsHome && homeAccess.ok) || (await destinationVisible(deps, actorId, spec.destination))
     : true;
   const notVisibleNote = "destination is no longer visible to the cron owner — delivery skipped";
-  const liveDelivery = spec.surface === "monitor" && Boolean(spec.destination) && deliverable;
+  const liveDelivery = LIVE_SURFACES.has(spec.surface) && Boolean(spec.destination) && deliverable;
 
   let status: TurnResult["status"] | undefined;
   let errorCode: string | undefined;
@@ -318,6 +320,11 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
         fire: true,
         ...(spec.securityScreenData !== undefined ? { screenData: spec.securityScreenData } : {}),
         ...(spec.destination ? { destination: spec.destination } : {}),
+        ...(spec.title || spec.sourceId
+          ? {
+              source: { ...(spec.title ? { title: spec.title } : {}), ...(spec.sourceId ? { id: spec.sourceId } : {}) },
+            }
+          : {}),
       },
       ...(spec.cronScript ? { cronScript: spec.cronScript } : {}),
       ...(spec.cronScriptTrial ? { cronScriptTrial: true } : {}),
@@ -358,9 +365,9 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
       console.warn(`[trigger] ${spec.surface} ${spec.fireKey} ${note}`);
       return;
     }
+    if (res.status === "ok" && liveDelivery) return;
     if (res.status === "ok" && (res.reply || res.attachments?.length)) {
       if (!spec.destination) return;
-      if (liveDelivery) return;
       if (!deliverable) {
         status = "refused";
         note = notVisibleNote;
@@ -397,7 +404,7 @@ export async function runTrigger(deps: TriggerDeps, spec: TriggerSpec): Promise<
     ...(heldForApproval ? { heldForApproval: true as const } : {}),
   };
 
-  if (isTriggerFailure(outcome)) await sendErrorNotice(userNote ?? note ?? status!);
+  if (isTriggerFailure(outcome) && errorCode !== FIRE_UNPOSTED) await sendErrorNotice(userNote ?? note ?? status!);
 
   return outcome;
 }

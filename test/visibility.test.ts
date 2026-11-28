@@ -98,7 +98,7 @@ describe("runTrigger: fire-time visibility gate", () => {
       ownerScopeId: scopeId("channel", "C-eng"),
       input: "post",
       fireKey: "f1",
-      surface: "cron",
+      surface: "webhook",
       destination,
     });
     assert.equal(out.authzFailed, false);
@@ -117,7 +117,7 @@ describe("runTrigger: fire-time visibility gate", () => {
       ownerScopeId: scopeId("personal", "U-alice"),
       input: "post",
       fireKey: "f2",
-      surface: "cron",
+      surface: "webhook",
       destination,
     });
     assert.equal(out.authzFailed, false, "not disabled — staleness must not kill a cron");
@@ -138,7 +138,7 @@ describe("runTrigger: fire-time visibility gate", () => {
       ownerScopeId: scopeId("channel", "C-secret"),
       input: "digest #secret",
       fireKey: "f6",
-      surface: "cron",
+      surface: "webhook",
       destination,
     });
     assert.equal(ranTurn, false, "the turn never runs");
@@ -169,7 +169,7 @@ describe("runTrigger: fire-time visibility gate", () => {
       ownerScopeId: scopeId("channel", "C-unpushed"),
       input: "digest",
       fireKey: "f7",
-      surface: "cron",
+      surface: "webhook",
       destination,
     });
     assert.equal(ranTurn, false);
@@ -188,7 +188,7 @@ describe("runTrigger: fire-time visibility gate", () => {
       input: "",
       message: "secret",
       fireKey: "f3",
-      surface: "cron",
+      surface: "webhook",
       destination,
     });
     assert.equal((await deps.deliveries.pending("group")).length, 0);
@@ -207,7 +207,7 @@ describe("runTrigger: fire-time visibility gate", () => {
       ownerScopeId: scopeId("channel", "C-eng"),
       input: "post",
       fireKey: "f5",
-      surface: "cron",
+      surface: "webhook",
       destination,
     });
     assert.equal(
@@ -230,7 +230,7 @@ describe("runTrigger: fire-time visibility gate", () => {
       ownerScopeId: scopeId("personal", "U-carol"),
       input: "digest",
       fireKey: "f6",
-      surface: "cron",
+      surface: "webhook",
       destination,
     });
     assert.equal(out.note, undefined, "an im target must not be treated as an unknown directory channel");
@@ -249,7 +249,7 @@ describe("runTrigger: fire-time visibility gate", () => {
       ownerScopeId: scopeId("personal", "U-alice"),
       input: "digest",
       fireKey: "f7",
-      surface: "cron",
+      surface: "webhook",
       destination,
     });
     assert.equal((await deps.deliveries.pending("slack")).length, 0);
@@ -269,7 +269,7 @@ describe("runTrigger: fire-time visibility gate", () => {
       ownerScopeId: scopeId("personal", "U-alice"),
       input: "ping",
       fireKey: "f4",
-      surface: "cron",
+      surface: "webhook",
       destination,
     });
     assert.equal(out.authzFailed, false);

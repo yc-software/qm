@@ -382,8 +382,11 @@ test("a connector set to attest in any audience serves every person's channel tu
     { botActor: true },
   ])
     assert.equal((await built.app.turn(channel("hello", extra))).status, "ok");
-  assert.deepEqual(offered, [["records"], ["records"], ["records"], ["records"], []]);
+  // The cron fire's final text is private, so its post-or-finish_silently nudge runs the tools once more.
+  assert.deepEqual(offered, [["records"], ["records"], ["records"], ["records"], ["records"], []]);
   assert.deepEqual(called, [
+    "records sent",
+    "strict refused",
     "records sent",
     "strict refused",
     "records sent",
@@ -399,7 +402,7 @@ test("a connector set to attest in any audience serves every person's channel tu
     (await built.auditLog.tail(tenant, { limit: 20, action: "mcp.call", resourceContains: "records/search" }))
       .filter((event) => !/answers only to them/.test(event.status ?? ""))
       .map((event) => event.principalId),
-    ["U1", "U1", "U1", "U1"],
+    ["U1", "U1", "U1", "U1", "U1"],
   );
 });
 
