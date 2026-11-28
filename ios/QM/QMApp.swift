@@ -278,7 +278,7 @@ struct RootView: View {
     if let client = model.client, let identity = model.identity {
       if page == .voice {
         NavigationStack { VoiceView(client: client) }
-          .modifier(NavRoom())
+          .modifier(NavRoom(composer: true))
       } else if page == .more {
         NavigationStack { MoreGrid(identity: identity, client: client) }
           .modifier(NavRoom())

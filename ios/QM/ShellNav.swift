@@ -94,7 +94,7 @@ struct ShellNav: View {
 
 /// Keeps scrolling content clear of the bottom nav, which floats above every screen.
 struct NavRoom: ViewModifier {
-  /// The main chat pads its own composer instead (see `shellNavRoom`).
+  /// The main chat and Talk to QM pad their own bottom controls instead (see `shellNavRoom`).
   var composer = false
   @Environment(\.shellNavHeight) private var height
   func body(content: Content) -> some View {
@@ -109,8 +109,8 @@ struct NavRoom: ViewModifier {
 extension EnvironmentValues {
   /// Room the bottom nav takes right now: zero while it hides for the keyboard or signed out.
   @Entry var shellNavHeight: CGFloat = 0
-  /// Room the composer keeps under itself for the bottom nav. A safe-area inset on the
-  /// conversation's NavigationStack doesn't reach the composer, so it pads itself instead.
+  /// Room the composer and voice controls keep under themselves for the bottom nav. A
+  /// safe-area inset on the NavigationStack doesn't reach them, so they pad themselves instead.
   @Entry var shellNavRoom: CGFloat = 0
 }
 

@@ -651,6 +651,7 @@ struct VoiceView: View {
   @State private var followsLatest = true
   @State private var transcriptPosition = ScrollPosition(edge: .bottom)
   @Environment(\.scenePhase) private var phase
+  @Environment(\.shellNavRoom) private var navRoom
   init(client: APIClient, conversation: Conversation? = nil) {
     self.init(model: NativeVoiceModel(client: client, conversation: conversation))
   }
@@ -736,6 +737,7 @@ struct VoiceView: View {
         .foregroundStyle(.tertiary).multilineTextAlignment(.center).padding(.horizontal, 28)
         .padding(.top, 14).padding(.bottom, 8)
     }
+    .padding(.bottom, navRoom)
     .onChange(of: model.transcript.items.isEmpty) { _, empty in
       if empty { followsLatest = true }
     }
