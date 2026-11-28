@@ -142,7 +142,8 @@ struct ShellChrome: ViewModifier {
               : {
                 showingMore = true
                 showingConversations = false
-              })
+              }
+          )
           .transition(.opacity.combined(with: .offset(y: 24)))
         }
       }
