@@ -1543,7 +1543,7 @@ export async function renameApp(ctx: ApiCtx): Promise<void> {
   if (typeof b.name !== "string")
     return sendJson(res, 400, { error: "bad_request", message: "name (string) required" });
   try {
-    return sendJson(res, 200, { app: await app.renameApp(id, b.name) });
+    return sendJson(res, 200, { app: appView(await app.renameApp(id, b.name)) });
   } catch (e) {
     return sendJson(res, 400, { error: "rename_failed", message: errMessage(e) });
   }
@@ -1559,7 +1559,7 @@ export async function setAppDisplayName(ctx: ApiCtx): Promise<void> {
   if (typeof b.displayName !== "string")
     return sendJson(res, 400, { error: "bad_request", message: "displayName (string) required" });
   try {
-    return sendJson(res, 200, { app: await app.setAppDisplayName(id, b.displayName) });
+    return sendJson(res, 200, { app: appView(await app.setAppDisplayName(id, b.displayName)) });
   } catch (e) {
     return sendJson(res, 400, { error: "display_name_failed", message: errMessage(e) });
   }
