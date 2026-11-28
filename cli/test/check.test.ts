@@ -177,11 +177,16 @@ test("a bare deployment (no sandbox/, no plugins) passes", () => {
 });
 
 test("docker with sandbox.backend local passes without a Fly sandbox app", () => {
-  const d = deployment(() => {}, { sandbox: { backend: "local", image: "qm-sandbox-local:latest" } });
+  const ready = deployment(() => {}, { sandbox: { backend: "local", image: "qm-sandbox-local:latest" } });
+  const missing = deployment(() => {}, { sandbox: { backend: "local" } });
   try {
-    assert.doesNotThrow(() => check(d));
+    assert.doesNotThrow(() => check(ready));
+    assert.throws(() => check(missing), /pins no published sandbox base image/);
+    assert.throws(() => check(missing), /set sandbox\.image/);
+    missing.config.env = { core: { SANDBOX_BACKEND: "superserve", SUPERSERVE_TEMPLATE: "qm-agent-1.0.0" } };
+    assert.doesNotThrow(() => check(missing));
   } finally {
-    rmSync(d.dir, { recursive: true, force: true });
+    for (const d of [ready, missing]) rmSync(d.dir, { recursive: true, force: true });
   }
 });
 
