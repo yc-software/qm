@@ -97,6 +97,7 @@ async function deliver(
     },
   };
   const deliverer = createSlackDeliverer({
+    clientForAccount: () => client,
     core: core as never,
     webUiPublicUrl,
     flow: {
@@ -280,6 +281,11 @@ test("a persona post drops its origin when the thread's previous own message wor
   assert.equal(await footer("Ada"), undefined);
   assert.equal(await footer("Bo"), "Answered as Ada");
   assert.deepEqual(reads[0], { container: "C1", sub: "100.200", self: true });
+});
+
+test("a persona's own Slack app posts without naming the persona again", async () => {
+  const destination = { persona: { id: "a", name: "Ada" }, account: { id: "persona:a" } };
+  assert.equal((await deliver(destination, undefined, undefined, "Hi")).posts[0]!.blocks, undefined);
 });
 
 test("ordinary deliveries omit cron settings even with a configured web UI", async () => {

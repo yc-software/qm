@@ -34,6 +34,7 @@ export function createSlackTurnTransport(at: {
   threadTs: string | undefined;
   reactable(): ReadonlySet<string>;
   webUiPublicUrl?: string;
+  account?: string;
   readSurfaceMessages?: SurfaceMessageReader;
   onEngaged?: (runId: string, channel: string, threadTs?: string) => void;
   onSettled?: () => void;
@@ -49,6 +50,7 @@ export function createSlackTurnTransport(at: {
       : slackPersonaReplyArgs(channel, msg, threadTs, {
           ...baseOpts,
           webUiPublicUrl: at.webUiPublicUrl,
+          account: at.account,
           ...(opts.note ? { footer: [plainContext(opts.note)] } : {}),
           hideOrigin: await personaContinues(at.readSurfaceMessages, { channel, threadTs }, opts.persona),
         });

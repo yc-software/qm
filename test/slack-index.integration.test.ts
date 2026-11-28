@@ -388,6 +388,7 @@ async function fixture(
     allowFrom?: string[];
     denyMessage?: string;
     coreSingleton?: boolean;
+    personaApp?: string;
   } = {},
 ) {
   const core = new FakeCore();
@@ -402,6 +403,7 @@ async function fixture(
         ...(options.denyMessage ? { denyMessage: options.denyMessage } : {}),
         ...(options.coreSingleton === undefined ? {} : { coreSingleton: options.coreSingleton }),
         ...(options.webUiPublicUrl ? { webUiPublicUrl: options.webUiPublicUrl } : {}),
+        ...(options.personaApp ? { accountId: `persona:${options.personaApp}`, personaId: options.personaApp } : {}),
       },
       core,
       TENANT,
@@ -670,6 +672,17 @@ test("a DM reply wearing a persona posts under its name and icon", async () => {
         elements: [{ type: "mrkdwn", text: "Answered as Ada", verbatim: true }],
       });
     }
+  } finally {
+    await f.stop();
+  }
+});
+
+test("a DM reply from a persona's own Slack app does not name the persona again", async () => {
+  const f = await fixture({ personaApp: "p1" });
+  try {
+    f.core.result = { status: "ok", reply: "on it", persona: { id: "p1", name: "Ada" } };
+    await f.app.emitMessage({ channel: "D1", channel_type: "im", user: "U1", text: "hi", ts: "100.1" });
+    assert.deepEqual([f.client.posts[0]?.username, f.client.posts[0]?.blocks], ["Ada", undefined]);
   } finally {
     await f.stop();
   }

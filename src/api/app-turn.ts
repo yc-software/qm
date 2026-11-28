@@ -1,4 +1,4 @@
-import { isSystemActor } from "../types.ts";
+import { isSystemActor, personaSlackAccount } from "../types.ts";
 import { AUTOMATION_SESSION_SURFACES } from "../sessions/session-rows.ts";
 import { externalSlackRequestAllowed } from "../resolution/external-slack.ts";
 import { createPersonNames } from "../identity/person-names.ts";
@@ -354,7 +354,7 @@ export function createTurnMethods(
         ...(req.infrequentCron && origin.kind === "automation" ? { infrequentCron: true } : {}),
         ...(req.personaId &&
         ((origin.kind === "automation" && req.surface === "cron") ||
-          (req.surface === "slack" && req.surfaceOrigin?.author.account === `persona:${req.personaId}`))
+          (req.surface === "slack" && req.surfaceOrigin?.author.account === personaSlackAccount(req.personaId)))
           ? { personaId: req.personaId }
           : {}),
         ...(req.botActor ? { botActor: true } : {}),

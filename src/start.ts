@@ -12,6 +12,7 @@ import { slackAccountConfigsFromEnv, slackPluginConfigFromEnv, startSlackPlugin 
 import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { createTenantSlackRuntimes } from "./surfaces/slack-tenants.ts";
 import type { SlackPluginConfig } from "./slack/config.ts";
+import { personaSlackAccount } from "./types.ts";
 import { cronQueueMisconfigured, installCronQueue } from "./cron/job-queue.ts";
 import { migrateDatabase } from "./persistence/pg-pool.ts";
 import { bindBootTenant, inBootTenant, readBootTenant } from "./tenants/boot.ts";
@@ -210,7 +211,7 @@ export async function startQm(
         const plugin = await startSlackPlugin(
           {
             botToken: app.botToken,
-            accountId: `persona:${personaId}`,
+            accountId: personaSlackAccount(personaId),
             personaId,
             coreSingleton: false,
             ...(env.PUBLIC_WEB_URL ? { webUiPublicUrl: env.PUBLIC_WEB_URL } : {}),
