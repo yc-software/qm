@@ -152,15 +152,15 @@ struct RootView: View {
     )
     .onChange(of: appearance) { NativeThemeStore.shared.enabled = appearance == "custom" }
     .sheet(isPresented: $choosingWorkspace) { WorkspacePicker(model: model) }
+    .fullScreenCover(isPresented: .constant(model.needsAIProcessingConsent)) {
+      AIConsentView.processing(
+        workspace: model.client?.baseURL.host ?? "your workspace",
+        onConfirm: model.acceptAIProcessing, onCancel: signOut)
+    }
     .confirmationDialog(
       "Sign out of QM?", isPresented: $confirmingSignOut, titleVisibility: .visible
     ) {
-      Button("Sign out", role: .destructive) {
-        selectedConversation = nil
-        homePath = []
-        showingConversations = true
-        model.signOut()
-      }
+      Button("Sign out", role: .destructive, action: signOut)
     } message: {
       Text("Signing out clears unsent drafts for this account on this device.")
     }
@@ -249,6 +249,13 @@ struct RootView: View {
         }
       }
     }
+  }
+
+  private func signOut() {
+    selectedConversation = nil
+    homePath = []
+    showingConversations = true
+    model.signOut()
   }
 
   private func accountMenu(_ identity: Identity) -> some View {

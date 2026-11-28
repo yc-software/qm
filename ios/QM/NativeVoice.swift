@@ -96,15 +96,20 @@ final class NativeVoiceModel: NSObject {
   private var scopeID = ""
   private var user = ""
   private let microphonePermission: @MainActor () async -> Bool
+  private let consented: @MainActor () -> Bool
   init(
     client: APIClient, conversation: Conversation?,
     microphonePermission: @escaping @MainActor () async -> Bool = {
       await AVAudioApplication.requestRecordPermission()
+    },
+    consented: @escaping @MainActor () -> Bool = {
+      UserDefaults.standard.bool(forKey: AIConsent.voiceKey)
     }
   ) {
     self.client = client
     self.conversation = conversation
     self.microphonePermission = microphonePermission
+    self.consented = consented
   }
   func load() async {
     do {
@@ -119,7 +124,8 @@ final class NativeVoiceModel: NSObject {
     } catch { if !Task.isCancelled { status = error.localizedDescription } }
   }
   func start() async {
-    guard available, !connecting, !connected, !stopping else { return }
+    // Nothing reaches OpenAI until the person has allowed it.
+    guard available, consented(), !connecting, !connected, !stopping else { return }
     cleanup()
     permissionError = nil
     closingStatus = "Conversation ended. QM tasks remain in your history."
@@ -680,6 +686,8 @@ private struct NativeVoiceConnectionLoading: View {
 struct VoiceView: View {
   @State private var model: NativeVoiceModel
   @State private var confirmingAgentVoice = false
+  @State private var askingConsent = false
+  @AppStorage(AIConsent.voiceKey) private var voiceConsent = false
   @State private var followsLatest = true
   @State private var transcriptPosition = ScrollPosition(edge: .bottom)
   @Environment(\.scenePhase) private var phase
@@ -748,11 +756,7 @@ struct VoiceView: View {
         }.buttonStyle(.bordered).controlSize(.large)
       } else {
         Button("Start voice", systemImage: "waveform") {
-          if model.conversation?.parentSessionId?.isEmpty == false {
-            confirmingAgentVoice = true
-          } else {
-            startVoice()
-          }
+          if voiceConsent { requestVoice() } else { askingConsent = true }
         }.buttonStyle(.borderedProminent).controlSize(.large).disabled(!model.available)
       }
       Text("Audio is sent to OpenAI while connected. Tasks and approvals stay in QM.").font(
@@ -771,6 +775,14 @@ struct VoiceView: View {
         Text(
           "You’ll be speaking directly to \(NativeAgentBranch.name(conversation)), a delegated agent. Spoken requests may change the work it reports to its parent conversation."
         )
+      }
+    }
+    .sheet(isPresented: $askingConsent, onDismiss: { if voiceConsent { requestVoice() } }) {
+      AIConsentView.voice {
+        voiceConsent = true
+        askingConsent = false
+      } onCancel: {
+        askingConsent = false
       }
     }
     .task { await model.load() }
@@ -796,6 +808,14 @@ struct VoiceView: View {
       {
         model.headphonesDisconnected()
       }
+    }
+  }
+
+  private func requestVoice() {
+    if model.conversation?.parentSessionId?.isEmpty == false {
+      confirmingAgentVoice = true
+    } else {
+      startVoice()
     }
   }
 

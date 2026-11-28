@@ -35,6 +35,7 @@ final class AppModel {
   private let signIn = SignIn()
   private var cleanedAccount: String?
   private let defaults: UserDefaults
+  private var aiAcceptedOrigins: [String] = []
   private let configuredURL: String?
   private let configuration: URLSessionConfiguration
   private var loadRevision = UUID()
@@ -49,7 +50,23 @@ final class AppModel {
     self.defaults = defaults
     self.configuredURL = configuredURL
     self.configuration = configuration
+    aiAcceptedOrigins = defaults.stringArray(forKey: AIConsent.processingKey) ?? []
     client = savedWorkspace()
+  }
+
+  /// Signed in to a workspace whose AI processing notice hasn't been accepted on this device. The
+  /// demo answers on the device, so it never asks.
+  var needsAIProcessingConsent: Bool {
+    guard identity != nil, let client, !exploringDemo else { return false }
+    return !aiAcceptedOrigins.contains(client.baseURL.absoluteString)
+  }
+
+  func acceptAIProcessing() {
+    guard let origin = client?.baseURL.absoluteString, !aiAcceptedOrigins.contains(origin) else {
+      return
+    }
+    aiAcceptedOrigins.append(origin)
+    defaults.set(aiAcceptedOrigins, forKey: AIConsent.processingKey)
   }
 
   private func savedWorkspace() -> APIClient? {

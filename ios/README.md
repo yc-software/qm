@@ -73,6 +73,8 @@ Browse → Talk to QM opens native SwiftUI controls backed by the WebRTC iOS SDK
 
 The voice frontend uses `gpt-live-1` with client delegation. When the voice model hands a request off, the app submits the transcribed words to the existing authenticated QM turn API and sends progress and the result back to be spoken. QM keeps its configured runtime, tools, permissions, and approval flow. Task records are durable; live captions are temporary and the provider session uses `store: false`.
 
+Before the first call, a sheet says the call connects to OpenAI and what is sent (microphone audio while connected, and the text of QM's progress and results to be read aloud), and asks to allow it; the voice model will not start without that, and Settings → Privacy withdraws it. Separately, the first time a person signs in to a workspace, a notice explains that messages, attachments and voice transcripts go to that workspace and its AI providers, and must be accepted before the app is usable; the on-device demo skips it. App Store guideline 5.1.2(i) requires both.
+
 The native audio track starts only when the user starts a call. Mute stops microphone transmission; End conversation and backgrounding stop the call. Already submitted QM tasks continue. Session creation is limited durably to six per person per hour; the client ends calls after 20 minutes. These are usage controls, not a server-enforced spending cap.
 
 Unit tests cover the voice protocol and call lifecycle. Native audio, physical-device routing and production SSO need manual checks on a device.

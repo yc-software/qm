@@ -129,10 +129,26 @@ final class NativeVoiceTests: XCTestCase {
   }
 
   @MainActor
+  func testVoiceDoesNotConnectOrAskForTheMicrophoneBeforeConsent() async {
+    var asked = false
+    let model = NativeVoiceModel(
+      client: APIClient(baseURL: URL(string: "https://voice-consent.example")!),
+      conversation: nil,
+      microphonePermission: {
+        asked = true
+        return true
+      }, consented: { false })
+    model.available = true
+    await model.start()
+    XCTAssertFalse(asked)
+    XCTAssertFalse(model.connecting)
+  }
+
+  @MainActor
   func testVoiceMicrophoneDenialStopsConnectingAndOffersSettings() async {
     let model = NativeVoiceModel(
       client: APIClient(baseURL: URL(string: "https://voice-permission.example")!),
-      conversation: nil, microphonePermission: { false })
+      conversation: nil, microphonePermission: { false }, consented: { true })
     model.available = true
     await model.start()
     XCTAssertFalse(model.connecting)
@@ -155,6 +171,8 @@ final class NativeVoiceTests: XCTestCase {
         permission = $0
         requested.fulfill()
       }
+    } consented: {
+      true
     }
     model.available = true
     let starting = Task { await model.start() }

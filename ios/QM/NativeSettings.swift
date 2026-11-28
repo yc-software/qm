@@ -109,6 +109,7 @@ struct NativeSettingsView: View {
   let identity: Identity
   @AppStorage("appearance") private var appearance = "system"
   @AppStorage("webOnly") private var webOnly = false
+  @AppStorage(AIConsent.voiceKey) private var voiceConsent = false
   var body: some View {
     QMForm {
       Section("Workspace") {
@@ -146,6 +147,16 @@ struct NativeSettingsView: View {
         } label: {
           Label("Connections and credentials", systemImage: "key")
         }
+      }
+      Section {
+        Toggle("Talk to QM uses OpenAI", isOn: $voiceConsent)
+        Link("Privacy policy", destination: AIConsent.policy)
+      } header: {
+        Text("Privacy")
+      } footer: {
+        Text(
+          "Live voice sends your microphone audio to OpenAI while a call is active. Turn this off to stop Talk to QM; dictation stays on this device."
+        )
       }
       Section("Defaults") {
         NavigationLink("Model and effort") {

@@ -128,6 +128,20 @@ final class DemoWorkspaceTests: XCTestCase {
     XCTAssertEqual(DraftStore.conversations(account).map(\.id), ["kept"])
   }
 
+  func testAWorkspaceAsksOnceBeforeAIProcessingAndTheDemoNever() async {
+    let defaults = UserDefaults(suiteName: "consent-\(UUID().uuidString)")!
+    let model = AppModel(defaults: defaults, configuredURL: "https://saved.example")
+    addTeardownBlock { @MainActor in model.signOut() }
+    model.identity = Identity(user: "alice", companyName: nil, displayName: nil)
+    XCTAssertTrue(model.needsAIProcessingConsent)
+    model.acceptAIProcessing()
+    let relaunched = AppModel(defaults: defaults, configuredURL: "https://saved.example")
+    relaunched.identity = model.identity
+    XCTAssertFalse(relaunched.needsAIProcessingConsent)
+    await model.exploreDemo()
+    XCTAssertFalse(model.needsAIProcessingConsent)
+  }
+
   func testTheDemoAddressCannotBeChosenAsAWorkspace() {
     XCTAssertNil(AppModel.workspaceURL("demo.qm.invalid"))
     XCTAssertNil(AppModel.workspaceURL("https://demo.qm.invalid"))

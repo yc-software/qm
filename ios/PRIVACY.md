@@ -1,6 +1,6 @@
 # Privacy policy for QM on iOS
 
-Last updated: 14 November 2026
+Last updated: 28 November 2026
 
 This policy describes what the QM app for iPhone and iPad does with your data. It is written about the app's own behaviour, so it holds for any unmodified build of the app from this repository. "The publisher" means whoever distributed the copy you installed.
 
@@ -15,6 +15,7 @@ QM is open source, so anyone can build and distribute the app. If you got your c
 - The app has no analytics, advertising, or tracking, and its publisher receives none of your content.
 - What you write and attach goes to your QM workspace: the one you choose, or the one your copy was set up with.
 - A live voice call also connects your device directly to OpenAI, which provides the voice.
+- The app asks before either happens: once per workspace before anything is sent to it, and before your first live voice call.
 - Whoever operates your workspace decides how your data is stored and used on it. Ask them about retention, access, and deletion.
 
 ## The app and your workspace are separate
@@ -25,6 +26,8 @@ Publishing the app is not the same as operating a workspace. The publisher has n
 
 ## What the app sends to your workspace
 
+The first time you sign in to a workspace, the app explains that your messages, attachments and voice transcripts go to that workspace, which processes them with AI models from providers such as Anthropic and OpenAI, chosen by whoever operates it. Nothing you write is sent until you continue; choosing Cancel signs you out. The choice is remembered for that workspace on this device.
+
 What you do in the app, plus your device's time zone and what iOS adds to any web request, such as your language preference:
 
 - **Sign-in.** You sign in on your workspace's own sign-in page, shown in a system browser sheet. The app receives a session token from the workspace. It never sees the password you sign in with.
@@ -34,6 +37,8 @@ What you do in the app, plus your device's time zone and what iOS adds to any we
 - **Time zone.** Sent with each message, each voice task, and each request for suggested activities.
 
 ## Live voice
+
+Before your first call, the app shows what is sent to OpenAI and asks you to allow it. No connection to OpenAI is made until you do, and you can withdraw it under Settings → Privacy, which stops Talk to QM.
 
 While a Talk to QM call is active, the app connects directly to OpenAI, the voice service QM uses, over an encrypted connection:
 
@@ -56,7 +61,7 @@ The temporary recording is deleted once it has been transcribed, or when you can
 
 ## What the app keeps on your device
 
-- **Settings.** The workspace address, your appearance and theme, and list preferences. These stay until you delete the app.
+- **Settings.** The workspace address, your appearance and theme, list preferences, and your answers to the AI prompts above. These stay until you delete the app.
 - **Your session.** The session token, in the device keychain, marked as available on this device only.
 - **Unsent work.** Drafts and attachments you have not sent yet, in the app's own storage, protected while the device is locked and excluded from device backups.
 - **Temporary files.** Copies of attachments being prepared, files you are previewing, and dictation recordings, in temporary storage.
@@ -96,6 +101,7 @@ QM is a tool for work. It is not directed to children.
 ## Your choices
 
 - Withdraw microphone, speech recognition, or camera access in iOS Settings.
+- Withdraw permission for live voice to use OpenAI under Settings → Privacy in the app.
 - Sign out to remove your session and drafts from the device.
 - For a copy of, or the deletion of, data held by a workspace, contact that workspace's operator.
 
