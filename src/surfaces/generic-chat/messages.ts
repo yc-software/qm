@@ -19,7 +19,7 @@ export interface GenericChatMessages {
   now?: () => number;
 }
 
-type GenericChatWhere = Pick<GenericChatRef, "surface" | "account" | "kind" | "chat">;
+type GenericChatWhere = Pick<GenericChatRef, "surface" | "account" | "kind" | "chat" | "thread">;
 
 function ownPost(deps: GenericChatMessages, container: string, messageId: string) {
   return findMessage(
@@ -103,6 +103,7 @@ export async function editGenericChatMessage(
   await deps.client.update(where.account, {
     chat_id: where.chat,
     message_id: messageId,
+    ...(where.thread ? { thread_id: where.thread } : {}),
     body: text,
     ...(actions ? { actions: actions.map(genericChatAction) } : {}),
   });

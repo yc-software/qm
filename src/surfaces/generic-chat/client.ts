@@ -35,6 +35,7 @@ interface GenericChatUpdate {
   message_id: string;
   body: string;
   actions?: readonly GenericChatAction[];
+  thread_id?: string;
 }
 
 interface GenericChatReaction {
@@ -115,7 +116,7 @@ export function createGenericChatClient(deps: {
   return {
     surface: PARTNER_CHAT,
     post: (account, message) => call(account, "/agent_app/messages", message),
-    update: (account, message) => call(account, "/agent_app/messages/update", message),
+    update: (account, { thread_id: _thread, ...message }) => call(account, "/agent_app/messages/update", message),
     delete: (account, message) => call(account, "/agent_app/messages/delete", message),
     typing: (account, state) => call(account, "/agent_app/typing", state),
     react: (account, reaction, { on }) =>

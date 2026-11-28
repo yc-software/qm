@@ -8,7 +8,7 @@ import {
   type TeamsChannelAccount,
 } from "@microsoft/teams.api";
 import { EMOJI_CHAR_BY_NAME } from "../../slack/emoji-map.ts";
-import { safeChunks, safeClip } from "../../slack/safe-cut.ts";
+import { safeChunks } from "../../slack/safe-cut.ts";
 import { tenantSettings } from "../../tenants/settings.ts";
 import { GenericChatHttpError, type GenericChatClient } from "../generic-chat/client.ts";
 import type { GenericChatAction } from "../generic-chat/protocol.ts";
@@ -53,6 +53,10 @@ function card(body: string, actions: readonly GenericChatAction[]) {
 function message(body: string, actions: readonly GenericChatAction[] | undefined): MessageActivityInput {
   if (actions?.length) return new MessageActivityInput().addAttachments(card(body, actions));
   return new MessageActivityInput(body).withTextFormat("markdown");
+}
+
+function threadTarget(chat: { type: string; id: string }, threadId: string | undefined): string {
+  return threadId && chat.type === "channel" ? `${chat.id};messageid=${threadId}` : chat.id;
 }
 
 function failure(e: unknown): never {
@@ -139,7 +143,7 @@ export function createTeamsClient(deps: { networkClient?: INetworkModule; servic
     async post(_account, m) {
       const chat = decodeTeamsChat(m.chat_id);
       const conversations = api().conversations;
-      const target = m.thread_id && chat.type === "channel" ? `${chat.id};messageid=${m.thread_id}` : chat.id;
+      const target = threadTarget(chat, m.thread_id);
       const parts = safeChunks(m.body, MESSAGE_CHARS);
       let messageId = "";
       for (const [i, part] of parts.entries()) {
@@ -158,10 +162,18 @@ export function createTeamsClient(deps: { networkClient?: INetworkModule; servic
     },
     async update(_account, m) {
       const chat = decodeTeamsChat(m.chat_id);
-      await api()
-        .conversations.activities(chat.id)
-        .update(m.message_id, message(safeClip(m.body, MESSAGE_CHARS), m.actions))
+      const conversations = api().conversations;
+      const [first = "", ...rest] = safeChunks(m.body, MESSAGE_CHARS);
+      await conversations
+        .activities(chat.id)
+        .update(m.message_id, message(first, rest.length ? undefined : m.actions))
         .catch(failure);
+      const target = threadTarget(chat, m.thread_id);
+      for (const [i, part] of rest.entries())
+        await conversations
+          .activities(target)
+          .create(message(part, i === rest.length - 1 ? m.actions : undefined))
+          .catch(failure);
       return {};
     },
     async delete(_account, m) {
@@ -171,7 +183,7 @@ export function createTeamsClient(deps: { networkClient?: INetworkModule; servic
     async typing(_account, state) {
       if (!state.typing) return {};
       const chat = decodeTeamsChat(state.chat_id);
-      const target = state.thread_id && chat.type === "channel" ? `${chat.id};messageid=${state.thread_id}` : chat.id;
+      const target = threadTarget(chat, state.thread_id);
       await api().conversations.activities(target).create(new TypingActivityInput()).catch(failure);
       return {};
     },
