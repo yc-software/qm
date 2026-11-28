@@ -24,7 +24,7 @@ function svc() {
     deployStore,
     provider: {
       profile: { managedScaleToZero: false },
-      apply: async () => ({ host: "127.0.0.1", port: 20000 }),
+      apply: async () => ({ host: "127.0.0.1", port: 20000, proxyHeaders: { authorization: "Bearer x" } }),
       destroy: async () => {},
     },
     auditLog: { record() {}, events: async () => [], tail: async () => [] },
@@ -34,8 +34,8 @@ function svc() {
   return { deploy, deployStore };
 }
 
-const make = (deploy: ReturnType<typeof svc>["deploy"], name: string) =>
-  deploy.deploy({ ownerScopeId: scopeId("personal", "U1"), createdBy: "U1", entrypoint: "x", files: [], name });
+const make = (deploy: ReturnType<typeof svc>["deploy"], name: string, env?: Record<string, string>) =>
+  deploy.deploy({ ownerScopeId: scopeId("personal", "U1"), createdBy: "U1", entrypoint: "x", files: [], name, env });
 
 test("renameApp moves the URL slug by id, keeping the immutable id", async () => {
   const s = svc();
@@ -88,17 +88,18 @@ test("HTTP: the /name (slug) route does not shadow /display-name", async () => {
       body: JSON.stringify(body),
     });
   try {
-    const d = await make(s.deploy, "my-app");
+    const d = await make(s.deploy, "my-app", { API_SECRET: "top-secret" });
     const dn = await post(`/v1/apps/${d.id}/display-name`, { displayName: "Pretty" });
-    assert.equal(dn.status, 200);
-    const dnBody = (await dn.json()) as { app: { name?: string; displayName?: string } };
-    assert.equal(dnBody.app.displayName, "Pretty");
-    assert.equal(dnBody.app.name, "my-app", "the URL slug is untouched");
     const rn = await post(`/v1/apps/${d.id}/name`, { name: "new-slug" });
-    assert.equal(rn.status, 200);
-    const rnBody = (await rn.json()) as { app: { name?: string; displayName?: string } };
-    assert.equal(rnBody.app.name, "new-slug");
-    assert.equal(rnBody.app.displayName, "Pretty");
+    assert.deepEqual([dn.status, rn.status], [200, 200]);
+    const dnApp = ((await dn.json()) as { app: Record<string, unknown> }).app;
+    const rnApp = ((await rn.json()) as { app: Record<string, unknown> }).app;
+    assert.deepEqual([dnApp.displayName, dnApp.name], ["Pretty", "my-app"]);
+    assert.deepEqual([rnApp.name, rnApp.displayName], ["new-slug", "Pretty"]);
+    for (const app of [dnApp, rnApp]) {
+      const v = (app.versions as Record<string, unknown>[])[0]!;
+      assert.deepEqual(["endpoint" in app, "env" in v, "snapshotDir" in v], [false, false, false]);
+    }
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
   }
