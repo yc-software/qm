@@ -3,7 +3,8 @@
 - `db/schema.sql` is the current schema. Read it to see the database as it is now. It is
   generated; never edit it by hand.
 - `db/migrations/*.sql` are changes made since, applied in name order.
-- `db/vector.sql` adds the optional pgvector tables the first time semantic memory uses them.
+- `db/vector.sql` adds the optional pgvector tables. The migration command applies it when the
+  server offers pgvector; a core whose login may migrate applies it on first use of semantic memory.
 
 A new database loads `schema.sql`, which records the migrations it already contains, so they
 are skipped. An existing database applies the migrations it has not recorded yet. Both happen

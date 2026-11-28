@@ -216,7 +216,13 @@ export function createMessagingMethods(
     async updateCron(id, patch, by, trial) {
       const before = await deps.crons.get(id);
       if (!before) return null;
-      if (patch.runtime !== undefined) await validateRuntime({ ...before, ...patch });
+      if (patch.runtime !== undefined)
+        await validateRuntime({
+          ...before,
+          ...patch,
+          action: patch.action === undefined ? before.action : (patch.action ?? undefined),
+          message: patch.message === undefined ? before.message : (patch.message ?? undefined),
+        });
       if (patch.schedule) validateUserSchedule(patch.schedule);
       await trialBeforeSave(patch.script, patch.schedule, trial);
       const linked = linkedChanges(before, patch);

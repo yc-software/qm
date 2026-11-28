@@ -500,6 +500,7 @@ export interface PendingApprovalRecord {
   request?: TurnRequest;
   homeChannel?: string;
   people?: string[];
+  classifiedAttachments?: string[];
   blocksInput?: boolean;
   kind?: "approval" | "input";
   call?: ApprovedToolCallSpec;
