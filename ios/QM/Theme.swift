@@ -234,6 +234,13 @@ struct WelcomeView: View {
             .tint(QMTheme.navy)
             .controlSize(.large)
             .accessibilityIdentifier("changeWorkspace")
+            Button("Explore a demo") { Task { await model.exploreDemo() } }
+              .font(.footnote)
+              .foregroundStyle(QMTheme.navy.opacity(0.7))
+              .frame(maxWidth: .infinity, minHeight: 44)
+              .buttonStyle(.plain)
+              .disabled(model.loading)
+              .accessibilityIdentifier("exploreDemo")
           }
           .foregroundStyle(QMTheme.navy)
           .padding(28)

@@ -1,6 +1,8 @@
 import Foundation
 import os
 
+@testable import QM
+
 struct ChatStubLog: Sendable {
   var received: [String: Int] = [:]
   var loaded: [String: Int] = [:]

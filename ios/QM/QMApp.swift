@@ -244,7 +244,7 @@ struct RootView: View {
         let empty = ConversationEmptyState(filter: model.filter)
         ContentUnavailableView(
           empty.title, systemImage: empty.systemImage, description: Text(empty.description))
-        if model.filter == .active, model.client != nil {
+        if model.filter == .active, model.client != nil, !model.exploringDemo {
           NavigationLink("Set up QM", value: Page.setup)
         }
       }
@@ -312,11 +312,13 @@ struct RootView: View {
     HStack {
       Spacer()
       HStack(spacing: 0) {
-        NavigationLink(value: Page.search) {
-          Image(systemName: "magnifyingglass").frame(width: 44, height: 44)
+        if !model.exploringDemo {
+          NavigationLink(value: Page.search) {
+            Image(systemName: "magnifyingglass").frame(width: 44, height: 44)
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel("Search")
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Search")
         accountMenu(identity).frame(width: 44, height: 44)
       }
       .font(.system(size: 18, weight: .medium))

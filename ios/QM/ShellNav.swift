@@ -16,7 +16,8 @@ struct ShellNav: View {
   let blankChat: Bool
   let waiting: Int
   let onNew: () -> Void
-  let onMore: () -> Void
+  /// Nil hides More, as in the demo, where its pages need a real workspace.
+  let onMore: (() -> Void)?
 
   private var selected: ShellNavItem {
     showingConversations ? .conversations : showingMore ? .more : blankChat ? .new : .conversations
@@ -27,7 +28,9 @@ struct ShellNav: View {
     HStack(spacing: 2) {
       item(.conversations, icon: "line.3.horizontal", label: "Conversations")
       item(.new, icon: "square.and.pencil", label: "New chat")
-      item(.more, icon: "square.grid.2x2", selectedIcon: "square.grid.2x2.fill", label: "More")
+      if onMore != nil {
+        item(.more, icon: "square.grid.2x2", selectedIcon: "square.grid.2x2.fill", label: "More")
+      }
     }
     .padding(4)
     .modifier(GlassPill())
@@ -46,7 +49,7 @@ struct ShellNav: View {
       switch target {
       case .conversations: showingConversations = true
       case .new: onNew()
-      case .more: onMore()
+      case .more: onMore?()
       }
     } label: {
       Image(systemName: isSelected ? selectedIcon ?? icon : icon)
@@ -133,11 +136,14 @@ struct ShellChrome: ViewModifier {
             showingConversations: $showingConversations, showingMore: showingMore,
             blankChat: blankChat,
             waiting: model.conversations.filter(ConversationFilter.waiting.includes).count,
-            onNew: onNew
-          ) {
-            showingMore = true
-            showingConversations = false
-          }
+            onNew: onNew,
+            onMore: model.exploringDemo
+              ? nil
+              : {
+                showingMore = true
+                showingConversations = false
+              }
+          )
           .transition(.opacity.combined(with: .offset(y: 24)))
         }
       }
