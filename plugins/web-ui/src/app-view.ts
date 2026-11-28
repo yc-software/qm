@@ -18,7 +18,7 @@ export interface AppView {
   currentVersion?: number;
   appliedVersion?: number;
   webUrl?: string;
-  thumbnailUrl?: string;
+  thumbnailVersion?: number;
   gitUrl?: string;
   name?: string;
   displayName?: string;

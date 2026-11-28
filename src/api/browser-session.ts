@@ -152,6 +152,7 @@ export const API_ALIASES: ReadonlyMap<string, string> = new Map([
   ["DELETE /api/keychain/credentials/:id", "/v1/keychain/credentials/:id"],
   ["GET /api/apps", "/v1/apps"],
   ["GET /api/apps/:id", "/v1/apps/:id"],
+  ["GET /api/apps/:id/thumbnail", "/v1/apps/:id/thumbnail"],
   ["GET /api/shares/:type/:id", "/v1/shares/:type/:id"],
   ["POST /api/shares/:type/:id", "/v1/shares/:type/:id"],
   ["POST /api/apps/:id/display-name", "/v1/apps/:id/display-name"],

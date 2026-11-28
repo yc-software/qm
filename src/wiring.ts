@@ -124,6 +124,7 @@ import type { SurfaceContextRequest } from "./reach/reach.ts";
 import { personalScope, scopeId } from "./types.ts";
 import { createPostgresAuditLog } from "./admin/postgres-audit-log.ts";
 import { createPostgresAppPageViewLog, type AppPageViewLog } from "./deploy/page-views.ts";
+import { createPostgresAppThumbnailStore, type AppThumbnailStore } from "./deploy/app-thumbnails.ts";
 import type { BudgetTracker } from "./ratelimit/budget.ts";
 import { createPostgresBudgetTracker } from "./ratelimit/postgres-budget.ts";
 import { createCronStore, type CronStore } from "./cron/cron-store.ts";
@@ -498,6 +499,7 @@ export interface Core extends ReturnType<typeof coreSettings>, AppDeps {
   selfServe?: SelfServe;
   brokerSessions?: BrokerSessionStore;
   appPageViews?: AppPageViewLog;
+  appThumbnails?: AppThumbnailStore;
   browserSessionStore?: BrowserSessionStore;
   uiState: UiStateStore;
   sessionShares: SessionShareStore;
@@ -1637,6 +1639,7 @@ export function buildApp(
       : undefined;
 
   const appPageViews = config.awsDeploy.appsDomain ? createPostgresAppPageViewLog(databaseUrl) : undefined;
+  const appThumbnails = config.awsDeploy.appsDomain ? createPostgresAppThumbnailStore(databaseUrl) : undefined;
   const brokerSessions = createPostgresBrokerSessions(databaseUrl);
   const replayDedupe = createPostgresReplayDedupe(databaseUrl);
   const credentialUsage = createPostgresCredentialUsageSink(databaseUrl);
@@ -3172,6 +3175,7 @@ export function buildApp(
     selfServe,
     brokerSessions,
     appPageViews,
+    appThumbnails,
     browserSessionStore,
     ...(config.suggestedActivitiesEnabled && config.backgroundWorkEnabled ? { suggestedActivities } : {}),
     drain,
