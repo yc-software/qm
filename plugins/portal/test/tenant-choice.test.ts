@@ -19,6 +19,7 @@ const alpha = "00000000-0000-4000-8000-00000000000a";
 const beta = "00000000-0000-4000-8000-00000000000b";
 let tenants: unknown[] = [];
 let nonce = "";
+let authTime: number | undefined;
 let audience = "portal-client";
 let shared = true;
 let email: string | null = "founder@company.test";
@@ -46,7 +47,7 @@ const upstream = createServer((req, res) => {
     res.setHeader("content-type", "application/json");
     if (path === "/keys") return void res.end(JSON.stringify({ keys: [jwk] }));
     if (path === "/token") {
-      const idToken = await new SignJWT({ nonce })
+      const idToken = await new SignJWT({ nonce, auth_time: authTime })
         .setProtectedHeader({ alg: "EdDSA", kid: "test-key" })
         .setIssuer(upstreamUrl)
         .setAudience(audience)
@@ -161,11 +162,12 @@ function sessionOf(response: Response): Record<string, unknown> | null {
   return open(readCookie(cookieFrom(response, "portal_session") ?? "", "portal_session"), sessionKey);
 }
 
-async function callback(): Promise<Response> {
-  const login = await fetch(`${base}/auth/login?returnTo=%2F`, { redirect: "manual" });
+async function callback(returnTo = "/", authAge?: number): Promise<Response> {
+  const login = await fetch(`${base}/auth/login?returnTo=${encodeURIComponent(returnTo)}`, { redirect: "manual" });
   const tmpCookie = cookieFrom(login, "portal_oidc_tmp")!;
   const tmp = open(readCookie(tmpCookie, "portal_oidc_tmp"), tmpKey)!;
   nonce = tmp.nonce as string;
+  authTime = authAge === undefined ? undefined : (tmp.iat as number) - authAge;
   return fetch(`${base}/auth/callback?code=test&state=${tmp.state as string}`, {
     headers: { cookie: tmpCookie },
     redirect: "manual",
@@ -243,6 +245,23 @@ test("an email in two tenants picks one on the chooser and signs in under it", a
   assert.equal(chosen.status, 302);
   assert.equal(sessionOf(chosen)?.t, beta);
   assert.deepEqual(admissions, [beta]);
+});
+
+test("only a sign-in the identity provider just performed opens the app without the confirmation card", async () => {
+  tenants = [{ id: alpha }];
+  const desktop = `/auth/desktop?challenge=${"c".repeat(43)}&state=${"s".repeat(43)}`;
+  const follow = async (signedIn: Response) => {
+    assert.equal(signedIn.status, 302);
+    assert.equal(signedIn.headers.get("location"), desktop);
+    const cookie = ["portal_session", "portal_fresh_sign_in"].map((name) => cookieFrom(signedIn, name)).filter(Boolean);
+    return (await fetch(`${base}${desktop}`, { headers: { cookie: cookie.join("; ") } })).text();
+  };
+  assert.match(
+    await follow(await callback(desktop, 0)),
+    /href="qm-desktop:\/\/auth\/callback\?code=[^"]+&amp;state=s{43}"/,
+  );
+  for (const reused of [await callback(desktop, 60), await callback(desktop)])
+    assert.match(await follow(reused), /<form method="post"/);
 });
 
 test("a tampered session tenant is refused", () => {

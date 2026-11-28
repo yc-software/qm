@@ -16,6 +16,7 @@ export interface VerifiedSignIn {
   name: string;
   claims: Record<string, unknown>;
   userinfo: Record<string, unknown>;
+  freshAuth: boolean;
 }
 
 export interface TrustedSignIn {

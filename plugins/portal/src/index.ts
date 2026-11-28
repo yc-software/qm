@@ -2,8 +2,10 @@ import {
   DESKTOP_LAUNCH_SCRIPT,
   DESKTOP_LAUNCH_SCRIPT_HASH,
   desktopChallenge,
+  freshSignInFor,
   mintDesktopLogin,
   openDesktopLogin,
+  sealFreshSignIn,
 } from "./desktop-login.ts";
 import { createSurfaceConfigs } from "./surface-config.ts";
 import { INVITE_LOGIN_SCRIPT, INVITE_LOGIN_SCRIPT_HASH } from "./invite-login.ts";
@@ -1185,20 +1187,24 @@ async function desktopLogin(req: IncomingMessage, res: ServerResponse, url: URL)
     });
     return void res.end();
   }
-  if (req.method === "GET") {
+  if (
+    req.method === "GET" &&
+    !freshSignInFor(readCookie(req.headers.cookie, "portal_fresh_sign_in"), tmpKey, `${url.pathname}${url.search}`)
+  ) {
     return sendHtml(
       res,
       200,
       cardPage({
-        title: "Open QM Desktop",
-        heading: "Sign in to QM Desktop",
+        title: "Open QM",
+        heading: "Sign in to the QM app",
         icon: LOCK_ICON,
         msg: `Continue as ${session.sub}.`,
-        actions: `<form method="post" action="${escapeHtml(`${url.pathname}${url.search}`)}"><button class="btn primary" type="submit">Open QM Desktop</button></form>`,
-        help: "Only continue if you just started sign-in in the QM desktop app on this computer.",
+        actions: `<form method="post" action="${escapeHtml(`${url.pathname}${url.search}`)}"><button class="btn primary" type="submit">Open QM</button></form>`,
+        help: "Only continue if you just started sign-in in the QM app on this device.",
       }),
     );
   }
+  setSession(res, [clearCookie("portal_fresh_sign_in", "/auth/desktop", SECURE_COOKIES)]);
   const callback = new URL("qm-desktop://auth/callback");
   callback.searchParams.set("code", mintDesktopLogin(session, SESSION_SECRET, ORIGIN, challenge, state));
   callback.searchParams.set("state", state);
@@ -1207,10 +1213,10 @@ async function desktopLogin(req: IncomingMessage, res: ServerResponse, url: URL)
     200,
     cardPage({
       title: "Ready to open QM",
-      heading: "Opening QM Desktop…",
+      heading: "Opening QM…",
       icon: LOCK_ICON,
       msg: "If QM doesn’t open automatically, use the button below.",
-      actions: `<a id="desktop-launch" class="btn primary" href="${escapeHtml(callback.href)}">Open QM Desktop</a><script>${DESKTOP_LAUNCH_SCRIPT}</script>`,
+      actions: `<a id="desktop-launch" class="btn primary" href="${escapeHtml(callback.href)}">Open QM</a><script>${DESKTOP_LAUNCH_SCRIPT}</script>`,
       help: "This link expires in two minutes and works only for the app that requested it.",
     }),
     `${PAGE_CSP}; script-src '${DESKTOP_LAUNCH_SCRIPT_HASH}'`,
@@ -1519,6 +1525,7 @@ async function authCallback(req: IncomingMessage, res: ServerResponse, url: URL)
       name: typeof rawName === "string" ? rawName.trim().slice(0, 200) : "",
       claims,
       userinfo: info,
+      freshAuth: typeof claims.auth_time === "number" && claims.auth_time >= tmp.iat,
     };
     const email = verifiedEmail(info);
     if (email) tenants = (await coreEmailTenants(CORE, CORE_SIGNING_SECRET, email)).tenants;
@@ -1550,7 +1557,7 @@ async function finishTrustedSignIn(
 
 async function finishSignIn(
   res: ServerResponse,
-  { sub, name, claims, userinfo }: VerifiedSignIn,
+  { sub, name, claims, userinfo, freshAuth }: VerifiedSignIn,
   returnTo: string,
   tenant: string | undefined,
 ): Promise<void> {
@@ -1575,10 +1582,16 @@ async function finishSignIn(
   }
   if (!principal.appOnly) await signedInNames.record(principal.sub, name, tenant);
   setAuthenticatedSession(res, principal.sub, name, principal.appOnly, tenant);
-  res.writeHead(302, {
-    location: sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN),
-    "cache-control": "no-store",
-  });
+  const location = sanitizeReturnTo(returnTo, PUBLIC_URL, APPS_DOMAIN);
+  if (freshAuth && !principal.appOnly)
+    setSession(res, [
+      setCookie("portal_fresh_sign_in", sealFreshSignIn(location, tmpKey, TMP_TTL_S), {
+        path: "/auth/desktop",
+        maxAge: TMP_TTL_S,
+        secure: SECURE_COOKIES,
+      }),
+    ]);
+  res.writeHead(302, { location, "cache-control": "no-store" });
   res.end();
 }
 
