@@ -128,12 +128,12 @@ export function historySectionTpl(opts: HistoryOptions): TemplateResult {
   const restore = async (version: number) => {
     if (!window.confirm(`Roll ${persona.name} back to version ${version}? This saves it as a new version.`)) return;
     try {
-      const r = await api<{ persona: unknown }>(`${base(persona.id)}/${version}/restore`, {
+      const r = await api<{ persona: unknown; slackIconWarning?: string }>(`${base(persona.id)}/${version}/restore`, {
         method: "POST",
         body: "{}",
       });
       reset(entry);
-      opts.restored(r.persona, `Rolled back to version ${version}.`);
+      opts.restored(r.persona, [`Rolled back to version ${version}.`, r.slackIconWarning].filter(Boolean).join(" "));
     } catch (e) {
       opts.failed(errMessage(e, "Couldn't roll back."));
     }

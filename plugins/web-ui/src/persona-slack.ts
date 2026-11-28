@@ -13,6 +13,7 @@ interface PersonaSlackStatus {
   hasOrgConfigToken: boolean;
   publicUrlConfigured: boolean;
   manifestCreateUrl: string;
+  slackIconWarning?: string;
 }
 
 interface PersonaSlackUiState {
@@ -77,7 +78,9 @@ export function personaSlackSection(personaId: string, redraw: () => void): Temp
       });
       current.status = next;
       current.showSetup = false;
-      current.notice = "Slack app created. Click Install in Slack to finish connecting.";
+      current.notice = ["Slack app created. Click Install in Slack to finish connecting.", next.slackIconWarning]
+        .filter(Boolean)
+        .join(" ");
       if (next.oauthAuthorizeUrl) window.open(next.oauthAuthorizeUrl, "_blank", "noopener");
     } catch (e) {
       current.error = errMessage(e, "Couldn't create Slack app.");

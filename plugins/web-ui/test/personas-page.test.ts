@@ -81,7 +81,10 @@ const { vite, dom, close } = await browserEnv({
       return json({ versions: page.slice(0, 2), more: page.length > 2 });
     }
     if (path.includes("/versions/") && method === "POST")
-      return json({ persona: { ...personas[0], instructions: "Ada instructions", version: 4 } });
+      return json({
+        persona: { ...personas[0], instructions: "Ada instructions", version: 4 },
+        slackIconWarning: "Slack app icon not set.",
+      });
     if (path.includes("/credentials")) return json({ credential: { grantId: "g-2" } });
     if (path.startsWith("/api/personas/") && path.endsWith("/access"))
       return accessError
@@ -97,6 +100,7 @@ const { vite, dom, close } = await browserEnv({
           version: 3,
           credentials: [{ grantId: "g-1", service: "github", ownerId: "tester" }],
         },
+        ...(method === "PATCH" && calls.at(-1)!.body!.icon ? { slackIconWarning: "Slack app icon not set." } : {}),
       });
     }
     if (path.startsWith("/api/directory/resolve")) {
@@ -495,7 +499,7 @@ test("history lists versions on demand, shows what changed, and rolls back as a 
     calls.filter((c) => c.method !== "GET").map((c) => [c.method, c.path]),
     [["POST", "/api/personas/p-ada/versions/1/restore"]],
   );
-  assert.match(main.querySelector(".action-notice")?.textContent ?? "", /Rolled back to version 1/);
+  assert.equal(flash(main), "Rolled back to version 1. Slack app icon not set.");
 });
 
 test("an editor saves name, description and instructions with PATCH", async () => {
@@ -623,6 +627,17 @@ test("opening Add people keeps an unsaved icon change, and Save sends it", async
     .dispatchEvent(new window.Event("submit", { cancelable: true }));
   await settle();
   assert.equal(calls.find((c) => c.method === "PATCH")?.body?.icon, null);
+});
+
+test("Save says so when Slack refuses the bot's new icon for its Slack app", async () => {
+  const { main } = await openPersonaPage("Ada");
+  main.querySelector<HTMLButtonElement>('button[aria-label="Choose an icon"]')!.click();
+  await settle();
+  document.querySelector<HTMLButtonElement>(".project-icon-cell")!.click();
+  await settle();
+  button(main, "Save").click();
+  await settle();
+  assert.equal(flash(main), "Saved. Slack app icon not set.");
 });
 
 test("the only owner's row says why it can't be demoted or removed, and nothing is sent", async () => {

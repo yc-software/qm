@@ -1012,12 +1012,12 @@ function personaFormTpl(persona: PersonaDetail | null, state: FormState, redraw:
     state.error = "";
     redraw();
     try {
-      const saved = await api<{ persona: PersonaView }>(
+      const saved = await api<{ persona: PersonaView; slackIconWarning?: string }>(
         persona ? `/api/personas/${encodeURIComponent(persona.id)}` : "/api/personas",
         { method: persona ? "PATCH" : "POST", body: JSON.stringify(body) },
       );
       setPersonaList([...personasState.list.filter((p) => p.id !== saved.persona.id), saved.persona]);
-      await openPersona(saved.persona.id, persona ? "Saved." : "");
+      await openPersona(saved.persona.id, persona ? ["Saved.", saved.slackIconWarning].filter(Boolean).join(" ") : "");
     } catch (err) {
       state.error = errMessage(err, "Couldn't save this bot.");
       state.saving = false;

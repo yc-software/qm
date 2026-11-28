@@ -330,7 +330,7 @@ export function createSlackInstallationStore(
       return undefined;
     } catch (error) {
       swallowAs("slack-app: set icon", undefined)(error);
-      return errMessage(error);
+      return `Slack app icon not set (${errMessage(error)}). Slack app icons must be a public image between 512x512 and 2000x2000 pixels. Custom emoji are smaller, so use an image icon in that range instead.`;
     }
   };
 
@@ -822,7 +822,7 @@ export function createSlackInstallationStore(
         return error ? { ok: false, error } : { ok: true };
       } catch (error) {
         swallowAs("slack-app: set icon", undefined)(error);
-        return { ok: false, error: errMessage(error) };
+        return { ok: false, error: `Slack app icon not set (${errMessage(error)}).` };
       }
     },
 
