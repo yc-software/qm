@@ -141,6 +141,7 @@ describe("unified slackInstallationStore provisioning", () => {
         if (url.endsWith("/apps.icon.set")) {
           const parsed = JSON.parse(bodyStr ?? "{}") as { url?: string };
           if (parsed.url?.includes("too-small")) return Response.json({ ok: false, error: "invalid_icon_size" });
+          if (parsed.url?.includes("private")) return Response.json({ ok: false, error: "icon_not_accessible" });
           return Response.json({ ok: true });
         }
         if (url.endsWith("/apps.manifest.delete")) {
@@ -184,6 +185,10 @@ describe("unified slackInstallationStore provisioning", () => {
         ok: false,
         error:
           "Slack app icon not set (apps.icon.set: invalid_icon_size). Slack app icons must be a public image between 512x512 and 2000x2000 pixels, and custom emoji are smaller than that: set an image icon in that range.",
+      });
+      assert.deepEqual(await setIcon("private"), {
+        ok: false,
+        error: "Slack app icon not set (apps.icon.set: icon_not_accessible).",
       });
       assert.equal(await setIcon("bosun", "missing"), null);
       assert.equal(personaCreated.appId, "A0APP2");

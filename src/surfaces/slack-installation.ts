@@ -320,17 +320,25 @@ export function createSlackInstallationStore(
       signal: AbortSignal.timeout(15_000),
     });
     const data = (await res.json()) as SlackApiResult;
-    if (!res.ok || !data.ok) throw new Error(formatSlackError(method, data));
+    if (!res.ok || !data.ok) throw Object.assign(new Error(formatSlackError(method, data)), { code: data.error });
     return data;
   };
 
-  const applyAppIcon = async (accessToken: string, appId: string, iconUrl: string): Promise<string | undefined> => {
+  const applyAppIcon = async (
+    accessToken: string | Promise<string>,
+    appId: string,
+    iconUrl: string,
+  ): Promise<string | undefined> => {
     try {
-      await callSlack("apps.icon.set", accessToken, { app_id: appId, url: iconUrl });
+      await callSlack("apps.icon.set", await accessToken, { app_id: appId, url: iconUrl });
       return undefined;
     } catch (error) {
       swallowAs("slack-app: set icon", undefined)(error);
-      return `Slack app icon not set (${errMessage(error)}). Slack app icons must be a public image between 512x512 and 2000x2000 pixels, and custom emoji are smaller than that: set an image icon in that range.`;
+      const sizeRule =
+        (error as { code?: string }).code === "invalid_icon_size"
+          ? " Slack app icons must be a public image between 512x512 and 2000x2000 pixels, and custom emoji are smaller than that: set an image icon in that range."
+          : "";
+      return `Slack app icon not set (${errMessage(error)}).${sizeRule}`;
     }
   };
 
@@ -816,14 +824,9 @@ export function createSlackInstallationStore(
       const rec = await map.get(keyFor(input.personaId));
       if (!isInstallationRecord(rec) || rec.disabled || !rec.appId) return null;
       if (!(await getStoredConfigToken())) return null;
-      try {
-        const accessToken = await resolveConfigAccessToken(undefined, false, input.updatedBy);
-        const error = await applyAppIcon(accessToken, rec.appId, input.iconUrl);
-        return error ? { ok: false, error } : { ok: true };
-      } catch (error) {
-        swallowAs("slack-app: set icon", undefined)(error);
-        return { ok: false, error: `Slack app icon not set (${errMessage(error)}).` };
-      }
+      const accessToken = resolveConfigAccessToken(undefined, false, input.updatedBy);
+      const error = await applyAppIcon(accessToken, rec.appId, input.iconUrl);
+      return error ? { ok: false, error } : { ok: true };
     },
 
     async completeOAuth(input) {
