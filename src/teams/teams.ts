@@ -123,8 +123,10 @@ export function createPostgresTeamStore(
           [tenant.id, c.id, c.name ?? null, c.isolatedInOpen ?? null, actorId, now],
         );
         const people = [
-          ...(c.addMembers ?? []).map((p) => [personKey(p), "member"]),
-          ...(c.addAdmins ?? []).map((p) => [personKey(p), "admin"]),
+          ...new Map([
+            ...(c.addMembers ?? []).map((p) => [personKey(p), "member"] as const),
+            ...(c.addAdmins ?? []).map((p) => [personKey(p), "admin"] as const),
+          ]),
         ];
         if (people.length)
           await db.query(

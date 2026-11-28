@@ -24,7 +24,7 @@ test("pg teams: members are rows, edited one at a time, looked up by person", { 
     { id: "finance", name: "Finance", addMembers: members, addAdmins: ["Boss@X.com"], addRooms: [room] },
     "a",
   );
-  await teams.apply(tenant, { id: "legal", addMembers: ["p1@x.com"] }, "a");
+  await teams.apply(tenant, { id: "legal", addMembers: ["p1@x.com", "P1@x.com"], addAdmins: ["p1@x.com"] }, "a");
 
   const [finance] = await teams.list(tenant);
   assert.equal(finance!.memberCount, 1001);
