@@ -403,7 +403,7 @@ struct RootView: View {
           await model.update(conversation, patch: ["archived": conversation.archived != true])
         }
       }
-      .tint(QMTheme.navy)
+      .tint(QMTheme.ink)
       .disabled(model.updatingConversationIDs.contains(conversation.id))
     }
   }
