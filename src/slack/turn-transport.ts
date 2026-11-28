@@ -34,7 +34,7 @@ export function createSlackTurnTransport(at: {
   threadTs: string | undefined;
   reactable(): ReadonlySet<string>;
   webUiPublicUrl?: string;
-  account?: string;
+  account: string | undefined;
   readSurfaceMessages?: SurfaceMessageReader;
   onEngaged?: (runId: string, channel: string, threadTs?: string) => void;
   onSettled?: () => void;

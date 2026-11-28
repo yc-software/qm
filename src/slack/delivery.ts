@@ -60,7 +60,7 @@ export function botIdentityArgs(persona?: WornPersona): BotIdentityOverride {
 
 export function originContext(opts: {
   persona?: WornPersona;
-  account?: string;
+  account: string | undefined;
   project?: { id: string; name: string };
   webUiPublicUrl?: string;
   source?: { page: "crons" | "webhooks"; id: string; title?: string };
@@ -145,7 +145,7 @@ export function slackPersonaReplyArgs(
     threadOnly?: boolean;
     unfurlLinks?: boolean;
     persona?: WornPersona;
-    account?: string;
+    account: string | undefined;
     webUiPublicUrl?: string;
     footer?: Array<Record<string, unknown>>;
     hideOrigin?: boolean;
