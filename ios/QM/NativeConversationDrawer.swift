@@ -257,6 +257,17 @@ struct DrawerPan: UIGestureRecognizerRepresentable {
       shouldBeRequiredToFailBy other: UIGestureRecognizer
     ) -> Bool { other.view is UIScrollView && other is UIPanGestureRecognizer }
 
+    func gestureRecognizer(
+      _ recognizer: UIGestureRecognizer, shouldReceive touch: UITouch
+    ) -> Bool {
+      var current = touch.view
+      while let candidate = current {
+        if candidate is UINavigationBar { return false }
+        current = candidate.superview
+      }
+      return true
+    }
+
     private func touchesScrolledContent(_ pan: UIPanGestureRecognizer, in view: UIView) -> Bool {
       var current = view.hitTest(pan.location(in: view), with: nil)
       while let candidate = current, candidate !== view {
