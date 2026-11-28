@@ -37,7 +37,7 @@ export interface HistoryOptions {
   canEdit: boolean;
   action: (label: string, glyph: Parameters<typeof icon>[0], run: () => void) => TemplateResult;
   redraw: () => void;
-  restored: (persona: unknown, flash: string) => void;
+  restored: (persona: unknown, flash: string, slackIconWarning?: string) => void;
   failed: (message: string) => void;
 }
 
@@ -133,7 +133,7 @@ export function historySectionTpl(opts: HistoryOptions): TemplateResult {
         body: "{}",
       });
       reset(entry);
-      opts.restored(r.persona, [`Rolled back to version ${version}.`, r.slackIconWarning].filter(Boolean).join(" "));
+      opts.restored(r.persona, `Rolled back to version ${version}.`, r.slackIconWarning);
     } catch (e) {
       opts.failed(errMessage(e, "Couldn't roll back."));
     }

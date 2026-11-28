@@ -24,7 +24,7 @@ interface PersonaSlackUiState {
   showSetup: boolean;
   showManual: boolean;
   error: string;
-  notice: string;
+  notice: string | TemplateResult;
 }
 
 let state: PersonaSlackUiState | null = null;
@@ -61,7 +61,11 @@ export async function loadPersonaSlack(personaId: string, redraw: () => void): P
   redraw();
 }
 
-export function personaSlackSection(personaId: string, redraw: () => void): TemplateResult | typeof nothing {
+export function personaSlackSection(
+  personaId: string,
+  redraw: () => void,
+  iconNotice: (done: string, warning?: string) => string | TemplateResult,
+): TemplateResult | typeof nothing {
   if (!state || state.personaId !== personaId) return nothing;
   const current = state;
   const isOrgAdmin = can("admin") || can("owner");
@@ -78,9 +82,10 @@ export function personaSlackSection(personaId: string, redraw: () => void): Temp
       });
       current.status = next;
       current.showSetup = false;
-      current.notice = ["Slack app created. Click Install in Slack to finish connecting.", next.slackIconWarning]
-        .filter(Boolean)
-        .join(" ");
+      current.notice = iconNotice(
+        "Slack app created. Click Install in Slack to finish connecting.",
+        next.slackIconWarning,
+      );
       if (next.oauthAuthorizeUrl) window.open(next.oauthAuthorizeUrl, "_blank", "noopener");
     } catch (e) {
       current.error = errMessage(e, "Couldn't create Slack app.");

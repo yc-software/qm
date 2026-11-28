@@ -499,7 +499,7 @@ test("history lists versions on demand, shows what changed, and rolls back as a 
     calls.filter((c) => c.method !== "GET").map((c) => [c.method, c.path]),
     [["POST", "/api/personas/p-ada/versions/1/restore"]],
   );
-  assert.equal(flash(main), "Rolled back to version 1. Slack app icon not set.");
+  assert.match(flash(main) ?? "", /^Rolled back to version 1\. Slack app icon not set\./);
 });
 
 test("an editor saves name, description and instructions with PATCH", async () => {
@@ -629,7 +629,7 @@ test("opening Add people keeps an unsaved icon change, and Save sends it", async
   assert.equal(calls.find((c) => c.method === "PATCH")?.body?.icon, null);
 });
 
-test("Save says so when Slack refuses the bot's new icon for its Slack app", async () => {
+test("when Slack refuses the bot's new icon for its Slack app, Save says so and hands the fix to QM", async () => {
   const { main } = await openPersonaPage("Ada");
   main.querySelector<HTMLButtonElement>('button[aria-label="Choose an icon"]')!.click();
   await settle();
@@ -637,7 +637,12 @@ test("Save says so when Slack refuses the bot's new icon for its Slack app", asy
   await settle();
   button(main, "Save").click();
   await settle();
-  assert.equal(flash(main), "Saved. Slack app icon not set.");
+  main.querySelector<HTMLButtonElement>(".action-notice button")!.click();
+  const { storedDraft, newChatDraftKey } = await vite.ssrLoadModule("/src/drafts.ts");
+  assert.equal(
+    storedDraft(newChatDraftKey("tester")),
+    "Fix the Slack app icon for the Ada bot. Slack app icon not set.",
+  );
 });
 
 test("the only owner's row says why it can't be demoted or removed, and nothing is sent", async () => {
