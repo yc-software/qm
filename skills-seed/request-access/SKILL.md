@@ -9,6 +9,8 @@ Use this when a command needs someone's credential and the Credentials section s
 
 ## Request
 
+To see which unshared credentials people here have, `GET $AGENT_API_URL/v1/keychain/unshared` (same header) lists each one's owner, service and `credentialId`; ask for the one the command needs.
+
 One call, from this session or any sub-agent. The approval belongs to the whole conversation,
 so every session in it sees the same grant.
 

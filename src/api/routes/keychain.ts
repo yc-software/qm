@@ -1,7 +1,13 @@
 import {
   connectorHandle,
   credentialHandle,
+  connectorSummary,
+  credentialSummary,
   KeychainError,
+  liveConnector,
+  turnScopeGrants,
+  unsharedMemberCredentials,
+  usableKeychainSources,
   renderAskNotice,
   type CredentialFieldInput,
   type CredentialFile,
@@ -24,7 +30,6 @@ import {
 } from "./shared.ts";
 import { swallowAs } from "../../util/errors.ts";
 import { cronIdOf } from "../../sessions/session-store.ts";
-import { connectorHostLabel } from "../../connectors/oauth.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
 
 async function resolveScopeNames(
@@ -257,25 +262,54 @@ const revokeGrant = keychainRoute(async (ctx, kc, { actorId, scopeId }) => {
 
 type KeychainStore = NonNullable<ApiCtx["deps"]["keychain"]>;
 
+const listUnshared = keychainRoute(async ({ res }, kc, capability) => {
+  const { actorId, scopeId } = capability;
+  const audience = capability.keychainMembers ?? [];
+  const members = [
+    ...(audience.some((p) => samePerson(p.id, actorId)) ? [] : [{ id: actorId }]),
+    ...audience.map((p) => ({ id: p.id, ...(p.displayName ? { displayName: p.displayName } : {}) })),
+  ];
+  const ids = members.map((m) => m.id);
+  const [entriesByOwner, connectorsByOwner, scopeGrants] = await Promise.all([
+    kc.listByOwners(ids),
+    kc.listConnectorsByOwners(ids),
+    turnScopeGrants(kc, scopeId, capability.personaScope, capability.botActor === true),
+  ]);
+  const own = capability.ownerConnections === true;
+  const usable = usableKeychainSources(scopeGrants, own ? (entriesByOwner.get(actorId) ?? []) : []);
+  const execution = [
+    ...[...usable.grants.map((row) => row.credential), ...usable.own].map((c) => ({
+      handle: credentialHandle(c),
+      ownerId: c.ownerId,
+      credentialId: c.id,
+      description: "",
+    })),
+    ...(own ? (connectorsByOwner.get(actorId) ?? []) : []).filter(liveConnector).map((c) => ({
+      handle: connectorHandle(c.host, c.accountType),
+      ownerId: actorId,
+      credentialId: c.credentialId,
+      description: "",
+    })),
+  ];
+  return sendJson(res, 200, {
+    credentials: unsharedMemberCredentials({ members, entriesByOwner, connectorsByOwner, scopeGrants, execution }),
+  });
+});
+
 async function askableCredentials(
   kc: KeychainStore,
   ownerId: string,
 ): Promise<Array<{ credential: string; service: string; account?: string; handle: string }>> {
   const [entries, connectors] = await Promise.all([kc.listByOwners([ownerId]), kc.listConnectorsByOwners([ownerId])]);
   return [
-    ...(entries.get(ownerId) ?? []).map((c) => ({
-      credential: c.id,
-      service: c.service,
-      ...(c.accountLabel ? { account: c.accountLabel } : {}),
-      handle: credentialHandle(c),
-    })),
-    ...(connectors.get(ownerId) ?? []).map((c) => ({
-      credential: c.credentialId,
-      service: connectorHostLabel(c.host),
-      ...(c.accountType ? { account: c.accountType } : {}),
-      handle: connectorHandle(c.host, c.accountType),
-    })),
-  ];
+    ...(entries.get(ownerId) ?? []).map(credentialSummary),
+    ...(connectors.get(ownerId) ?? []).map(connectorSummary),
+  ].map(({ credentialId, service, accountLabel, handle }) => ({
+    credential: credentialId,
+    service,
+    ...(accountLabel ? { account: accountLabel } : {}),
+    handle,
+  }));
 }
 
 async function resolveAskTarget(
@@ -469,6 +503,7 @@ export const keychainRoutes: ReadonlyArray<Route<ApiCtx>> = [
     handle: releaseWriter,
   },
   { method: "GET", path: "/v1/keychain/credentials", auth: "either", handle: listCredentials },
+  { method: "GET", path: "/v1/keychain/unshared", auth: "either", handle: listUnshared },
   {
     method: "GET",
     path: "/v1/keychain/overview",

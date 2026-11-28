@@ -1902,17 +1902,76 @@ function listed(c: Pick<KeychainCredential, "managed" | "kind">): boolean {
 
 const ORGANIZATION_OWNER_KEY = personKey("Organization");
 
-export function renderKeychainManifest(input: KeychainManifestInput, now: number = Date.now()): string {
-  const groups = new Map<string, Set<string>>();
-  const ownerNames = new Map<string, string>();
-  const add = (ownerId: string, text: string): void => {
-    const owner = personKey(ownerId);
-    let rows = groups.get(owner);
-    if (!rows) groups.set(owner, (rows = new Set()));
-    rows.add(text);
-    if (!ownerNames.has(owner))
-      ownerNames.set(owner, input.members.find((member) => samePerson(member.id, ownerId))?.displayName ?? ownerId);
-  };
+const grantableCredential = (c: KeychainCredentialMeta): boolean => c.kind !== "broker" && !isBackendCredential(c);
+
+export async function turnScopeGrants(
+  keychain: Pick<Keychain, "grantsForScope">,
+  scopeId: ScopeId,
+  personaScope: ScopeId | undefined,
+  botActor: boolean,
+): Promise<Array<Awaited<ReturnType<Keychain["grantsForScope"]>>[number] & { grantScope: ScopeId }>> {
+  const scopes = personaScope ? [scopeId, personaScope] : [scopeId];
+  const rows = (
+    await Promise.all(
+      scopes.map(async (grantScope) =>
+        (
+          await keychain.grantsForScope(grantScope, { includePersonGrants: !botActor || grantScope === personaScope })
+        ).map((row) => ({ ...row, grantScope })),
+      ),
+    )
+  ).flat();
+  return rows.filter((row, i) => rows.findIndex((r) => r.credential.id === row.credential.id) === i);
+}
+
+export const usableKeychainSources = <G extends { credential: KeychainCredentialMeta }>(
+  grants: G[],
+  own: KeychainCredentialMeta[],
+): { grants: G[]; own: KeychainCredentialMeta[] } => ({
+  grants: grants.filter((row) => grantableCredential(row.credential)),
+  own: own.filter(grantableCredential),
+});
+
+export const liveConnector = (c: Pick<ConnectorMeta, "connected" | "needsReconnect"> | undefined): boolean =>
+  !!c?.connected && !c.needsReconnect;
+
+export const credentialSummary = (c: KeychainCredentialMeta): Omit<UnsharedCredential, "owner"> => ({
+  credentialId: c.id,
+  ownerId: c.ownerId,
+  service: c.service,
+  ...(c.accountLabel ? { accountLabel: c.accountLabel } : {}),
+  handle: credentialHandle(c),
+});
+
+export const connectorSummary = (c: ConnectorMeta): Omit<UnsharedCredential, "owner"> => ({
+  credentialId: c.credentialId,
+  ownerId: c.ownerId,
+  service: connectorHostLabel(c.host),
+  ...(c.accountType ? { accountLabel: c.accountType } : {}),
+  handle: connectorHandle(c.host, c.accountType),
+});
+
+interface UnsharedCredential {
+  credentialId: string;
+  ownerId: string;
+  owner: string;
+  service: string;
+  accountLabel?: string;
+  handle: string;
+}
+
+type ManifestRow = {
+  ownerId: string;
+  line: CredentialLine;
+  connector?: string;
+  unshared?: Omit<UnsharedCredential, "owner">;
+};
+
+type ManifestRowsInput = Pick<
+  KeychainManifestInput,
+  "members" | "entriesByOwner" | "connectorsByOwner" | "scopeGrants" | "execution"
+>;
+
+function manifestRows(input: ManifestRowsInput, now: number) {
   const execution = input.execution ?? [];
   const handleNames = new Set(execution.map((entry) => entry.handle));
   const handles = (credentialId: string): string =>
@@ -1921,28 +1980,73 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
       .map((entry) => `\`${entry.handle}\``)
       .sort()
       .join(", ");
-  const rows = new Map<string, { ownerId: string; line: CredentialLine; connector?: string }>();
+  const memberName = (ownerId: string): string =>
+    input.members.find((member) => samePerson(member.id, ownerId))?.displayName ?? ownerId;
+  const rows = new Map<string, ManifestRow>();
   const entries = new Map(input.scopeGrants.map(({ credential }) => [credential.id, credential]));
   for (const member of input.members)
     for (const credential of input.entriesByOwner.get(member.id) ?? []) entries.set(credential.id, credential);
   for (const credential of entries.values())
-    rows.set(credential.id, { ownerId: credential.ownerId, line: credentialLine(credential, now) });
-  for (const member of input.members) {
-    for (const connector of input.connectorsByOwner?.get(member.id) ?? [])
+    rows.set(credential.id, {
+      ownerId: credential.ownerId,
+      line: credentialLine(credential, now),
+      ...(grantableCredential(credential) ? { unshared: credentialSummary(credential) } : {}),
+    });
+  for (const member of input.members)
+    for (const connector of input.connectorsByOwner?.get(member.id) ?? []) {
+      const handle = connectorHandle(connector.host, connector.accountType);
       rows.set(connector.credentialId, {
         ownerId: member.id,
         line: connectorLine(connector.host, connector.accountType, connector.needsReconnect, connector.refreshError),
-        connector: connectorHandle(connector.host, connector.accountType),
+        connector: handle,
+        unshared: connectorSummary(connector),
       });
+    }
+  const classify = (credentialId: string, row: ManifestRow): "shown" | "expired" | "unshared" | "hidden" => {
+    if (handles(credentialId)) return "shown";
+    if (row.connector && row.line.expired && !handleNames.has(row.connector)) return "expired";
+    if (
+      row.unshared &&
+      !row.line.expired &&
+      input.members.some((member) => samePerson(member.id, row.ownerId)) &&
+      !(row.connector && handleNames.has(row.connector))
+    )
+      return "unshared";
+    return "hidden";
+  };
+  return { execution, handles, memberName, rows, classify };
+}
+
+export function unsharedMemberCredentials(input: ManifestRowsInput, now: number = Date.now()): UnsharedCredential[] {
+  const { rows, classify, memberName } = manifestRows(input, now);
+  return [...rows]
+    .filter(([id, row]) => classify(id, row) === "unshared")
+    .map(([, row]) => ({ ...row.unshared!, owner: memberName(row.ownerId) }));
+}
+
+export function renderKeychainManifest(input: KeychainManifestInput, now: number = Date.now()): string {
+  const groups = new Map<string, Set<string>>();
+  const ownerNames = new Map<string, string>();
+  const { execution, handles, memberName, rows, classify } = manifestRows(input, now);
+  const add = (ownerId: string, text: string): void => {
+    const owner = personKey(ownerId);
+    let rows = groups.get(owner);
+    if (!rows) groups.set(owner, (rows = new Set()));
+    rows.add(text);
+    if (!ownerNames.has(owner)) ownerNames.set(owner, memberName(ownerId));
+  };
+  for (const member of input.members) {
     const registered = new Set((input.entriesByOwner.get(member.id) ?? []).map((c) => c.service.toLowerCase()));
     for (const service of input.detectedByOwner?.get(member.id) ?? [])
       if (!registered.has(service.toLowerCase()))
         add(member.id, `- ${service} — detected on their computer, NOT registered or grantable`);
   }
-  for (const [credentialId, { ownerId, line, connector }] of rows) {
-    const shown = handles(credentialId);
-    if (shown) add(ownerId, `- ${shown} — ${credentialLineText(line)}`);
-    else if (connector && line.expired && !handleNames.has(connector)) add(ownerId, `- ${credentialLineText(line)}`);
+  let unshared = 0;
+  for (const [credentialId, row] of rows) {
+    const kind = classify(credentialId, row);
+    if (kind === "shown") add(row.ownerId, `- ${handles(credentialId)} — ${credentialLineText(row.line)}`);
+    else if (kind === "expired") add(row.ownerId, `- ${credentialLineText(row.line)}`);
+    else if (kind === "unshared") unshared++;
   }
   for (const entry of execution)
     if (!entry.credentialId || !rows.has(entry.credentialId))
@@ -1956,6 +2060,10 @@ export function renderKeychainManifest(input: KeychainManifestInput, now: number
   );
   for (const owner of owners) lines.push(`### ${ownerNames.get(owner)}`, ...[...(groups.get(owner) ?? [])].sort());
   if (!owners.length) lines.push("No credentials available.");
+  if (unshared)
+    lines.push(
+      `${unshared} ${unshared === 1 ? "credential" : "credentials"} owned by people here ${unshared === 1 ? "isn't" : "aren't"} shared with this conversation — \`GET /v1/keychain/unshared\` lists them; ask for access (request-access skill) rather than assuming one is missing.`,
+    );
   return lines.join("\n");
 }
 
