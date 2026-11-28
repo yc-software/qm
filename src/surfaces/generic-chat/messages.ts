@@ -3,7 +3,6 @@ import type { IngestEvent } from "../../surface-cache/types.ts";
 import type { SurfaceAction } from "../contract.ts";
 import type { GenericChatClient } from "./client.ts";
 import {
-  GENERIC_CHAT,
   chatContainer,
   findMessage,
   genericChatAction,
@@ -20,19 +19,20 @@ export interface GenericChatMessages {
   now?: () => number;
 }
 
-type GenericChatWhere = Pick<GenericChatRef, "account" | "kind" | "chat">;
+type GenericChatWhere = Pick<GenericChatRef, "surface" | "account" | "kind" | "chat" | "thread">;
 
 function ownPost(deps: GenericChatMessages, container: string, messageId: string) {
   return findMessage(
     { readMessages: (target, opts) => deps.app.readSurfaceMessages(target, opts) },
+    deps.client.surface,
     container,
     messageId,
     { self: true, includeDeleted: true },
   );
 }
 
-function ownEvent(container: string, ts: string, createdAt: number): IngestEvent {
-  return { surface: GENERIC_CHAT, container, ts, self: true, bot: true, handled: true, createdAt };
+function ownEvent(surface: string, container: string, ts: string, createdAt: number): IngestEvent {
+  return { surface, container, ts, self: true, bot: true, handled: true, createdAt };
 }
 
 async function recordChange(
@@ -44,7 +44,10 @@ async function recordChange(
   const container = chatContainer(where);
   const own = await ownPost(deps, container, messageId);
   if (own)
-    await deps.app.ingestSurfaceEvents([{ ...ownEvent(container, own.ts, own.createdAt), ...change }], GENERIC_CHAT);
+    await deps.app.ingestSurfaceEvents(
+      [{ ...ownEvent(deps.client.surface, container, own.ts, own.createdAt), ...change }],
+      deps.client.surface,
+    );
 }
 
 export async function postGenericChatMessage(
@@ -58,7 +61,7 @@ export async function postGenericChatMessage(
     recipientUserId?: string;
   },
 ): Promise<string | undefined> {
-  const parsed = await deps.client.call(where.account, "/agent_app/messages", {
+  const parsed = await deps.client.post(where.account, {
     client_message_id: message.idempotencyKey,
     chat_id: where.chat,
     ...(where.thread && !message.recipientUserId ? { thread_id: where.thread } : {}),
@@ -76,8 +79,15 @@ export async function postGenericChatMessage(
   const ts = genericChatTs(new Date(at).toISOString(), messageId);
   if (message.recipientUserId) return ts;
   await deps.app.ingestSurfaceEvents(
-    [{ ...ownEvent(container, ts, at), sub: where.thread ?? null, authorId: SELF_AUTHOR, text: message.text }],
-    GENERIC_CHAT,
+    [
+      {
+        ...ownEvent(deps.client.surface, container, ts, at),
+        sub: where.thread ?? null,
+        authorId: SELF_AUTHOR,
+        text: message.text,
+      },
+    ],
+    deps.client.surface,
   );
   return ts;
 }
@@ -90,9 +100,10 @@ export async function editGenericChatMessage(
   actions?: readonly SurfaceAction[],
 ): Promise<void> {
   const messageId = genericChatMessageId(ref);
-  await deps.client.call(where.account, "/agent_app/messages/update", {
+  await deps.client.update(where.account, {
     chat_id: where.chat,
     message_id: messageId,
+    ...(where.thread ? { thread_id: where.thread } : {}),
     body: text,
     ...(actions ? { actions: actions.map(genericChatAction) } : {}),
   });
@@ -105,7 +116,7 @@ export async function deleteGenericChatMessage(
   ref: string,
 ): Promise<void> {
   const messageId = genericChatMessageId(ref);
-  await deps.client.call(where.account, "/agent_app/messages/delete", { chat_id: where.chat, message_id: messageId });
+  await deps.client.delete(where.account, { chat_id: where.chat, message_id: messageId });
   await recordChange(deps, where, messageId, { deleted: true });
 }
 
@@ -114,7 +125,7 @@ export async function setGenericChatTyping(
   where: Pick<GenericChatRef, "account" | "chat" | "thread">,
   on: boolean,
 ): Promise<void> {
-  await client.call(where.account, "/agent_app/typing", {
+  await client.typing(where.account, {
     chat_id: where.chat,
     ...(where.thread ? { thread_id: where.thread } : {}),
     typing: on,

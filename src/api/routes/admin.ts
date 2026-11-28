@@ -63,6 +63,7 @@ import {
   managedSlackEvent,
   managedSlackRequest,
 } from "./admin/slack-installation.ts";
+import { deleteTeams, getTeams, getTeamsAppPackage, putTeams } from "./admin/teams.ts";
 import { deleteModelProvider, getModelProviders, putModelProvider } from "./admin/model-providers.ts";
 import { deleteCustomProvider, getCustomProviders, putCustomProvider } from "./admin/custom-providers.ts";
 import { deleteMcpServer, getMcpServers, putMcpServer } from "./admin/mcp-servers.ts";
@@ -180,6 +181,16 @@ const routes: Route<ApiCtx>[] = [
       auth: "either",
       admin: { owner: true },
       handle: deleteSlackConfigToken,
+    },
+    { method: "GET", path: "/v1/admin/teams", auth: "either", admin: { owner: true }, handle: getTeams },
+    { method: "PUT", path: "/v1/admin/teams", auth: "either", admin: { owner: true }, handle: putTeams },
+    { method: "DELETE", path: "/v1/admin/teams", auth: "either", admin: { owner: true }, handle: deleteTeams },
+    {
+      method: "GET",
+      path: "/v1/admin/teams/app-package",
+      auth: "either",
+      admin: { owner: true },
+      handle: getTeamsAppPackage,
     },
     {
       method: "GET",

@@ -1,3 +1,4 @@
+import { NO_FILES } from "../core/orchestrator/attach-tool.ts";
 import type { Tenant } from "../tenants/context.ts";
 import { isSessionTurn } from "../core/turn-origin.ts";
 import type {
@@ -393,6 +394,8 @@ export function createSurfaceToolDeps(ctx: SurfaceToolsContext): SurfaceToolDeps
       }
       if (files?.length && textOnly(destination))
         return { ok: false, message: "This conversation takes text messages only; nothing was sent." };
+      if (files?.length && deps.surfaces.get(destination.type)?.capabilities.files === false)
+        return { ok: false, message: NO_FILES };
       const f = await resolveFiles(files, sandboxId);
       if (!f.ok) return { ok: false, message: f.message };
       if (transcript)

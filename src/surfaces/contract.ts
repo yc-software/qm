@@ -56,6 +56,7 @@ export interface SurfaceCapabilities {
   nativeActor: boolean;
   externalParticipants: boolean;
   textOnly: boolean;
+  files: boolean;
 }
 
 export const NON_WEB_PATHS = "skills' non-web paths apply, such as an ordinary authorization link";

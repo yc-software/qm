@@ -48,3 +48,22 @@ test("self-connect carries the signed portal identity that core requires under r
   assert.equal(r.status, 302);
   assert.equal(r.headers.get("location"), "https://identity.provider.test/authorize?x=1");
 });
+
+test("sign-in auto-connect runs once per person in a browser, so a later disconnect sticks", async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const session = seal(
+    { k: "session", sub: "eve@acme", org: "acme", iat: now, exp: now + 3600 },
+    deriveKey(sessionSecret, "portal.session.v1"),
+  );
+  const auto = (marker = "") =>
+    fetch(`${base}/connect/microsoft/self-connect?auto=1&returnTo=%2Fchat`, {
+      headers: { cookie: `portal_session=${encodeURIComponent(session)}${marker}` },
+      redirect: "manual",
+    });
+  const first = await auto();
+  assert.equal(first.headers.get("location"), "https://identity.provider.test/authorize?x=1");
+  const marker = /portal_auto_connect=([^;]+)/.exec(first.headers.getSetCookie().join("\n"))?.[1];
+  assert.ok(marker);
+  const again = await auto(`; portal_auto_connect=${marker}`);
+  assert.equal(again.headers.get("location"), "/chat");
+});

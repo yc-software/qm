@@ -6,7 +6,6 @@ import type { Destination, TurnResult } from "../../types.ts";
 
 import { AWAITING_APPROVAL } from "../approval-cards.ts";
 import { drivenLive } from "../turn-flow.ts";
-import { GENERIC_CHAT } from "./protocol.ts";
 
 function noticeText(result: Partial<TurnResult>, cards = false): string | undefined {
   if (result.status === "pending_approval")
@@ -16,9 +15,9 @@ function noticeText(result: Partial<TurnResult>, cards = false): string | undefi
   return undefined;
 }
 
-export function genericChatRunNotice(run: Run): string | undefined {
+export function genericChatRunNotice(surfaces: ReadonlySet<string>, run: Run): string | undefined {
   if (
-    run.request.surface !== GENERIC_CHAT ||
+    !surfaces.has(run.request.surface ?? "") ||
     run.request.origin.kind !== "human" ||
     drivenLive(run.request) ||
     !run.result

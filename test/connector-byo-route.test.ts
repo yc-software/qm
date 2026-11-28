@@ -211,7 +211,7 @@ test("the catalog endpoint exposes per-provider setup guidance (no secrets)", as
       catalog: Array<{ provider: string; setupGuide: { url: string; steps: string[] }; consentMode: string }>;
     };
     const names = catalog.map((c) => c.provider).sort();
-    assert.deepEqual(names, ["dropbox", "github", "google", "linear", "notion", "slack", "x", "zoom"]);
+    assert.deepEqual(names, ["dropbox", "github", "google", "linear", "microsoft", "notion", "slack", "x", "zoom"]);
     const google = catalog.find((c) => c.provider === "google")!;
     assert.ok(google.setupGuide.steps.length >= 3);
     assert.match(google.setupGuide.url, /^https:\/\//);

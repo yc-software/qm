@@ -264,6 +264,15 @@ The OIDC client is generic, so Google is pure config. One-time setup:
    **once**: `scripts/migrate-principals-to-email.mjs` (dry-run by default; see its header).
    Update the core's `ADMIN_GRANTS` to emails in the same change.
 
+### Microsoft Entra ID sign-in
+
+Microsoft is config too, with one difference: Microsoft's userinfo endpoint never reports
+`email_verified`. For a `login.microsoftonline.com` issuer the portal counts the email as verified
+only when the ID token carries the optional `xms_edov` claim (the email's domain is owned by a
+verified tenant) for that same address, so add the optional ID token claims `email` and `xms_edov`
+to the app registration. A Teams organization reuses its bot's app registration for sign-in; the
+full setup, including the endpoint values, is in [`docs/teams.md`](../../docs/teams.md).
+
 Secrets: `OIDC_CLIENT_SECRET`, `PORTAL_SESSION_SECRET`, and `PORTAL_IDENTITY_SECRET`; each must be
 distinct from `CORE_SIGNING_SECRET`.
 

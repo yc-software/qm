@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
 import type { App } from "../src/api/app-types.ts";
-import { createGenericChatInbound } from "../src/surfaces/generic-chat/inbound.ts";
+import { createGenericChatInbound, signedGenericChatHandler } from "../src/surfaces/generic-chat/inbound.ts";
 import { createGenericChatClient } from "../src/surfaces/generic-chat/client.ts";
 import { genericChatSender } from "../src/surfaces/generic-chat/outbound.ts";
 import { genericChatAccount, signGenericChat } from "../src/surfaces/generic-chat/protocol.ts";
@@ -46,7 +46,6 @@ describeTwoTenants("generic chat on a shared host", (db) => {
     ]);
   const inbound = createGenericChatInbound({
     registerGroup: async () => {},
-    secret,
     accountTenant,
     client,
     stageBlob,
@@ -58,6 +57,7 @@ describeTwoTenants("generic chat on a shared host", (db) => {
     guestReply: unansweredReply,
     onAction: async () => {},
   });
+  const handle = signedGenericChatHandler(secret, inbound.dispatch);
   const blobs = { readBlob: async () => Buffer.alloc(0), readFileArtifact: async () => Buffer.alloc(0) };
   const send = genericChatSender({ app, accountTenant, client, blobs });
 
@@ -67,7 +67,7 @@ describeTwoTenants("generic chat on a shared host", (db) => {
     const message = { id: "1001", user: { id: "5" }, body: "hello there", created_at: "2026-11-02T20:00:00Z" };
     const raw = JSON.stringify({ event_id: "ev-1", type: "message.created", account, origin, chat, message });
     const ts = String(Math.floor(Date.now() / 1000));
-    return (await inbound.handle(ts, signGenericChat(secret, ts, raw), raw)).status;
+    return (await handle(ts, signGenericChat(secret, ts, raw), raw)).status;
   }
 
   function post(account: string) {

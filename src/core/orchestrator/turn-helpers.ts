@@ -49,6 +49,7 @@ const CONNECTOR_SKILLS: Readonly<Record<string, { provider: string; appConnectio
   "google-drive-sheets": { provider: "google", appConnection: true },
   "google-workspace": { provider: "google", appConnection: true },
   linear: { provider: "linear", appConnection: true },
+  "microsoft-365": { provider: "microsoft" },
   "morning-digest": { provider: "x" },
   "slack-drafts": { provider: "slack" },
   x: { provider: "x" },

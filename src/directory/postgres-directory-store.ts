@@ -16,6 +16,7 @@ import {
 import { createDirectorySync } from "./directory-sync.ts";
 import { withTenant } from "../tenants/context.ts";
 import { APP_HOSTS_KEY } from "../tenants/app-handle.ts";
+import { loadTenantSettings } from "../tenants/settings.ts";
 
 function memberRow(r: Record<string, unknown>): DirectoryMember {
   return {
@@ -239,6 +240,18 @@ export function createPostgresDirectoryStore(connectionString: string): Director
     },
 
     tenantForAppHost: (label) => tenantFrom("qm_tenant_for_app_host", label),
+
+    async setTeamsBot(tenant, bot) {
+      const db = pg.forTenant(tenant);
+      try {
+        await db.q("SELECT qm_set_tenant_teams($1::jsonb)", [bot ? JSON.stringify(bot) : null]);
+      } catch (error) {
+        if ((error as { code?: string }).code === "23505") return "taken";
+        throw error;
+      }
+      await loadTenantSettings(db);
+      return "ok";
+    },
 
     async setAppHandle(handle) {
       try {

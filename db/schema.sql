@@ -1669,6 +1669,15 @@ CREATE FUNCTION public.qm_set_tenant_handle(handle text) RETURNS void
     UPDATE tenants SET settings = jsonb_set(settings, '{handle}', to_jsonb(handle)) WHERE id = qm_bound_tenant();
   END $$;
 
+CREATE FUNCTION public.qm_set_tenant_teams(teams jsonb) RETURNS void
+    LANGUAGE sql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $$
+    UPDATE tenants SET settings = CASE WHEN teams IS NULL THEN settings - 'teams'
+      ELSE settings || jsonb_build_object('teams', teams) END
+    WHERE id = qm_bound_tenant()
+  $$;
+
 CREATE FUNCTION public.qm_sync_app_host() RETURNS trigger
     LANGUAGE plpgsql SECURITY DEFINER
     SET search_path TO 'public', 'pg_temp'
@@ -1777,6 +1786,11 @@ CREATE FUNCTION public.qm_tenant_for_slack_team(key text) RETURNS uuid
     LANGUAGE sql STABLE SECURITY DEFINER
     SET search_path TO 'public', 'pg_temp'
     AS $_$ SELECT (array_agg(DISTINCT tenant_id))[1] FROM (SELECT tenant_id FROM slack_installation WHERE json->>'teamId' = $1 AND json->>'disabled' IS DISTINCT FROM 'true') found HAVING count(DISTINCT tenant_id) = 1 $_$;
+
+CREATE FUNCTION public.qm_tenant_for_teams_tenant(key text) RETURNS uuid
+    LANGUAGE sql STABLE SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $_$ SELECT id FROM tenants WHERE settings->'teams'->>'tenantId' = $1 AND id IN (SELECT qm_serving_tenants()) $_$;
 
 CREATE FUNCTION public.qm_tenant_for_webhook(key text) RETURNS uuid
     LANGUAGE sql STABLE SECURITY DEFINER
@@ -4236,6 +4250,8 @@ CREATE UNIQUE INDEX tenants_app_handle ON public.tenants USING btree (public.qm_
 
 CREATE UNIQUE INDEX tenants_partner_chat_account ON public.tenants USING btree (((settings ->> 'partnerChatAccount'::text)));
 
+CREATE UNIQUE INDEX tenants_teams_tenant ON public.tenants USING btree ((((settings -> 'teams'::text) ->> 'tenantId'::text)));
+
 CREATE INDEX webhooks_inbound_id ON public.webhooks USING btree (id);
 
 CREATE INDEX webhooks_ownerscopeid_fold ON public.webhooks USING hash (lower((json ->> 'ownerScopeId'::text)));
@@ -5439,3 +5455,4 @@ REVOKE ALL ON FUNCTION public.qm_self_serve_tenant(issuer text, org text, brand 
 
 INSERT INTO public.tenants DEFAULT VALUES;
 INSERT INTO public.qm_schema_migrations(id, checksum) VALUES ('migrations/0001-mark-earlier-links', 'a6a108bdf7d224393a5fa175ff5416e14e22303e3d76503d8559ac96f145425f');
+INSERT INTO public.qm_schema_migrations(id, checksum) VALUES ('migrations/0002-teams-tenant', 'c7d5347780196c2e8e2d87d04d42c11fa9e128cf93caf4a2b0e2f524c9e58dc4');

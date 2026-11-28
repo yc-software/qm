@@ -4,7 +4,17 @@ import { webFetch } from "../core-bridge.ts";
 export const ADMIN_SECTIONS = [
   {
     label: "Organization",
-    views: ["governance", "models", "credentials", "connectors", "slack-settings", "customize", "users", "spend"],
+    views: [
+      "governance",
+      "models",
+      "credentials",
+      "connectors",
+      "slack-settings",
+      "teams-settings",
+      "customize",
+      "users",
+      "spend",
+    ],
   },
   { label: "Logs", views: ["history", "judgments", "errors", "audit", "egress"] },
   { label: "Artifacts", views: ["files", "skills", "memory", "apps", "crons"] },
@@ -44,6 +54,7 @@ export const VIEW_TITLE: Record<string, string> = {
   crons: "Crons",
   apps: "Apps",
   "slack-settings": "Slack",
+  "teams-settings": "Microsoft Teams",
   judgments: "Judgments",
   ackemoji: "Ack emoji",
 };
@@ -103,6 +114,7 @@ const pages = {
   customize: () => import("./settings.ts"),
   connectors: () => import("./integrations.ts"),
   "slack-settings": () => import("./integrations.ts"),
+  "teams-settings": () => import("./teams.ts"),
   users: () => import("./users.ts"),
   user: () => import("./users.ts"),
   keychain: () => import("./users.ts"),

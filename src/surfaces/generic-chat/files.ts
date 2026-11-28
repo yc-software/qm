@@ -36,7 +36,7 @@ async function fetchGenericChatFile(
   fileId: string,
   send: AddressFetch = publicFetch,
 ): Promise<Uint8Array> {
-  const { url } = downloadSchema.parse(await client.call(account, "/agent_app/files/url", { file_id: fileId }));
+  const { url } = downloadSchema.parse(await client.fileUrl(account, { file_id: fileId }));
   return responseBytes(await send(url, { signal: AbortSignal.timeout(TRANSFER_TIMEOUT_MS) }));
 }
 
@@ -70,7 +70,7 @@ async function uploadFiles(
   const fileIds: string[] = [];
   for (const { name, mimetype, file } of await readOutgoingFiles(attachments, deps.blobs)) {
     const { file_id, upload } = uploadSchema.parse(
-      await deps.client.call(where.account, "/agent_app/files/upload", {
+      await deps.client.upload(where.account, {
         chat_id: where.chat,
         name,
         content_type: mimetype,

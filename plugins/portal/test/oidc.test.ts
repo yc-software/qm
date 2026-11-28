@@ -8,6 +8,7 @@ import {
   exchangeCode,
   fetchUserinfo,
   hostedDomainHint,
+  issuerUserinfo,
   resolvePrincipal,
   verifyIdToken,
   type OidcConfig,
@@ -340,4 +341,15 @@ test("resolvePrincipal preserves deployment-only admission and fails closed for 
     })),
     { sub: "guest@partner.test", appOnly: true },
   );
+});
+
+test("a Microsoft sign-in counts its email as verified only when the token vouches for that same address", () => {
+  const microsoft = { issuer: "https://login.microsoftonline.com/0f2e7c64-5b1a-4d3e-9c8b-2a6f1e4d7b90/v2.0" };
+  const info = { sub: "s", email: "Ada@Contoso.com" };
+  const verified = (cfg: { issuer: string }, claims: Record<string, unknown>) =>
+    issuerUserinfo(cfg, claims, info).email_verified;
+  assert.equal(verified(microsoft, { email: "ada@contoso.com", xms_edov: true }), true);
+  assert.equal(verified(microsoft, { email: "ada@contoso.com" }), false);
+  assert.equal(verified(microsoft, { email: "eve@contoso.com", xms_edov: true }), false);
+  assert.equal(verified({ issuer: "https://slack.com" }, { email: "ada@contoso.com", xms_edov: true }), undefined);
 });

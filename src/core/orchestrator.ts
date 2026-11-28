@@ -1740,6 +1740,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           blobTransfer,
           fileRegistration,
           ...(capabilities?.textOnly ? { textOnly: true } : {}),
+          ...(capabilities && !capabilities.files ? { noFiles: true } : {}),
         });
         if (input.surfaceTools && input.origin.kind === "automation" && input.origin.destination && !surfaceToolDeps)
           console.error(

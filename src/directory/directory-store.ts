@@ -1,3 +1,4 @@
+import type { TeamsBot } from "../surfaces/teams/ids.ts";
 import type { Tenant } from "../tenants/context.ts";
 import type { PrincipalType } from "../types.ts";
 
@@ -103,6 +104,7 @@ export interface DirectoryStore {
   tenantsForEmail?(email: string): Promise<SignInTenant[]>;
   tenantsForPrincipal?(principal: string): Promise<SignInTenant[]>;
   setAppHandle?(handle: string): Promise<"ok" | "taken" | "app_taken">;
+  setTeamsBot?(tenant: Tenant, bot: TeamsBot | null): Promise<"ok" | "taken">;
   tenantForAppHost?(label: string): Promise<string | undefined>;
 }
 

@@ -1,3 +1,4 @@
+import type { INetworkModule } from "@azure/msal-node";
 import type { Core } from "../wiring.ts";
 import type { WebEvents } from "./routes/web-events.ts";
 import type { WebShell } from "../web/shell.ts";
@@ -25,6 +26,7 @@ export interface ServerDeps extends Core {
   control: ControlService;
   managedSlack?: ManagedSlack;
   slackInstallationFetch?: typeof fetch;
+  teamsNetworkClient?: INetworkModule;
   slackWebClient?: SlackWebClientFactory;
   slackInstallationSocketAppId?: SlackSocketAppIdReader;
   slackEnvironmentState?: "absent" | "configured" | "partial";

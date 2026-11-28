@@ -3,7 +3,7 @@ import test from "node:test";
 import { createApprovalStore as createRoutedApprovalStore } from "../src/surfaces/approval-store.ts";
 import { slackApprovalCardRoute } from "../src/slack/approval-cards.ts";
 import { genericChatApprovalCardRoute } from "../src/surfaces/generic-chat/approvals.ts";
-import { GENERIC_CHAT } from "../src/surfaces/generic-chat/protocol.ts";
+import { PARTNER_CHAT } from "../src/surfaces/generic-chat/protocol.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
 import { slackSurfaceOrigin } from "../src/surfaces/slack/adapter.ts";
 import type { PendingApprovalRecord } from "../src/types.ts";
@@ -152,7 +152,7 @@ test("automation approvals route through the fallback route and generic-chat des
     testMap<PendingApprovalRecord>(),
     deliveries,
     { slack: slackApprovalCardRoute },
-    (req) => genericChatApprovalCardRoute(req) ?? slackApprovalCardRoute(req),
+    (req) => genericChatApprovalCardRoute(PARTNER_CHAT, req) ?? slackApprovalCardRoute(req),
   );
   const auto = {
     ...record("cron:c1:1"),
@@ -167,7 +167,7 @@ test("automation approvals route through the fallback route and generic-chat des
     ...auto,
     request: {
       ...auto.request,
-      origin: { kind: "automation" as const, destination: { type: GENERIC_CHAT, target: "acc:room" } },
+      origin: { kind: "automation" as const, destination: { type: PARTNER_CHAT, target: "acc:room" } },
     },
   });
   assert.deepEqual(
@@ -175,7 +175,7 @@ test("automation approvals route through the fallback route and generic-chat des
     [["a-cron", "U1"]],
   );
   assert.deepEqual(
-    (await deliveries.pending(GENERIC_CHAT)).map((d) => [d.destination.commandApprovalId, d.destination.target]),
+    (await deliveries.pending(PARTNER_CHAT)).map((d) => [d.destination.commandApprovalId, d.destination.target]),
     [["a-chat", "acc:room"]],
   );
 });

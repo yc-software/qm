@@ -14,6 +14,8 @@ const GENERIC_CHAT_HEADERS = [
   "x-agent-app-signature",
 ] as const;
 
+const TEAMS_HEADERS = ["authorization", "content-type", "content-length"] as const;
+
 const SLACK_EVENT_HEADERS = [
   ...FORWARD_WEBHOOK_HEADERS,
   "content-length",
@@ -33,6 +35,9 @@ export function matchPublicPassthrough(method: string, pathname: string): Public
   }
   if (pathname === "/v1/surfaces/generic-chat/events" && method === "POST") {
     return { headers: GENERIC_CHAT_HEADERS, forwardSearch: false };
+  }
+  if (pathname === "/v1/surfaces/teams/activities" && method === "POST") {
+    return { headers: TEAMS_HEADERS, forwardSearch: false };
   }
   if (method === "POST" && (pathname === "/slack/events" || /^\/slack\/events\/app\/[^/]+$/.test(pathname))) {
     return { headers: SLACK_EVENT_HEADERS, forwardSearch: true };

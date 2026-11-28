@@ -334,21 +334,24 @@ test("a pending onboarding load keeps an explicit keep-current-base-model choice
   dom.window.close();
 });
 
-test("Settings mounts onboarding with links to Slack and connector setup", async () => {
+test("Settings mounts onboarding with links to Slack, Teams and connector setup", async () => {
   const { mountPage } = await import("./fixture.ts");
   const page = await mountPage("/settings/onboarding", {
     "/model-registry": { templates: [], models: [] },
     "/model-providers": { providers: UNCONFIGURED_PROVIDERS, models: ANTHROPIC_MODELS },
     "/slack-installation": { configured: true, teamName: "Acme" },
+    "/teams": { configured: true, appId: "bot-1" },
     "/connector-catalog": { catalog: [{ provider: "github", configured: true }] },
     "/scopes/org:acme": { baseModel: "claude-opus-5" },
   });
   await page.settle();
   const doc = page.document;
   assert.equal(doc.querySelector("h1")!.textContent, "Onboarding");
+  assert.equal(doc.getElementById("onboarding-teams-summary")!.textContent, "Connected to bot bot-1.");
   assert.match(doc.getElementById("onboarding-oauth-summary")!.textContent!, /^Github available/);
   const hrefs = [...doc.querySelectorAll<HTMLAnchorElement>(".setup-step a")].map((a) => a.getAttribute("href"));
   assert.ok(hrefs.includes("/settings/slack-settings"));
+  assert.ok(hrefs.includes("/settings/teams-settings"));
   assert.ok(hrefs.includes("/settings/connectors"));
   page.close();
 });

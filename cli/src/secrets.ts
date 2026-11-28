@@ -297,6 +297,12 @@ export const FIRST_PARTY_SECRET_SPECS: readonly SecretSpec[] = [
     description: "Dropbox OAuth client secret.",
   },
   {
+    name: "MICROSOFT_OAUTH_CLIENT_SECRET",
+    service: "core",
+    required: { when: { kind: "env-present", service: "core", name: "MICROSOFT_OAUTH_CLIENT_ID" } },
+    description: "Microsoft Entra app client secret for the Microsoft 365 connector.",
+  },
+  {
     name: "LINEAR_OAUTH_CLIENT_SECRET",
     service: "core",
     required: { when: { kind: "env-present", service: "core", name: "LINEAR_OAUTH_CLIENT_ID" } },

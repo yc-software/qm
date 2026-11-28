@@ -19,7 +19,7 @@ import { createPostgresFileArtifactStore } from "../src/files/postgres-file-arti
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { testSurfaces } from "./support/single-process.ts";
 import { createDeliveryStore } from "../src/delivery/delivery-store.ts";
-import { createSurfaceRegistry } from "../src/surfaces/registry.ts";
+import { createSurfaceRegistry, surfaceToolPrompt } from "../src/surfaces/registry.ts";
 import { createGenericChatSurface } from "../src/surfaces/generic-chat/adapter.ts";
 
 function fakeSandbox(files: Record<string, Uint8Array>): Sandbox {
@@ -450,7 +450,15 @@ test("a text-only surface refuses reactions, deletes, file posts and attachments
   const tools = createSurfaceToolDeps({
     deps: {
       surfaces: createSurfaceRegistry({
-        surfaces: [createGenericChatSurface({ deliveries, surfaceCache: { readMessages: async () => [] } })],
+        surfaces: [
+          createGenericChatSurface({
+            kind: "partner-chat",
+            label: "Chat",
+            deliveries,
+            surfaceCache: { readMessages: async () => [] },
+            files: true,
+          }),
+        ],
       }),
       deliveries,
     },
@@ -466,6 +474,30 @@ test("a text-only surface refuses reactions, deletes, file posts and attachments
   assert.equal((await tools.post("see attached", undefined, ["a.txt"])).ok, false);
   assert.equal((await createAttachStaging({ textOnly: true } as never).attach(["a.txt"])).ok, false);
   assert.deepEqual(await deliveries.pending("partner-chat"), []);
+});
+
+test("a host that can't carry files refuses file posts and attachments even on a live-reply turn", async () => {
+  const deliveries = createDeliveryStore();
+  const teams = createGenericChatSurface({
+    kind: "teams",
+    label: "Microsoft Teams",
+    deliveries,
+    surfaceCache: { readMessages: async () => [] },
+    files: false,
+  });
+  const tools = createSurfaceToolDeps({
+    deps: { surfaces: createSurfaceRegistry({ surfaces: [teams] }), deliveries },
+    input: { surfaceTools: true, surface: "teams", liveReplies: true },
+    defaultDestination: { type: "teams", target: "teams:t1:group:c1:1002" },
+    strictReadOnly: false,
+    postProvenance: () => ({}),
+    postKeys: turnPostKeys("run-test"),
+    spine: { surfaceOutboundCount: 0, crossConversationPosts: 0 },
+  } as unknown as SurfaceToolsContext)!;
+  assert.match((await tools.post("see attached", undefined, ["a.txt"])).message ?? "", /can't carry file attachments/);
+  assert.equal((await createAttachStaging({ noFiles: true } as never).attach(["a.txt"])).ok, false);
+  assert.deepEqual(surfaceToolPrompt(teams, { surface: "teams", liveReplies: true }).noFiles, true);
+  assert.deepEqual(await deliveries.pending("teams"), []);
 });
 
 test("a post the agent sends to another channel keeps the conversation's persona", async () => {

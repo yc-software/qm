@@ -112,6 +112,7 @@ import { createPostgresLeaderLease, type LeaderLease } from "./persistence/leade
 import { createPostgresAdvisoryLock, type AdvisoryLock } from "./persistence/advisory-lock.ts";
 import type {
   CommandApprovalGrant,
+  Destination,
   PendingApprovalRecord,
   ScopeId,
   Session,
@@ -401,13 +402,19 @@ import { createSlackInstallationStore, type SlackInstallationStore } from "./sur
 import { createSurfaceRegistry } from "./surfaces/registry.ts";
 import { createSlackSurface } from "./surfaces/slack/adapter.ts";
 import { createGenericChatSurface } from "./surfaces/generic-chat/adapter.ts";
-import { createGenericChatInbound } from "./surfaces/generic-chat/inbound.ts";
-import { GENERIC_CHAT_CLAIM_MS, createGenericChatClient } from "./surfaces/generic-chat/client.ts";
+import { createGenericChatInbound, signedGenericChatHandler } from "./surfaces/generic-chat/inbound.ts";
+import {
+  GENERIC_CHAT_CLAIM_MS,
+  createGenericChatClient,
+  type GenericChatClient,
+} from "./surfaces/generic-chat/client.ts";
 import { genericChatSender } from "./surfaces/generic-chat/outbound.ts";
 import { createGenericChatTurns } from "./surfaces/generic-chat/turns.ts";
 import { createGenericChatApprovals, genericChatApprovalCardRoute } from "./surfaces/generic-chat/approvals.ts";
 import { createGenericChatNotices, genericChatRunNotice } from "./surfaces/generic-chat/notices.ts";
-import { GENERIC_CHAT, genericChatOrganizationBearer } from "./surfaces/generic-chat/protocol.ts";
+import { genericChatOrganizationBearer } from "./surfaces/generic-chat/protocol.ts";
+import { createTeamsClient } from "./surfaces/teams/client.ts";
+import { createTeamsInbound } from "./surfaces/teams/inbound.ts";
 import { type probeModel, type ProviderKeys } from "./model/model-runtime.ts";
 
 export interface Runtime {
@@ -474,7 +481,8 @@ export interface Core extends ReturnType<typeof coreSettings>, AppDeps {
   scheduler: Scheduler;
   loops: LoopServiceDeps;
   webhookReceiver: WebhookReceiver;
-  genericChatEvents?: ReturnType<typeof createGenericChatInbound>["handle"];
+  genericChatEvents?: ReturnType<typeof signedGenericChatHandler>;
+  teamsActivities: ReturnType<typeof createTeamsInbound>["handle"];
   baseModelDefault: string;
   loopIngress: LoopIngressService;
   budget: BudgetTracker | undefined;
@@ -1998,13 +2006,50 @@ export function buildApp(
     artifactMap<Webhook>("webhooks", ["ownerScopeId"]),
     artifactMap<WebhookHistory>("webhook_history"),
   );
+  const partnerChat = config.genericChat ? createGenericChatClient(config.genericChat) : undefined;
+  const partnerIssuer = config.genericChat?.issuer;
+  const teamsChat = createTeamsClient();
+  type AccountTenant = (account: string) => Promise<string | undefined>;
+  const chatHosts: { client: GenericChatClient; accountTenant: AccountTenant; label: string; mark?: string }[] = [
+    ...(partnerChat && partnerIssuer && config.genericChat
+      ? [
+          {
+            client: partnerChat,
+            accountTenant: (account: string) => sessions.tenantLookup.externalOrgTenant(partnerIssuer, account),
+            label: config.genericChat.label ?? "Generic chat",
+            ...(config.genericChat.mark ? { mark: config.genericChat.mark } : {}),
+          },
+        ]
+      : []),
+    {
+      client: teamsChat,
+      accountTenant: (account: string) => sessions.tenantLookup.tenantFor("teams_tenant", account),
+      label: "Microsoft Teams",
+    },
+  ];
+  const chatHostKinds = new Set(chatHosts.map(({ client }) => client.surface));
+  const chatApprovalCardRoute = (request: TurnRequest): Destination | undefined => {
+    for (const { client } of chatHosts) {
+      const route = genericChatApprovalCardRoute(client.surface, request);
+      if (route) return route;
+    }
+    return undefined;
+  };
   const approvals = createApprovalStore(
     artifactMap<PendingApprovalRecord>("approvals", ["sessionId", "cardTo"]),
     deliveries,
-    { slack: slackApprovalCardRoute, [GENERIC_CHAT]: genericChatApprovalCardRoute },
+    {
+      slack: slackApprovalCardRoute,
+      ...Object.fromEntries(
+        chatHosts.map(({ client }) => [
+          client.surface,
+          (request: TurnRequest) => genericChatApprovalCardRoute(client.surface, request),
+        ]),
+      ),
+    },
     async (request, sessionId) => {
-      const generic = genericChatApprovalCardRoute(request);
-      if (generic) return generic;
+      const chat = chatApprovalCardRoute(request);
+      if (chat) return chat;
       if (request.origin?.kind === "automation" && request.origin.destination?.type === "web") return undefined;
       const home = (await sessions.get(sessionId))?.surface;
       if (home === "web" || home === "swarm") return undefined;
@@ -2117,16 +2162,16 @@ export function buildApp(
   const surfaces = createSurfaceRegistry({
     surfaces: [
       createSlackSurface({ deliveries }),
-      ...(config.genericChat
-        ? [
-            createGenericChatSurface({
-              deliveries,
-              surfaceCache: { readMessages: (container, opts) => surfaceCache.readMessages(container, opts) },
-              ...(config.genericChat.label ? { label: config.genericChat.label } : {}),
-              ...(config.genericChat.mark ? { mark: config.genericChat.mark } : {}),
-            }),
-          ]
-        : []),
+      ...chatHosts.map(({ client, label, mark }) =>
+        createGenericChatSurface({
+          kind: client.surface,
+          deliveries,
+          surfaceCache: { readMessages: (container, opts) => surfaceCache.readMessages(container, opts) },
+          label,
+          files: client.files !== false,
+          ...(mark ? { mark } : {}),
+        }),
+      ),
     ],
   });
   const promptSnapshots = artifactMap<PromptSnapshot>("prompt_snapshots");
@@ -2224,12 +2269,8 @@ export function buildApp(
     ? (sessionId: string): string | undefined =>
         uuidSchema.safeParse(sessionId).success ? adminSessionUrl(recoveryAdminBase, sessionId) : undefined
     : undefined;
-  const runResultRecovery = wireRunResultDeliveries(
-    runs,
-    deliveries,
-    recoveryAdminUrlFor,
-    sessions,
-    genericChatRunNotice,
+  const runResultRecovery = wireRunResultDeliveries(runs, deliveries, recoveryAdminUrlFor, sessions, (run) =>
+    genericChatRunNotice(chatHostKinds, run),
   );
   const idempotency = createIdempotencyStore(artifactMap<IdempotencyRecord>("idempotency"));
   const gitSkillFetcher = createGitFetcher(
@@ -2510,63 +2551,57 @@ export function buildApp(
       afterId = batch.at(-1)!.id;
     }
   };
-  const genericChatNotices = config.genericChat ? createGenericChatNotices({ deliveries }) : null;
-  const genericChatClient = config.genericChat ? createGenericChatClient(config.genericChat) : null;
-  const genericChatIssuer = config.genericChat?.issuer;
-  const genericChatAccountTenant =
-    genericChatIssuer && ((account: string) => sessions.tenantLookup.externalOrgTenant(genericChatIssuer, account));
-  const genericChatTurns = genericChatClient
-    ? createGenericChatTurns({
+  const genericChatNotices = createGenericChatNotices({ deliveries });
+  const chatRuntimes = chatHosts.map(({ client, accountTenant }) => {
+    const turns = createGenericChatTurns({
+      app,
+      client,
+      blobs: slackCore,
+      runs,
+      turnStream,
+      pickAckEmoji: slackCore.pickAckEmoji,
+    });
+    const inbound = createGenericChatInbound({
+      accountTenant,
+      client,
+      stageBlob: slackCore.stageBlob,
+      app,
+      surfaceCache,
+      isInternalEmail: async (email, vouchedByHost) => {
+        if (!email.includes("@")) return false;
+        if (!vouchedByHost) return vouchedInternalEmail(email);
+        await identity.refresh();
+        return identity.isInternal(identity.classify(email, false, true));
+      },
+      unansweredReply: genericChatNotices.unanswered,
+      guestReply: genericChatNotices.guest,
+      turns,
+      registerGroup: (groupId, principalIds) => directory.upsertGroup(groupId, principalIds, client.surface),
+      onAction: createGenericChatApprovals({
+        client,
         app,
-        client: genericChatClient,
+        ...(keychainApprovals ? { keychainApprovals } : {}),
+      }).invoke,
+    });
+    const delivery = createDeliveryRelay(deliveries, {
+      type: client.surface,
+      send: genericChatSender({
+        accountTenant,
+        client,
         blobs: slackCore,
-        runs,
-        turnStream,
-        pickAckEmoji: slackCore.pickAckEmoji,
-      })
-    : null;
-  const genericChatInbound =
-    genericChatNotices && genericChatClient && genericChatTurns && genericChatAccountTenant && config.genericChat
-      ? createGenericChatInbound({
-          secret: config.genericChat.secret,
-          accountTenant: genericChatAccountTenant,
-          client: genericChatClient,
-          stageBlob: slackCore.stageBlob,
-          app,
-          surfaceCache,
-          isInternalEmail: async (email, vouchedByHost) => {
-            if (!email.includes("@")) return false;
-            if (!vouchedByHost) return vouchedInternalEmail(email);
-            await identity.refresh();
-            return identity.isInternal(identity.classify(email, false, true));
-          },
-          unansweredReply: genericChatNotices.unanswered,
-          guestReply: genericChatNotices.guest,
-          turns: genericChatTurns,
-          registerGroup: (groupId, principalIds) => directory.upsertGroup(groupId, principalIds, GENERIC_CHAT),
-          onAction: createGenericChatApprovals({
-            client: genericChatClient,
-            app,
-            ...(keychainApprovals ? { keychainApprovals } : {}),
-          }).invoke,
-        })
-      : null;
-  const genericChatDelivery =
-    genericChatClient && genericChatTurns && genericChatAccountTenant
-      ? createDeliveryRelay(deliveries, {
-          type: GENERIC_CHAT,
-          send: genericChatSender({
-            accountTenant: genericChatAccountTenant,
-            client: genericChatClient,
-            blobs: slackCore,
-            app,
-            ...(keychainApprovals ? { keychainApprovals } : {}),
-          }),
-          fail: (id, reason) => app.failDelivery(id, reason),
-          claimMs: GENERIC_CHAT_CLAIM_MS,
-          held: genericChatTurns.held,
-        })
-      : null;
+        app,
+        ...(keychainApprovals ? { keychainApprovals } : {}),
+      }),
+      fail: (id, reason) => app.failDelivery(id, reason),
+      claimMs: GENERIC_CHAT_CLAIM_MS,
+      held: turns.held,
+    });
+    return { client, inbound, delivery };
+  });
+  const inboundFor = (host: GenericChatClient | undefined) =>
+    chatRuntimes.find(({ client }) => client === host)?.inbound;
+  const partnerChatInbound = inboundFor(partnerChat);
+  const teamsInbound = createTeamsInbound({ client: teamsChat, app, dispatch: inboundFor(teamsChat)!.dispatch });
   const webTranscriptSweeper = createSweeper(() => deliveries.transcribeUndelivered("web"), 5_000, {
     label: "web transcripts",
   });
@@ -3009,7 +3044,7 @@ export function buildApp(
       runResultSweeper.start();
       approvalDeliverySweeper.start();
       webTranscriptSweeper.start();
-      genericChatDelivery?.start();
+      for (const { delivery } of chatRuntimes) delivery.start();
     };
     if (backgroundStopping)
       void backgroundClaimsStopping.then(startPeriodic).catch(swallowAs("wiring: periodic resume failed", undefined));
@@ -3047,7 +3082,7 @@ export function buildApp(
       runResultSweeper.stop(),
       approvalDeliverySweeper.stop(),
       webTranscriptSweeper.stop(),
-      genericChatDelivery?.stop(),
+      ...chatRuntimes.map(({ delivery }) => delivery.stop()),
       preemptionSweeper.stop(),
       worker.stopClaims(),
     ];
@@ -3150,7 +3185,10 @@ export function buildApp(
     scheduler,
     loops,
     webhookReceiver,
-    ...(genericChatInbound ? { genericChatEvents: genericChatInbound.handle } : {}),
+    ...(partnerChatInbound && config.genericChat
+      ? { genericChatEvents: signedGenericChatHandler(config.genericChat.secret, partnerChatInbound.dispatch) }
+      : {}),
+    teamsActivities: teamsInbound.handle,
     loopIngress,
     credentialUsage,
     egressAudit,

@@ -8,7 +8,7 @@ import { reactionDetectGuidance, reactionInstruction } from "../reactions.ts";
 import { createRunWaiter } from "../run-wait.ts";
 import { HANDOFF_INSTRUCTION, runSurfaceTurn, type SurfaceTurnBody } from "../turn-driver.ts";
 import { createTurnFlow, drivenLive, liveRunHoldsDelivery, runDeliveryId } from "../turn-flow.ts";
-import { GENERIC_CHAT, type GenericChatRef } from "./protocol.ts";
+import type { GenericChatRef } from "./protocol.ts";
 import { createGenericChatTransport, type GenericChatTransportDeps } from "./transport.ts";
 
 const ACK_PICKS = [...CURATED_ACK_EMOJI, ...DEFAULT_ACK_REACTIONS];
@@ -48,13 +48,17 @@ export function createGenericChatTurns(
     pickAckEmoji?: (text: string, candidates: readonly string[]) => Promise<string | undefined>;
   },
 ) {
+  const { surface, reactions } = deps.client;
+  const supported = (names: readonly string[]) => (reactions ? names.filter((n) => reactions.includes(n)) : names);
+  const acks = supported(DEFAULT_ACK_REACTIONS);
+  const picks = supported(ACK_PICKS);
   const flow = createTurnFlow(
     {
-      submitTurn: (body) => deps.app.turn({ ...body, surface: GENERIC_CHAT }),
+      submitTurn: (body) => deps.app.turn({ ...body, surface }),
       waitRun: createRunWaiter({ runs: deps.runs, turnStream: deps.turnStream, getRun: (id) => deps.app.getRun(id) }),
       ackRunDelivery: (runId) => deps.app.ackDeliveryByKey(`run:${runId}`),
     },
-    GENERIC_CHAT,
+    surface,
   );
   const reportEditRef = async (runId: string, editRef: string): Promise<void> => {
     if (!(await deps.app.setRunDeliveryState(runId, { editRef }))) throw new Error(`run ${runId} not found`);
@@ -71,15 +75,15 @@ export function createGenericChatTurns(
     const label = `chat=${where.chat} at=${turn.trigger}`;
     const transport = createGenericChatTransport(deps, turn);
     return new Promise<void>((resolve, reject) => {
-      const done = runSurfaceTurn({ flow, label: GENERIC_CHAT, reportEditRef }, transport, {
+      const done = runSurfaceTurn({ flow, label: surface, reportEditRef }, transport, {
         kind: where.kind === "dm" ? "dm" : "channel",
         trigger: turn.trigger,
         where: label,
         ...(turn.unprompted ? { unprompted: true } : {}),
         ...(turn.synthetic ? { synthetic: true } : {}),
         ackEmoji: {
-          candidates: () => DEFAULT_ACK_REACTIONS,
-          pick: async () => deps.pickAckEmoji?.(body.text, ACK_PICKS),
+          candidates: () => acks,
+          pick: async () => deps.pickAckEmoji?.(body.text, picks),
         },
         prepare: async () => ({
           ...body,
@@ -90,7 +94,7 @@ export function createGenericChatTurns(
         onRejected: (reason) => reject(new Error(reason)),
       });
       done.then(resolve, reject);
-      done.catch(reportFailureAs("generic-chat: turn", undefined, label));
+      done.catch(reportFailureAs(`${surface}: turn`, undefined, label));
     });
   }
 

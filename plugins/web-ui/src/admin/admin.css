@@ -202,7 +202,7 @@
 }
 #app-view .setup-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
   margin-bottom: 22px;
 }
@@ -2154,10 +2154,10 @@
 #app-view #card-soul .soul-preview {
   text-overflow: ellipsis;
 }
-#app-view #card-slack-installation > .head h2 {
+#app-view .app-card > .head h2 {
   color: var(--muted-foreground);
 }
-#app-view #card-slack-installation .slack-connection {
+#app-view .app-connection {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2165,23 +2165,23 @@
   padding: 10px 8px;
   border-radius: 8px;
 }
-#app-view #card-slack-installation h3 {
+#app-view .app-connection h3 {
   font-size: var(--font-14);
   font-weight: 500;
   line-height: 20px;
 }
-#app-view #card-slack-installation .hint {
+#app-view .app-connection .hint {
   margin: 2px 0 0;
 }
-#app-view .slack-connection-actions {
+#app-view .app-connection-actions {
   display: flex;
   gap: 4px;
   flex-wrap: wrap;
 }
-#app-view #slack-own-app-guide {
+#app-view .app-guide {
   margin-top: 4px;
 }
-#app-view #slack-own-app-guide summary {
+#app-view .app-guide summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2192,43 +2192,43 @@
   font-weight: 400;
   color: var(--muted-foreground);
 }
-#app-view #slack-own-app-guide summary::-webkit-details-marker {
+#app-view .app-guide summary::-webkit-details-marker {
   display: none;
 }
-#app-view #slack-own-app-guide summary:hover {
+#app-view .app-guide summary:hover {
   background: var(--secondary);
   color: var(--foreground);
 }
-#app-view #slack-own-app-guide[open] .slack-guide-arrow {
+#app-view .app-guide[open] .app-guide-arrow {
   transform: rotate(90deg);
 }
-#app-view #slack-own-app-guide > p,
-#app-view #slack-own-app-guide > ol,
-#app-view #slack-own-app-guide > button {
+#app-view .app-guide > p,
+#app-view .app-guide > ol,
+#app-view .app-guide > button {
   margin-left: 8px;
 }
-#app-view #slack-own-app-guide p,
-#app-view #slack-own-app-guide ol {
+#app-view .app-guide p,
+#app-view .app-guide ol {
   color: var(--muted-foreground);
   max-width: 760px;
   line-height: 1.65;
 }
-#app-view #slack-own-app-guide li {
+#app-view .app-guide li {
   padding: 4px 0 8px 4px;
 }
-#app-view #slack-token-editor {
+#app-view .app-editor {
   max-width: 560px;
   margin-top: 20px;
 }
-#app-view #st-slack-installation:empty {
+#app-view .app-status:empty {
   display: none;
 }
-#app-view #st-slack-installation {
+#app-view .app-status {
   display: block;
   margin-top: 16px;
 }
 @media (max-width: 640px) {
-  #app-view #card-slack-installation .slack-connection {
+  #app-view .app-connection {
     align-items: flex-start;
     flex-direction: column;
     gap: 16px;

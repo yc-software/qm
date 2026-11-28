@@ -1,3 +1,4 @@
+import { LRUCache } from "lru-cache";
 import { guestRef } from "../../resolution/guest-audience.ts";
 import type { App } from "../../api/app-types.ts";
 import type { SurfaceContextQuery, SurfaceContextResult } from "../../reach/reach.ts";
@@ -13,7 +14,6 @@ import type { GenericChatActionClick } from "./approvals.ts";
 import type { GenericChatClient } from "./client.ts";
 import { stageGenericChatFiles } from "./files.ts";
 import {
-  GENERIC_CHAT,
   chatContainer,
   findMessage,
   genericChatRef,
@@ -31,14 +31,33 @@ import type { GenericChatTurns } from "./turns.ts";
 const CONTEXT_SCAN = 500;
 const CONTEXT_DEFAULT_COUNT = 100;
 
-function eventContainer(event: Pick<GenericChatEvent, "account" | "chat">): string {
-  return chatContainer({ account: event.account, kind: event.chat.kind, chat: event.chat.id });
+function eventContainer(surface: string, event: Pick<GenericChatEvent, "account" | "chat">): string {
+  return chatContainer({ surface, account: event.account, kind: event.chat.kind, chat: event.chat.id });
+}
+
+type Reply = { status: number; body: Record<string, unknown> };
+
+export function signedGenericChatHandler(
+  secret: string,
+  dispatch: (raw: unknown) => Promise<Reply>,
+  now: () => number = Date.now,
+) {
+  return async (timestamp: string | undefined, signature: string | undefined, rawBody: string): Promise<Reply> => {
+    if (!verifyGenericChat(secret, timestamp, signature, rawBody, now()))
+      return { status: 401, body: { error: "unauthorized" } };
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawBody);
+    } catch (e) {
+      return { status: 400, body: { error: "invalid_json", detail: errMessage(e) } };
+    }
+    return dispatch(parsed);
+  };
 }
 
 type InboundApp = Pick<App, "turn" | "ingestSurfaceEvents" | "onContextRequestCreated" | "fulfillContextRequest">;
 
 export function createGenericChatInbound(deps: {
-  secret: string;
   accountTenant: (account: string) => Promise<string | undefined>;
   client: GenericChatClient;
   stageBlob: (bytes: Uint8Array) => Promise<{ blobId: string }>;
@@ -55,11 +74,14 @@ export function createGenericChatInbound(deps: {
 }) {
   const now = deps.now ?? Date.now;
   const cache = deps.surfaceCache;
+  const { surface } = deps.client;
+  const containerOf = (event: Pick<GenericChatEvent, "account" | "chat">) => eventContainer(surface, event);
+  const registered = new LRUCache<string, string>({ max: 10_000 });
 
   async function followedThread(container: string, thread: string) {
     const [root, [lastReply]] = await Promise.all([
-      findMessage(cache, container, thread),
-      cache.readMessages(container, { surface: GENERIC_CHAT, sub: thread, self: true, limit: 1, noFallback: true }),
+      findMessage(cache, surface, container, thread),
+      cache.readMessages(container, { surface, sub: thread, self: true, limit: 1, noFallback: true }),
     ]);
     if (!root?.self && !lastReply) return undefined;
     return { ...(root?.self ? { opener: root.text } : {}), ...(lastReply ? { lastReplyTs: lastReply.ts } : {}) };
@@ -72,7 +94,7 @@ export function createGenericChatInbound(deps: {
     triggerTs: string,
   ) {
     const unanswered = await cache.readMessages(container, {
-      surface: GENERIC_CHAT,
+      surface,
       sub: thread,
       ...(followed.lastReplyTs ? { after: followed.lastReplyTs } : {}),
       noFallback: true,
@@ -89,15 +111,7 @@ export function createGenericChatInbound(deps: {
     );
   }
 
-  async function handle(timestamp: string | undefined, signature: string | undefined, rawBody: string) {
-    if (!verifyGenericChat(deps.secret, timestamp, signature, rawBody, now()))
-      return { status: 401, body: { error: "unauthorized" } };
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(rawBody);
-    } catch (e) {
-      return { status: 400, body: { error: "invalid_json", detail: errMessage(e) } };
-    }
+  async function dispatch(parsed: unknown, resolved?: string): Promise<Reply> {
     const result = parseGenericChatEvent(parsed);
     if (!result.success)
       return {
@@ -105,13 +119,13 @@ export function createGenericChatInbound(deps: {
         body: { error: "bad_request", issues: result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) },
       };
     const event = result.data;
-    const tenant = await deps.accountTenant(event.account);
+    const tenant = resolved ?? (await deps.accountTenant(event.account));
     if (!tenant) {
-      console.log(`[generic-chat] ignoring an event for account ${event.account}: no serving workspace is bound to it`);
+      console.log(`[${surface}] ignoring an event for account ${event.account}: no serving workspace is bound to it`);
       return { status: 404, body: { error: "unknown_account" } };
     }
     if (event.origin !== undefined) event.account = genericChatAccount(event.account, event.origin);
-    return inTenant(tenant, (): Promise<{ status: number; body: Record<string, unknown> }> => {
+    return inTenant(tenant, (): Promise<Reply> => {
       switch (event.type) {
         case "reaction.added":
         case "reaction.removed":
@@ -130,13 +144,17 @@ export function createGenericChatInbound(deps: {
     const botActor = chat.members.some((m) => m.bot && m.id === actorId);
     if (chat.kind === "dm" && (members.length !== 1 || (!botActor && members[0]!.id !== actorId))) {
       console.log(
-        `[generic-chat] ignoring dm ${chat.id}: it lists ${members.length} non-bot member(s), and a dm must list only its one person`,
+        `[${surface}] ignoring dm ${chat.id}: it lists ${members.length} non-bot member(s), and a dm must list only its one person`,
       );
       return { ignored: "not_one_to_one" } as const;
     }
     const humans = await Promise.all(
       members.map(async (m) =>
-        genericChatPrincipal(m, await deps.isInternalEmail(m.email?.trim().toLowerCase() ?? "", m.member === true)),
+        genericChatPrincipal(
+          surface,
+          m,
+          await deps.isInternalEmail(m.email?.trim().toLowerCase() ?? "", m.member === true),
+        ),
       ),
     );
     const listed = chat.members.find((m) => m.id === actorId);
@@ -144,16 +162,17 @@ export function createGenericChatInbound(deps: {
     const guestsWelcome = event.protocol === 2 && chat.kind === "group";
     if ((guests && !guestsWelcome) || !listed) {
       console.log(
-        `[generic-chat] ignoring chat ${chat.id}: ${guests} member(s) not vouched for as internal, author listed: ${Boolean(listed)}`,
+        `[${surface}] ignoring chat ${chat.id}: ${guests} member(s) not vouched for as internal, author listed: ${Boolean(listed)}`,
       );
       return { ignored: "unvouched_participants" } as const;
     }
-    if (chat.kind === "group" && !guests)
-      await deps.registerGroup(
-        eventContainer(event),
-        humans.map((p) => p.externalId),
-      );
-    const actor = listed.bot ? genericChatPrincipal(listed, false) : humans[members.indexOf(listed)]!;
+    const roster = humans.map((p) => p.externalId).sort();
+    const group = containerOf(event);
+    if (chat.kind === "group" && !guests && registered.get(group) !== roster.join("\n")) {
+      await deps.registerGroup(group, roster);
+      registered.set(group, roster.join("\n"));
+    }
+    const actor = listed.bot ? genericChatPrincipal(surface, listed, false) : humans[members.indexOf(listed)]!;
     return { humans, listed, actor, guests: guests > 0 };
   }
 
@@ -166,16 +185,17 @@ export function createGenericChatInbound(deps: {
     guests = false,
   ) {
     const { chat } = event;
-    const container = eventContainer(event);
+    const container = containerOf(event);
     const replyTarget = genericChatRef({
+      surface,
       account: event.account,
       kind: chat.kind,
       chat: chat.id,
       ...(replyThread ? { thread: replyThread } : {}),
     });
-    const author = { surface: GENERIC_CHAT, account: event.account, id: actorId };
+    const author = { surface, account: event.account, id: actorId };
     return {
-      surface: GENERIC_CHAT,
+      surface,
       actor,
       surfaceOrigin: {
         author,
@@ -235,11 +255,11 @@ export function createGenericChatInbound(deps: {
     if ("ignored" in who) return { status: 200, body: { ok: true, ignored: who.ignored } };
     if (who.guests) return { status: 200, body: { ok: true, ignored: "guest_chat" } };
     const reactor = who.actor;
-    const container = eventContainer(event);
+    const container = containerOf(event);
     const isDM = chat.kind === "dm";
     const onBotMessage =
       (message.app_post && message.user.bot === true) ||
-      (await findMessage(cache, container, message.id, { self: true })) !== undefined;
+      (await findMessage(cache, surface, container, message.id, { self: true })) !== undefined;
     const onFollowedRoot =
       !isDM && !onBotMessage && !event.thread_id && (await followedThread(container, message.id)) !== undefined;
     const surfaces = shouldSurfaceReaction({
@@ -251,13 +271,14 @@ export function createGenericChatInbound(deps: {
       onFollowedRoot,
     });
     console.log(
-      `[generic-chat] heard reaction ${added ? "+" : "-"}:${reaction.name}: in chat ${chat.id} on message ${message.id} → ${surfaces ? "turn" : "no stake"}`,
+      `[${surface}] heard reaction ${added ? "+" : "-"}:${reaction.name}: in chat ${chat.id} on message ${message.id} → ${surfaces ? "turn" : "no stake"}`,
     );
     if (!surfaces) return { status: 200, body: { ok: true, ignored: "no_stake" } };
     const authorName = message.user.name?.trim();
     const replyThread = event.thread_id ?? (chat.kind === "group" ? message.id : undefined);
     await deps.turns.start({
       where: {
+        surface,
         account: event.account,
         kind: chat.kind,
         chat: chat.id,
@@ -278,7 +299,7 @@ export function createGenericChatInbound(deps: {
           ...(!onBotMessage && authorName && message.user.id !== reaction.user.id ? { authorName } : {}),
           ...(message.body ? { messageText: message.body } : {}),
         }),
-        redeliveryKey: `${GENERIC_CHAT}:${event.account}:${chat.id}:reaction:${event.event_id}`,
+        redeliveryKey: `${surface}:${event.account}:${chat.id}:reaction:${event.event_id}`,
       },
     });
     return { status: 200, body: { ok: true } };
@@ -291,14 +312,14 @@ export function createGenericChatInbound(deps: {
     const { humans, listed, actor: author, guests } = who;
     const bot = listed.bot === true;
     const thread = event.thread_id ?? undefined;
-    const container = eventContainer(event);
+    const container = containerOf(event);
     const appPost = bot && message.app_post;
     const own = appPost
-      ? await findMessage(cache, container, message.id, { self: true, includeDeleted: true })
+      ? await findMessage(cache, surface, container, message.id, { self: true, includeDeleted: true })
       : undefined;
     if (appPost && (event.type === "message.created" || !own)) {
       console.log(
-        `[generic-chat] ignoring chat ${chat.id} message ${message.id}: it echoes one of the agent's own posts`,
+        `[${surface}] ignoring chat ${chat.id} message ${message.id}: it echoes one of the agent's own posts`,
       );
       return { status: 200, body: { ok: true, ignored: "own_message" } };
     }
@@ -311,7 +332,7 @@ export function createGenericChatInbound(deps: {
     await deps.app.ingestSurfaceEvents(
       [
         {
-          surface: GENERIC_CHAT,
+          surface,
           container,
           ts,
           sub: own ? (own.sub ?? null) : (thread ?? null),
@@ -330,7 +351,7 @@ export function createGenericChatInbound(deps: {
           kind: chat.kind,
         },
       ],
-      GENERIC_CHAT,
+      surface,
     );
     if (!addressed) {
       if (startsTurn && chat.kind === "group")
@@ -344,8 +365,8 @@ export function createGenericChatInbound(deps: {
     const replyTarget = frame.deliveryTarget;
     if (author.isExternalGuest) {
       await deps.guestReply(
-        { type: GENERIC_CHAT, target: replyTarget, account: { id: event.account, workspace: event.account } },
-        `notice:${GENERIC_CHAT}:${event.account}:${chat.id}:${message.id}`,
+        { type: surface, target: replyTarget, account: { id: event.account, workspace: event.account } },
+        `notice:${surface}:${event.account}:${chat.id}:${message.id}`,
       );
       return { status: 200, body: { ok: true, ignored: "guest_author" } };
     }
@@ -362,6 +383,7 @@ export function createGenericChatInbound(deps: {
     if (event.protocol === 2) {
       await deps.turns.start({
         where: {
+          surface,
           account: event.account,
           kind: chat.kind,
           chat: chat.id,
@@ -375,7 +397,7 @@ export function createGenericChatInbound(deps: {
           ...(staged?.attachments.length ? { attachments: staged.attachments } : {}),
           ...(staged?.issues.length ? { inboundNotes: staged.issues } : {}),
           ...(followed && thread ? await threadDetection(container, thread, followed, ts) : {}),
-          redeliveryKey: `${GENERIC_CHAT}:${event.account}:${chat.id}:${message.id}`,
+          redeliveryKey: `${surface}:${event.account}:${chat.id}:${message.id}`,
         },
         ...(followed && thread ? { unprompted: true } : {}),
       });
@@ -393,35 +415,33 @@ export function createGenericChatInbound(deps: {
           }
         : { origin: { kind: "human" as const, messageTs: ts } }),
       async: true,
-      redeliveryKey: `${GENERIC_CHAT}:${event.account}:${chat.id}:${message.id}`,
+      redeliveryKey: `${surface}:${event.account}:${chat.id}:${message.id}`,
     });
     const destination = {
-      type: GENERIC_CHAT,
+      type: surface,
       target: replyTarget,
       account: { id: event.account, workspace: event.account },
     };
     if (!queued.runId)
-      await deps.unansweredReply(
-        queued,
-        destination,
-        `notice:${GENERIC_CHAT}:${event.account}:${chat.id}:${message.id}`,
-      );
+      await deps.unansweredReply(queued, destination, `notice:${surface}:${event.account}:${chat.id}:${message.id}`);
     return { status: 200, body: { ok: true } };
   }
 
   async function answerContext(query: SurfaceContextQuery): Promise<SurfaceContextResult> {
-    const ref = query.conversationTarget ? parseGenericChatRef(query.conversationTarget) : null;
+    const ref = query.conversationTarget ? parseGenericChatRef(surface, query.conversationTarget) : null;
     if (!ref) return { messages: [], note: "this conversation can't be read" };
     const container = chatContainer(ref);
     const replies = await cache.readMessages(container, {
-      surface: GENERIC_CHAT,
+      surface,
       ...(ref.thread ? { sub: ref.thread } : {}),
       ...(query.before ? { before: query.before } : {}),
       limit: CONTEXT_SCAN,
       noFallback: true,
     });
     const root =
-      ref.thread && replies.length < CONTEXT_SCAN ? await findMessage(cache, container, ref.thread) : undefined;
+      ref.thread && replies.length < CONTEXT_SCAN
+        ? await findMessage(cache, surface, container, ref.thread)
+        : undefined;
     const scan = root && (!query.before || root.ts < query.before) ? [root, ...replies] : replies;
     return buildContextWindow(
       scan.map((m) => ({
@@ -440,11 +460,11 @@ export function createGenericChatInbound(deps: {
   }
 
   deps.app.onContextRequestCreated((request) => {
-    if (request.source !== GENERIC_CHAT) return;
+    if (request.source !== surface) return;
     void answerContext(request.query)
       .then((result) => deps.app.fulfillContextRequest(request.id, { result }))
-      .catch(reportFailureAs("generic-chat: answer context request", undefined));
+      .catch(reportFailureAs(`${surface}: answer context request`, undefined));
   });
 
-  return { handle };
+  return { dispatch };
 }

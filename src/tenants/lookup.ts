@@ -11,6 +11,7 @@ export type TenantKey =
   | "share"
   | "secret_drop"
   | "slack_bridge"
+  | "teams_tenant"
   | "app_host";
 
 export interface TenantLookup {

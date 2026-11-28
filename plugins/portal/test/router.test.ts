@@ -416,6 +416,20 @@ test("generic-chat events reach the core with only their body and signature head
   assert.equal((await fetch(`${base}/v1/surfaces/generic-chat/events`)).status, 404);
 });
 
+test("Teams activities reach the core with their bot token but never a session", async () => {
+  const r = await fetch(`${base}/v1/surfaces/teams/activities?x=1`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: "Bearer bot", cookie: sessionCookie("U1") },
+    body: "{}",
+  });
+  const body = (await r.json()) as { url: string; cookie: string | null; headers: Record<string, string> };
+  assert.deepEqual(
+    [body.url, body.cookie, body.headers.authorization],
+    ["/v1/surfaces/teams/activities", null, "Bearer bot"],
+  );
+  assert.equal((await fetch(`${base}/v1/surfaces/teams/activities`)).status, 404);
+});
+
 test("the webhook passthrough is exact-shape + POST-only (no widening of /v1)", async () => {
   assert.equal((await fetch(`${base}/v1/webhooks/incoming/abc`)).status, 404);
   assert.equal((await fetch(`${base}/v1/webhooks/incoming/a/b`, { method: "POST" })).status, 404);
