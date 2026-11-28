@@ -248,13 +248,6 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
   const readAbsBytes = async (name: string, path: string): Promise<Uint8Array | null> =>
     client.readFileBytes(await idFor(name), path);
 
-  async function waitCheckpoint(snapshot: RenderSnapshot): Promise<RenderSnapshot> {
-    const available = await client.waitSnapshot(snapshot);
-    if (available.expiresAtMs <= Date.now())
-      throw new Error(`Render checkpoint ${available.id} is no longer available`);
-    return available;
-  }
-
   const resourcesFor = (stored: StoredRenderSandbox): RenderSandboxResources => ({
     sandboxId: stored.sandboxId,
     checkpoint: stored.checkpoint,
@@ -318,7 +311,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       snapshot = await client.createSnapshot(stored.sandboxId, nameFor(scope), kind);
       const staged = await store.merge(scope, { retiredResources: retire(stored, { checkpoint: snapshot }) });
       if (!staged) throw new Error(`Render sandbox checkpoint lost its scope: ${scope}`);
-      const available = await waitCheckpoint(snapshot);
+      const available = await client.waitSnapshot(snapshot);
       const merged = await store.merge(scope, {
         checkpoint: available,
         lastSnapshotMs: Date.now(),
@@ -401,12 +394,12 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       } else if (info && info.status !== "terminated" && info.status !== "errored") {
         throw new Error(`Render sandbox ${info.id} is ${info.status}; retry after its transition ends`);
       }
-      if (stored.checkpoint && stored.checkpoint.expiresAtMs > Date.now()) {
+      if (stored.checkpoint) {
         const snapshot = await client.getSnapshot(stored.checkpoint).catch((error) => {
           if (error instanceof SandboxSnapshotNotFoundError) return null;
           throw error;
         });
-        if (snapshot?.status === "available" && snapshot.expiresAtMs > Date.now()) snapshotId = snapshot.id;
+        if (snapshot?.status === "available") snapshotId = snapshot.id;
       }
       if (!snapshotId) {
         throw new Error(
@@ -838,7 +831,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
           ? {
               checkpointId: stored.checkpoint.id,
               checkpointAtMs: stored.checkpoint.capturedAtMs,
-              checkpointExpiresAtMs: stored.checkpoint.expiresAtMs,
+              checkpointExpiresAtMs: null,
             }
           : {}),
         ...((stored.recoveryError ?? stored.retirementError)
@@ -848,7 +841,7 @@ export function createRenderSandbox(opts: RenderSandboxOptions): Sandbox {
       try {
         const info = await client.get(stored.sandboxId);
         const running = info?.status === "running";
-        if (!running && stored.checkpoint && stored.checkpoint.expiresAtMs > Date.now())
+        if (!running && stored.checkpoint)
           return {
             machine: `Render sandbox ${stored.sandboxId}: ${info?.status ?? "missing"}`,
             lifecycleState: "paused",

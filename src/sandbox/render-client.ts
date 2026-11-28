@@ -3,6 +3,7 @@ import {
   Render,
   type SandboxSnapshotKind,
   SandboxEndedError,
+  SandboxImageNotFoundError,
   SandboxSnapshotFailedError,
   SandboxSnapshotNotFoundError,
   SandboxSnapshotWaitTimeoutError,
@@ -60,7 +61,6 @@ export interface RenderSnapshot {
   id: string;
   sandboxGroupId: string;
   status: "creating" | "available" | "failed";
-  expiresAtMs: number;
   capturedAtMs?: number;
   error?: string;
 }
@@ -75,6 +75,7 @@ export interface RenderImage {
 export interface RenderClient {
   create(options: RenderCreateOptions): Promise<RenderSandboxInfo>;
   importImage(source: string, name: string): Promise<RenderImage>;
+  deleteImage(name: string, sourceDigest: string): Promise<void>;
   get(sandboxId: string): Promise<RenderLiveSandbox | null>;
   listLive(name: string): Promise<RenderListedSandbox[]>;
   terminate(sandboxId: string): Promise<void>;
@@ -107,10 +108,31 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
     id: value.id,
     sandboxGroupId: value.sandboxGroupId,
     status: value.status,
-    expiresAtMs: Date.parse(value.expiresAt),
     ...(value.capturedAt ? { capturedAtMs: Date.parse(value.capturedAt) } : {}),
     ...(value.error ? { error: value.error } : {}),
   });
+  const listAll = async <T extends { cursor: string }>(
+    page: (after: { cursor?: string }) => Promise<T[]>,
+  ): Promise<T[]> => {
+    const listed: T[] = [];
+    for (let cursor: string | undefined; ;) {
+      const after = cursor ? { cursor } : {};
+      const entries = await retryOperation(() => page(after), "idempotent", {
+        ...sdkErrors,
+        timeoutMs: CONTROL_TIMEOUT_MS,
+      });
+      listed.push(...entries);
+      if (entries.length < LIST_PAGE_SIZE) return listed;
+      cursor = entries.at(-1)!.cursor;
+    }
+  };
+  const listGroups = () =>
+    retryOperation(() => api.listGroups(), "idempotent", { ...sdkErrors, timeoutMs: CONTROL_TIMEOUT_MS });
+  const defaultGroupId = (groups: Awaited<ReturnType<typeof listGroups>>): string => {
+    const id = groups.find((entry) => entry.sandboxGroup.isDefault)?.sandboxGroup.id;
+    if (!id) throw new Error("Render workspace has no default sandbox group; set one in the Render dashboard");
+    return id;
+  };
   const isMissing = (error: unknown): boolean => error instanceof ClientError && error.statusCode === 404;
   const get = async (sandboxId: string): Promise<RenderLiveSandbox | null> => {
     try {
@@ -260,9 +282,7 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
       }
     },
     async importImage(source, name) {
-      const groups = () =>
-        retryOperation(() => api.listGroups(), "idempotent", { ...sdkErrors, timeoutMs: CONTROL_TIMEOUT_MS });
-      let listed = await groups();
+      let listed = await listGroups();
       if (!listed.length) {
         await retryOperation(
           () =>
@@ -272,11 +292,9 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
           "idempotent",
           { ...sdkErrors, timeoutMs: CONTROL_TIMEOUT_MS },
         );
-        listed = await groups();
+        listed = await listGroups();
       }
-      const sandboxGroupId = listed.find((entry) => entry.sandboxGroup.isDefault)?.sandboxGroup.id;
-      if (!sandboxGroupId)
-        throw new Error("Render workspace has no default sandbox group; set one in the Render dashboard");
+      const sandboxGroupId = defaultGroupId(listed);
       const image = await retryOperation(() => api.images.import({ sandboxGroupId, name, source }), "idempotent", {
         ...sdkErrors,
         timeoutMs: SUBMIT_TIMEOUT_MS,
@@ -288,21 +306,27 @@ export function createSdkRenderClient(opts: SdkRenderClientOptions): RenderClien
         ...(image.failureReason ? { failureReason: image.failureReason } : {}),
       };
     },
-    get,
-    async listLive(name) {
-      const listed: RenderListedSandbox[] = [];
-      for (let cursor: string | undefined; ;) {
-        const after = cursor ? { cursor } : {};
-        const page = await retryOperation(
-          () => api.list({ name, status: [...LIVE_STATUSES], limit: LIST_PAGE_SIZE, ...after }),
+    async deleteImage(name, sourceDigest) {
+      const sandboxGroupId = defaultGroupId(await listGroups());
+      const versions = await listAll((after) =>
+        api.images.list({ sandboxGroupId, name, limit: LIST_PAGE_SIZE, ...after }),
+      );
+      for (const { image } of versions.filter((entry) => entry.image.sourceDigest === sourceDigest))
+        await retryOperation(
+          () =>
+            api.images.delete({ sandboxGroupId, imageId: image.id }).catch((error: unknown) => {
+              if (!(error instanceof SandboxImageNotFoundError)) throw error;
+            }),
           "idempotent",
           { ...sdkErrors, timeoutMs: CONTROL_TIMEOUT_MS },
         );
-        for (const entry of page)
-          listed.push({ id: entry.sandbox.id, createdAtMs: Date.parse(entry.sandbox.createdAt) });
-        if (page.length < LIST_PAGE_SIZE) return listed;
-        cursor = page.at(-1)!.cursor;
-      }
+    },
+    get,
+    async listLive(name) {
+      const listed = await listAll((after) =>
+        api.list({ name, status: [...LIVE_STATUSES], limit: LIST_PAGE_SIZE, ...after }),
+      );
+      return listed.map((entry) => ({ id: entry.sandbox.id, createdAtMs: Date.parse(entry.sandbox.createdAt) }));
     },
     terminate,
     runScript,

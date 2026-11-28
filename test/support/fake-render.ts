@@ -1,4 +1,4 @@
-import { SandboxSnapshotNotFoundError, type SandboxSnapshotKind } from "@renderinc/sdk";
+import { SandboxImageInUseError, SandboxSnapshotNotFoundError, type SandboxSnapshotKind } from "@renderinc/sdk";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
@@ -177,6 +177,16 @@ export function createFakeRender() {
         ...(image.status === "failed" ? { failureReason: importFailure } : {}),
       };
     },
+    async deleteImage(name, sourceDigest) {
+      for (const image of [...images.values()].filter((i) => i.name === name && i.sourceDigest === sourceDigest)) {
+        const marker = `${image.source}@${image.sourceDigest}\n`;
+        const holds = (id: string) =>
+          existsSync(join(root, id, ".base-image")) && readFileSync(join(root, id, ".base-image"), "utf8") === marker;
+        if ([...snapshots.keys(), ...sandboxes.keys()].some(holds))
+          throw new SandboxImageInUseError(`image ${image.id} is in use`, 409);
+        images.delete(image.id);
+      }
+    },
     async get(id) {
       const info = sandboxes.get(id);
       if (!info) return null;
@@ -220,7 +230,6 @@ export function createFakeRender() {
         id: snapshotId,
         sandboxGroupId: "sbg-test",
         status: "available",
-        expiresAtMs: Date.now() + 86400_000,
         capturedAtMs: Date.now(),
       };
       cpSync(home(id), join(root, snapshotId), { recursive: true });
@@ -270,7 +279,7 @@ export function createFakeRender() {
       const id = `snp-golden-${goldens.size + 1}`;
       mkdirSync(join(root, id), { recursive: true });
       writeFileSync(join(root, id, ".base-image"), `${ref}\n`);
-      goldens.set(id, { id, sandboxGroupId: "sbg-test", status: "available", expiresAtMs: Date.now() + 86400_000 });
+      goldens.set(id, { id, sandboxGroupId: "sbg-test", status: "available" });
       return id;
     },
     publishImage(source: string, digest: string) {
@@ -358,7 +367,8 @@ export function serveFakeRenderApi(
     plan: "starter",
     requestedAt: new Date().toISOString(),
     ...(snapshot.capturedAtMs ? { capturedAt: new Date(snapshot.capturedAtMs).toISOString() } : {}),
-    expiresAt: new Date(snapshot.expiresAtMs).toISOString(),
+    ttlSeconds: 0,
+    expiresAt: "9999-12-31T23:59:59Z",
   });
   const imageJson = (id: string) => {
     const stored = fake.images.get(id)!;
@@ -462,7 +472,18 @@ export function serveFakeRenderApi(
       const body = (await request.json()) as { name: string; sourceImage: string };
       return Response.json(imageJson(fake.startImport(body.sourceImage, body.name).id), { status: 201 });
     }
+    if (path === "/sandbox-groups/sbg-test/builds" && request.method === "GET")
+      return Response.json(
+        [...fake.images.keys()]
+          .filter((id) => fake.images.get(id)!.name === query.get("name"))
+          .map((id) => ({ build: imageJson(id), cursor: id })),
+      );
     if ((match = /^\/sandbox-groups\/sbg-test\/builds\/([^/]+)$/.exec(path))) {
+      if (request.method === "DELETE") {
+        const image = fake.images.get(match[1]!);
+        if (image) await fake.client.deleteImage(image.name, image.sourceDigest);
+        return new Response(null, { status: 204 });
+      }
       return fake.images.has(match[1]!) ? Response.json(imageJson(match[1]!)) : missing();
     }
     if (path === "/sandbox-groups/sbg-test/snapshots" && request.method === "GET")
@@ -474,7 +495,7 @@ export function serveFakeRenderApi(
           .map((snapshot) => ({ snapshot: snapshotJson(snapshot), cursor: snapshot.id })),
       );
     if ((match = /^\/sandbox-groups\/([^/]+)\/snapshots\/([^/]+)$/.exec(path))) {
-      const ref: RenderSnapshot = { id: match[2]!, sandboxGroupId: match[1]!, status: "available", expiresAtMs: 0 };
+      const ref: RenderSnapshot = { id: match[2]!, sandboxGroupId: match[1]!, status: "available" };
       if (request.method === "DELETE") {
         await fake.client.deleteSnapshot(ref);
         return new Response(null, { status: 204 });

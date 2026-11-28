@@ -1337,7 +1337,7 @@ test("Render keeps process reads available during a background checkpoint", asyn
   assert.equal((await store.get(scope))!.homeDirty, true);
 });
 
-for (const state of ["expired", "missing", "failed"] as const) {
+for (const state of ["missing", "failed"] as const) {
   test(`Render refuses an empty replacement when its native snapshot is ${state}`, async (t) => {
     const { make, fake, store, scope } = setup(t);
     const sandbox = make();
@@ -1346,8 +1346,7 @@ for (const state of ["expired", "missing", "failed"] as const) {
     await sandbox.teardown(handle);
     const stored = (await store.get(scope))!;
     const snapshot = fake.snapshots.get(stored.checkpoint!.id)!;
-    if (state === "expired") snapshot.expiresAtMs = Date.now() - 1;
-    else if (state === "missing") await fake.client.deleteSnapshot(stored.checkpoint!);
+    if (state === "missing") await fake.client.deleteSnapshot(stored.checkpoint!);
     else snapshot.status = "failed";
     await fake.client.terminate(stored.sandboxId);
     await assert.rejects(make().provision(scope), /no available native snapshot/);
@@ -1462,7 +1461,7 @@ test("Render reports a computer without a usable checkpoint as down, not paused"
   await sandbox.provision(scope);
   const stored = (await store.get(scope))!;
   await fake.client.terminate(stored.sandboxId);
-  await store.merge(scope, { checkpoint: { ...stored.checkpoint!, expiresAtMs: Date.now() - 1 } });
+  await store.merge(scope, { checkpoint: undefined });
   const status = await sandbox.computerStatus!(scope);
   assert.equal(status.lifecycleState, undefined);
   assert.equal(computerVerdict(status), "down");
