@@ -39,8 +39,12 @@ final class SameOriginRedirects: NSObject, URLSessionTaskDelegate, Sendable {
     token = value
   }
 
-  func signOut() {
+  func invalidate() {
     generation = UUID()
+  }
+
+  func signOut() {
+    invalidate()
     token = nil
     vault.delete()
   }

@@ -30,23 +30,26 @@ final class WorkspacePickerTests: XCTestCase {
     throw QMError.message("The expected held request never arrived: \(key), request \(count)")
   }
 
-  func testWorkspacePersistsCanonicalOriginWithoutCopyingSession() throws {
+  func testSwitchingWorkspacesKeepsEachSession() throws {
     let preferences = defaults()
     let original = "https://\(UUID().uuidString.lowercased()).example"
     let model = AppModel(defaults: preferences, configuredURL: original)
     let old = try XCTUnwrap(model.client)
+    addTeardownBlock { @MainActor in old.signOut() }
     let generation = old.generation
     try old.saveSession("old-workspace-token")
     let next = "https://\(UUID().uuidString.lowercased()).example"
     try model.selectWorkspace("  \(next):443/ \n")
     XCTAssertEqual(model.client?.baseURL.absoluteString, next)
-    XCTAssertFalse(old.hasSession)
     XCTAssertNotEqual(old.generation, generation)
     XCTAssertFalse(model.client?.hasSession ?? true)
     XCTAssertNil(model.identity)
     XCTAssertTrue(model.conversations.isEmpty)
     let restored = AppModel(defaults: preferences, configuredURL: original)
     XCTAssertEqual(restored.client?.baseURL.absoluteString, next)
+    try model.selectWorkspace(original)
+    XCTAssertEqual(model.client?.baseURL.absoluteString, original)
+    XCTAssertTrue(model.client?.hasSession ?? false)
   }
 
   func testInvalidWorkspaceChangesPreserveCurrentClientWhileLoading() throws {
@@ -83,10 +86,10 @@ final class WorkspacePickerTests: XCTestCase {
       let next = "https://\(UUID().uuidString.lowercased()).example"
       try model.selectWorkspace(next)
       let current = try XCTUnwrap(model.client)
+      addTeardownBlock { @MainActor in old.signOut() }
       XCTAssertFalse(current === old)
       XCTAssertEqual(current.baseURL.absoluteString, next)
       XCTAssertFalse(model.loading)
-      XCTAssertFalse(old.hasSession)
       XCTAssertNil(model.identity)
       XCTAssertTrue(model.conversations.isEmpty)
       XCTAssertFalse(model.hasLoadedConversations)
@@ -162,6 +165,7 @@ final class WorkspacePickerTests: XCTestCase {
       configuration: configuration)
     let client = try XCTUnwrap(model.client)
     try client.saveSession("current-token")
+    defer { client.signOut() }
     let conversation = Conversation(
       id: "session", scopeId: "personal:alice", threadRef: "web:alice:one", surface: "web",
       canContinue: true)

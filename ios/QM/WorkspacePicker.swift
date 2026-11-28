@@ -65,14 +65,6 @@ struct WorkspacePicker: View {
                 .font(.footnote).foregroundStyle(.secondary)
             }
           }
-
-          if model.identity != nil {
-            Label(
-              "Changing workspaces signs you out and clears local drafts for this account.",
-              systemImage: "person.crop.circle.badge.minus"
-            )
-            .font(.footnote).foregroundStyle(.secondary)
-          }
         }
         .foregroundStyle(QMTheme.ink)
         .padding(24)

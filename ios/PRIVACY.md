@@ -57,7 +57,7 @@ The temporary recording is deleted once it has been transcribed, or when you can
 ## What the app keeps on your device
 
 - **Settings.** The workspace address, your appearance and theme, and list preferences. These stay until you delete the app.
-- **Your session.** The session token, in the device keychain, marked as available on this device only.
+- **Your sessions.** A session token for each workspace you have signed into, in the device keychain, marked as available on this device only.
 - **Unsent work.** Drafts and attachments you have not sent yet, in the app's own storage, protected while the device is locked and excluded from device backups.
 - **Temporary files.** Copies of attachments being prepared, files you are previewing, and dictation recordings, in temporary storage.
 - **Downloaded images.** iOS may cache the profile pictures and logos described above.
@@ -65,7 +65,7 @@ The temporary recording is deleted once it has been transcribed, or when you can
 
 Conversation history is loaded from your workspace when you open it and is not saved by the app. iOS itself keeps a snapshot of the app's last screen for the app switcher, and text you copy goes to the system clipboard.
 
-Signing out, or changing workspace, deletes the session token and the drafts for that account from the device. Two exceptions: if your session had already expired, or if you change workspace while the app cannot reach the old one, the drafts stay until you sign in to that workspace and sign out again, or delete the app. Signing out removes the token from the device; it does not end the session on the workspace. iOS can retain the keychain entry of a deleted app, so sign out before deleting the app.
+Signing out deletes that workspace's session token and the drafts for that account from the device. Changing workspace keeps both, so switching back needs no new sign-in. If your session had already expired, the drafts stay until you sign in to that workspace and sign out again, or delete the app. Signing out removes the token from the device; it does not end the session on the workspace. iOS can retain the keychain entry of a deleted app, so sign out of each workspace before deleting the app.
 
 ## Permissions
 
