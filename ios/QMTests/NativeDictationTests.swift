@@ -79,6 +79,16 @@ final class NativeDictationTests: XCTestCase {
     XCTAssertNil(model.error)
   }
 
+  func testRunningTranscriptKeepsSpeechFromBeforeAPause() {
+    let transcript = RunningTranscript()
+    XCTAssertEqual(transcript.update("Hello", segmentDone: false), "Hello")
+    XCTAssertEqual(transcript.update("Hello there.", segmentDone: true), "Hello there.")
+    XCTAssertEqual(transcript.update("", segmentDone: false), "Hello there.")
+    XCTAssertEqual(transcript.update("How", segmentDone: false), "Hello there. How")
+    XCTAssertEqual(
+      transcript.update("How are you?", segmentDone: true), "Hello there. How are you?")
+  }
+
   @MainActor
   func testLiveFailureStopsListeningAndRetainsRecognizedWordsForRetry() {
     let model = NativeDictationModel(provider: DictationPermissionProvider())

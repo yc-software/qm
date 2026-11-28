@@ -137,11 +137,32 @@ private func startSpeechRecognition(
   recognizer: SFSpeechRecognizer, request: SFSpeechRecognitionRequest,
   onResult: @escaping @Sendable (String?, Bool, String?) -> Void
 ) -> SFSpeechRecognitionTask {
-  recognizer.recognitionTask(with: request) { result, error in
+  let transcript = RunningTranscript()
+  return recognizer.recognitionTask(with: request) { result, error in
     onResult(
-      result?.bestTranscription.formattedString,
+      result.map {
+        transcript.update(
+          $0.bestTranscription.formattedString,
+          segmentDone: $0.speechRecognitionMetadata != nil)
+      },
       result?.isFinal == true,
       error?.localizedDescription)
+  }
+}
+
+/// Since iOS 18 the recognizer starts over after a pause, and each later result holds only
+/// the words since it. Keep the finished stretches so the text reads as one running
+/// transcript; they never change again, so words already on screen stay put.
+final class RunningTranscript: @unchecked Sendable {
+  private let lock = NSLock()
+  private var finished = ""
+
+  func update(_ text: String, segmentDone: Bool) -> String {
+    lock.withLock {
+      let running = [finished, text].filter { !$0.isEmpty }.joined(separator: " ")
+      if segmentDone { finished = running }
+      return running
+    }
   }
 }
 
