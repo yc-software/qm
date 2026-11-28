@@ -13,12 +13,9 @@ interface Shown {
   hash: string;
 }
 
-interface Card {
-  scope: string;
-  provider: string;
-  ref: string;
-  hash: string;
-}
+type Card = Omit<BrainCard, "text">;
+
+const BRAIN_CARD_MAX_CHARS = 1_200;
 
 interface RecallRecord {
   shown: Shown[];
@@ -35,7 +32,7 @@ const shownOf = ({ scope, id, text, source }: RecalledFact): Shown => ({
   hash: recordHash(text),
 });
 
-const cardOf = ({ scope, provider, ref, text }: BrainCard): Card => ({ scope, provider, ref, hash: recordHash(text) });
+const cardOf = ({ scope, provider, endpoint, ref }: BrainCard): Card => ({ scope, provider, endpoint, ref });
 
 const recordOf = (item: Item) => {
   const record = item.body.memoryRecall as RecallRecord | undefined;
@@ -52,7 +49,7 @@ const stillHeld = (fact: MemoryFact | undefined, shown: Shown) =>
 
 const keyOf = ({ scope, id, provider, hash }: Shown) => JSON.stringify([scope, id ?? null, provider ?? null, hash]);
 
-const cardKey = ({ scope, ref, hash }: Card) => JSON.stringify([scope, ref, hash]);
+const cardKey = ({ endpoint, ref }: Card) => JSON.stringify([endpoint, ref]);
 
 const sourceOf = ({ scope, provider }: Shown) => JSON.stringify([scope, provider ?? null]);
 
@@ -66,30 +63,38 @@ export function memoryRecallDelta(
 ): { text: string; record: RecallRecord } {
   const { previous, anchorSeq } = retainedSnapshot(history, recordOf);
   const current = recalled.map(shownOf);
-  const cards = brainCards.map(cardOf);
   const record: RecallRecord = { shown: current, ...(anchorSeq !== undefined ? { anchorSeq } : {}) };
-  const shownCards = new Set(previous?.cards?.map(cardKey));
-  const newCards = renderCards(brainCards.filter((_, index) => !shownCards.has(cardKey(cards[index]!))));
-  const withCards = (text: string) => [text, newCards].filter(Boolean).join("\n\n");
+  const seen = new Set(previous?.cards?.map(cardKey));
+  const fitted: BrainCard[] = [];
+  const dropped: string[] = [];
+  for (const card of brainCards) {
+    if (seen.has(cardKey(card))) continue;
+    seen.add(cardKey(card));
+    if (renderCards([...fitted, card]).length <= BRAIN_CARD_MAX_CHARS) fitted.push(card);
+    else dropped.push(card.provider);
+  }
+  if (dropped.length)
+    console.warn(
+      `[memory] ${dropped.length} brain cards past the ${BRAIN_CARD_MAX_CHARS}-character block wait for a later turn, from ${[...new Set(dropped)].join(", ")}`,
+    );
+  const cards = fitted.map(cardOf);
+  const newCards = renderCards(fitted);
   const outcomeOf = (shown: Pick<Shown, "scope" | "provider">) =>
     outcomes.find(({ provider, scope }) => provider === shown.provider && scope === shown.scope);
   const refused = (outcome: MemoryProviderOutcome | undefined) =>
     !outcome || ["denied", "disabled"].includes(outcome.outcome) || DENIED_CODES.has(outcome.code ?? "");
   let unauthorized = false;
   for (const card of previous?.cards ?? []) {
-    if (cards.some(({ ref }) => ref === card.ref)) continue;
     if (!held.has(card.scope) || refused(outcomeOf(card))) unauthorized = true;
     else cards.push(card);
   }
   if (cards.length) record.cards = cards;
-  if (!previous) return { text: withCards(renderRecall(recalled, labels)), record };
+  if (!previous) return { text: [renderRecall(recalled, labels), newCards].filter(Boolean).join("\n\n"), record };
   const before = new Map(previous.shown.map((shown) => [keyOf(shown), shown]));
   const now = new Set(current.map(keyOf));
-  const added = withCards(
-    renderRecall(
-      recalled.filter((_, index) => !before.has(keyOf(current[index]!))),
-      labels,
-    ),
+  const added = renderRecall(
+    recalled.filter((_, index) => !before.has(keyOf(current[index]!))),
+    labels,
   );
   const withdrawn = new Map<string, number>();
   const answered = new Map<string, number>();
@@ -117,6 +122,7 @@ export function memoryRecallDelta(
   return {
     text: [
       added ? `New or updated memory facts:\n\n${added}` : "",
+      newCards,
       [...withdrawn]
         .map(
           ([scope, n]) =>

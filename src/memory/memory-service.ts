@@ -44,6 +44,7 @@ export interface MemoryRecallContext extends MemoryOutcomeSink {
   audienceScopeId?: ScopeId;
   sessionId?: string;
   maxChars?: number;
+  startedAt?: number;
 }
 
 export interface MemoryCaptureContext extends MemoryCaptureMetadata, MemoryOutcomeSink {
@@ -108,11 +109,14 @@ interface MemoryReader {
 export interface BoundBrain {
   id: string;
   label: string;
+  endpoint: string;
+  timeoutMs: number;
   tools: McpRemoteTool[];
 }
 
 export interface MemoryService {
   attestActor?: boolean;
+  brain?: Pick<BoundBrain, "endpoint" | "timeoutMs">;
   lookupTools?(scopeId: ScopeId, reader: MemoryReader): Promise<McpRemoteTool[]>;
   brains?(scopeId: ScopeId, reader: MemoryReader): Promise<BoundBrain[]>;
   lookup?(

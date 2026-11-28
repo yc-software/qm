@@ -5,7 +5,7 @@ import { createRoutedMemoryService } from "../src/memory/provider-router.ts";
 import { createMcpClient, McpCallError, type McpClient } from "../src/mcp/mcp-client.ts";
 import { forgetFacts } from "../src/memory/provider-outcome.ts";
 import type { MemoryProviderOutcome } from "../src/memory/memory-service.ts";
-import { sleep } from "../src/util/async.ts";
+import { sleep, TimeoutError } from "../src/util/async.ts";
 import { recallText } from "./support/recall-text.ts";
 import { structuredRecall } from "./support/structured-recall.ts";
 import { closedPort, routedTo, startMcpTestServer } from "./support/mcp-test-server.ts";
@@ -82,6 +82,13 @@ test("MCP recall is locally bounded and times out", async () => {
   };
   const timed = createMcpMemoryProvider({ read: { client: hanging, tool: "read", timeoutMs: 10 } });
   await assert.rejects(timed.recall("org:acme"), /timed out after 10ms/);
+
+  const late: McpClient = {
+    ...hanging,
+    callTool: () => sleep(300).then(() => ({ content: [{ type: "text", text: "late" }] })),
+  };
+  const shared = createMcpMemoryProvider({ read: { client: late, tool: "read", timeoutMs: 1_000 } });
+  await assert.rejects(shared.recall("org:acme", { startedAt: Date.now() - 900 }), TimeoutError);
 });
 
 test("MCP recall returns one row per line of the provider's answer", async () => {
@@ -102,6 +109,7 @@ test("a write that carries no member is not sent to an attested provider", async
         read: { client: client(calls), tool: "search_knowledge", timeoutMs: 100 },
         write: { client: client(calls), tool: "write_knowledge", timeoutMs: 100 },
         attestActor: true,
+        url: "https://knowledge.example/mcp",
       }),
     },
     routes: [{ provider: "knowledge", scopes: ["channel"], capture: "explicit", manage: false }],
@@ -185,6 +193,7 @@ test("a brain forget reports each ref done, pending, unknown or failed, and a re
       read: { client, tool: "memory_recall", timeoutMs: 100 },
       forget: { client, tool: "forget_fact", idempotencyArg: "request_id", timeoutMs: 100 },
       attestActor: true,
+      url: "https://brain.example/mcp",
     });
   const gone = `http://127.0.0.1:${await closedPort()}`;
   const down = createMcpClient({ url: `${gone}/mcp`, auth: { mode: "none" }, fetch: routedTo(gone) });

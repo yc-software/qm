@@ -12,7 +12,7 @@ import { TimeoutError, withTimeout } from "../util/async.ts";
 import { attestedPerson, attestedActorHeaders, OutsideAudience, ownPrivateConversation } from "../directory/person.ts";
 import { MemoryRecallWithheld } from "./disclosure.ts";
 import type { MemoryRecallContext, MemoryService } from "./memory-service.ts";
-import type { MemoryCandidate } from "./facts.ts";
+import { factHash, type MemoryCandidate } from "./facts.ts";
 import {
   DENIED_CODES,
   MAX_FACTS_PER_WRITE,
@@ -81,13 +81,14 @@ const stamped = (fact: ProviderFact) => {
   return stamp ? `(${stamp}) ${fact.text}` : fact.text;
 };
 
-export function createMcpMemoryProvider(opts: {
-  read: McpMemoryOperation;
-  write?: McpMemoryOperation;
-  forget?: McpMemoryOperation;
-  label?: string;
-  attestActor?: boolean;
-}): MemoryService {
+export function createMcpMemoryProvider(
+  opts: {
+    read: McpMemoryOperation;
+    write?: McpMemoryOperation;
+    forget?: McpMemoryOperation;
+    label?: string;
+  } & ({ attestActor?: false } | { attestActor: true; url: string }),
+): MemoryService {
   const attest = (actorId: string | undefined, scopeId: string, audienceScopeId: string | undefined) => {
     const person = opts.attestActor ? attestedPerson(actorId, "memory provider") : actorId;
     if (opts.attestActor && !ownPrivateConversation(actorId, scopeId, audienceScopeId))
@@ -151,7 +152,7 @@ export function createMcpMemoryProvider(opts: {
       context?.actorId,
       scopeId,
       context?.audienceScopeId,
-      Date.now() + op.timeoutMs,
+      (context?.startedAt ?? Date.now()) + op.timeoutMs,
     ).catch((error: unknown) => {
       throw error instanceof OutsideAudience ? new MemoryRecallWithheld(scopeId) : error;
     });
@@ -225,6 +226,7 @@ export function createMcpMemoryProvider(opts: {
 
     ...(opts.attestActor
       ? {
+          brain: { endpoint: factHash(opts.url).slice(0, 16), timeoutMs: opts.read.timeoutMs },
           lookupTools: (scopeId, { actorId, audienceScopeId }) => lookupTools(scopeId, actorId, audienceScopeId),
           lookup: async (scopeId, tool, args, by, context) => {
             const actorArg = opts.read.actorArg ?? ACTING_USER;

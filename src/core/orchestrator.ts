@@ -1164,6 +1164,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         (input.proactiveOpener && !input.text.trim()) ||
         ((automatedTurn || (sessionTurn && input.envelopeWrapped)) && !delegatedTask);
       const titleText = input.displayText?.trim() || input.text;
+      const memberText = isPersonAuthored(input.origin.kind) && !sessionTurn ? titleText : undefined;
       let firstMessageTitle: ReturnType<typeof titles.titleFromFirstMessage>;
       const assignSessionTitle = () => {
         if (!ephemeral && !session.title && !syntheticInput && !input.approval)
@@ -1217,16 +1218,22 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const recallOutcomes: MemoryProviderOutcome[] = [];
       const loadedFacts = snapshot.then((view) => view.loaded);
       void loadedFacts.catch(() => undefined);
-      const recallFor = async (history: Item[]) =>
-        appEdit
-          ? []
-          : context.recallMemory(
-              memoryRecallQuery(input.text, history),
-              loadedFacts,
-              (outcome) => void recallOutcomes.push(outcome),
-              isPersonAuthored(input.origin.kind) && !sessionTurn ? titleText : undefined,
-              session.id,
-            );
+      const recallFor = async (history: Item[]) => {
+        if (appEdit) return { recalled: [], cards: [] };
+        const startedAt = Date.now();
+        const [recalled, cards] = await Promise.all([
+          context.recallMemory(
+            memoryRecallQuery(input.text, history),
+            loadedFacts,
+            (outcome) => void recallOutcomes.push(outcome),
+            memberText,
+            session.id,
+            startedAt,
+          ),
+          context.recallCards(memberText, personAuthorityTurn, history, startedAt),
+        ]);
+        return { recalled, cards };
+      };
       const importsOverheard = (!input.envelopeWrapped || humanInput) && !!input.overheard?.length;
       const earlyRecall =
         input.approval || importsOverheard || ambientTurn || input.cronScript
@@ -1482,23 +1489,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
           return true;
         });
-        const runtimeClaims: CapabilityClaims = controlClaims ?? {
-          ...scopeAttestation,
-          exp: Date.now() + CAPABILITY_TTL_MS,
-          ...(personAuthorityTurn ? { personAuthority: true } : {}),
-        };
-        const personAuthority = carriesPersonAuthority(runtimeClaims);
-        const cardsFor = async (history: Item[]) =>
-          appEdit
-            ? []
-            : context.recallCards(
-                isPersonAuthored(input.origin.kind) && !sessionTurn ? titleText : undefined,
-                personAuthority,
-                history,
-              );
-        const earlyCards =
-          earlyRecall && contextWindow.then((window) => cardsFor(filterHistory(forModelContext(window.items))));
-        void earlyCards?.catch(() => undefined);
         const [memoryWindow, memoryView] = await Promise.all([contextWindow, snapshot]);
         let historyAppended = input.approval !== undefined;
         const historyWindow = () => deps.sessions.getContextWindow(session.id);
@@ -1771,6 +1761,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         });
         const liveNote = async () =>
           (await turnSessionSyscalls?.liveSubagents?.().catch(swallowAs("live note", ""))) ?? "";
+        const runtimeClaims: CapabilityClaims = controlClaims ?? {
+          ...scopeAttestation,
+          exp: Date.now() + CAPABILITY_TTL_MS,
+          ...(personAuthorityTurn ? { personAuthority: true } : {}),
+        };
+        const personAuthority = carriesPersonAuthority(runtimeClaims);
         const turnMcpTools = appEdit ? undefined : context.mcpTools(personAuthority, mcpToolsReady);
         const baseTools = createToolContext({
           tenant,
@@ -1996,10 +1992,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const rawEntries = (await turnWindow()).items;
         const priorTurns = input.priorTurns;
         let visibleHistory = filterHistory(forModelContext(rawEntries));
-        const [recalled, cards] = await Promise.all([
-          earlyRecall ?? recallFor(visibleHistory),
-          earlyCards ?? cardsFor(visibleHistory),
-        ]);
+        const { recalled, cards } = await (earlyRecall ?? recallFor(visibleHistory));
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.runId)) : null;
         const reconciled = partial ? reconcile(visibleHistory, partial, input.resumeCause) : null;
         if (reconciled?.settleItems.length) {

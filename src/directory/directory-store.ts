@@ -74,7 +74,7 @@ export interface DirectoryStore {
   listChannels(): Promise<DirectoryChannel[]>;
   getMany(principalIds: readonly string[]): Promise<Map<string, DirectoryMember>>;
   get(principalId: string): Promise<DirectoryMember | null>;
-  getBySlackId(slackId: string): Promise<DirectoryMember | null>;
+  getBySlackIds(slackIds: readonly string[]): Promise<Map<string, DirectoryMember>>;
   resolve(query: string): Promise<RecipientResolution>;
   resolveChannel(query: string): Promise<ChannelResolution>;
   channelMember(channelId: string, principalId: string): Promise<boolean>;

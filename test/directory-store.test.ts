@@ -124,9 +124,10 @@ describe("member slackId (the real <@…> mention id for an email principal)", (
     assert.equal((await d.get("eve@acme.com"))?.avatarUrl, "https://avatars.slack-edge.com/eve.png");
     assert.equal((await d.get("U5"))?.slackId, undefined);
     assert.equal((await d.list()).find((m) => m.principalId === "eve@acme.com")?.slackId, "U9");
-    assert.equal((await d.getBySlackId("U9"))?.principalId, "eve@acme.com");
-    assert.equal((await d.getBySlackId("U5"))?.principalId, "U5");
-    assert.equal(await d.getBySlackId("Eve"), null);
+    assert.deepEqual(
+      Object.fromEntries([...(await d.getBySlackIds(["U9", "U5", "Eve"]))].map(([id, m]) => [id, m.principalId])),
+      { U9: "eve@acme.com", U5: "U5" },
+    );
     const r = await d.resolve("Eve");
     assert.equal(r.kind === "one" && r.member.slackId, "U9");
   });

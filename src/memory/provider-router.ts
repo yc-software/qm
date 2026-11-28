@@ -85,7 +85,7 @@ export function createRoutedMemoryService(opts: {
         }));
   const brainRoutes = (scopeId: ScopeId): MemoryProviderRoute[] =>
     routesFor(scopeId)
-      .filter((route) => route.recall !== false && opts.providers[route.provider]?.lookup)
+      .filter((route) => route.recall !== false && opts.providers[route.provider]?.brain)
       .filter((route, index, all) => all.findIndex((other) => other.provider === route.provider) === index);
   const managerFor = (scopeId: ScopeId): MemoryService | undefined => {
     const route = routesFor(scopeId).find((candidate) => candidate.manage !== false);
@@ -211,6 +211,7 @@ export function createRoutedMemoryService(opts: {
         brainRoutes(scopeId).map(async ({ provider, label }) => ({
           id: provider,
           label: label ?? provider,
+          ...opts.providers[provider]!.brain!,
           tools: await opts.providers[provider]!.lookupTools!(scopeId, reader).catch((error: unknown) => {
             opts.onError?.(error, provider, "lookup");
             return [];
