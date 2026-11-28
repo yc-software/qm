@@ -137,6 +137,8 @@ final class DemoWorkspaceTests: XCTestCase {
   func testTheDemoHomeOffersNewConversationsButNotSearchOrBrowse() async throws {
     let model = model()
     await model.exploreDemo()
+    UserDefaults.standard.set(DemoWorkspace.origin.absoluteString, forKey: AIConsent.key)
+    defer { UserDefaults.standard.removeObject(forKey: AIConsent.key) }
     for _ in 0..<100 where UIApplication.shared.connectedScenes.isEmpty {
       try await Task.sleep(for: .milliseconds(50))
     }
