@@ -18,7 +18,7 @@ const member = (principalId: string, displayName = principalId.toLowerCase(), sl
 });
 
 function entry(seq: number, members: ReturnType<typeof member>[], history: Item[]): Item {
-  const event = membershipEvent(members, history, "s");
+  const event = membershipEvent(members, history, "s", []);
   return storedItem(
     { kind: "UserMessage", text: "hello", body: { environment: event.text, rosterSnapshot: event.record } },
     { sessionId: "s", seq, createdAt: seq },
@@ -29,11 +29,11 @@ test("membership changes are reported once, after the turn that first saw the ro
   const first = entry(1, [member("U1"), member("U2")], []);
   assert.equal(first.body.environment, "");
   const history: Item[] = JSON.parse(JSON.stringify([first]));
-  assert.equal(membershipEvent([member("U2"), member("U1")], history, "s").text, "");
+  assert.equal(membershipEvent([member("U2"), member("U1")], history, "s", []).text, "");
   const second = entry(2, [member("U1"), member("u3@example.com", "Cy", "U3")], history);
   assert.equal(second.body.environment, "Joined: Cy (u3@example.com, U3). Left: u2.");
   assert.equal(
-    membershipEvent([member("U1"), member("u3@example.com", "Cy", "U3")], [...history, second], "s").text,
+    membershipEvent([member("U1"), member("u3@example.com", "Cy", "U3")], [...history, second], "s", []).text,
     "",
   );
 });
@@ -41,12 +41,12 @@ test("membership changes are reported once, after the turn that first saw the ro
 test("membership is compared with the last recorded roster, and turns without a roster record none", () => {
   const first = entry(1, [member("U1")], []);
   const joined = [member("U1"), member("U2")];
-  assert.equal(membershipEvent(joined, [first], "s").text, "Joined: u2 (U2).");
+  assert.equal(membershipEvent(joined, [first], "s", []).text, "Joined: u2 (U2).");
   assert.match(
-    membershipEvent(joined, [first, entry(2, [member("U3")], [first])], "s").text,
+    membershipEvent(joined, [first, entry(2, [member("U3")], [first])], "s", []).text,
     /^Joined: u1 \(U1\), u2 \(U2\)\. Left: u3\.$/,
   );
-  assert.deepEqual(membershipEvent(undefined, [first], "s"), { text: "" });
+  assert.deepEqual(membershipEvent(undefined, [first], "s", []), { text: "" });
 });
 
 test("sandbox providers render the default first, and point at sandbox list only where it exists", () => {

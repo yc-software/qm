@@ -98,7 +98,7 @@ import { appEditTurnPolicy } from "./orchestrator/app-edit.ts";
 import { currentModelRequestContext, withModelRequestContext } from "../model/request-context.ts";
 import { supportsScopeProfile } from "../sandbox/sandbox.ts";
 import { firedByPoll } from "../triggers/run-trigger.ts";
-import { askResolutionEvents, type KeychainAsk } from "../credentials/keychain.ts";
+import { askResolutionEvents } from "../credentials/keychain.ts";
 import { configuredConnectorProviders } from "../credentials/connector-status.ts";
 import { estimateCostUsd } from "../ratelimit/budget.ts";
 import { createSpendLimits, spendLimitNote } from "../ratelimit/spend-limits.ts";
@@ -195,8 +195,11 @@ import {
   currentTimeBlock,
   defaultSandboxLoadLine,
   environmentNote,
+  peopleToScreen,
+  previousRoster,
   renderGatewayContext,
   renderSandboxProviders,
+  screenedRoster,
   sharedFilesSystemSection,
   renderProjectHomeChannel,
   type SystemContextBlocks,
@@ -220,7 +223,10 @@ import { replayRecordedAnswer } from "./orchestrator/turn-replay.ts";
 import {
   addConversationBlocks,
   appendTurnGuidance,
+  conversationKeychain,
+  conversationRoster,
   finishSystemPrompt,
+  keychainOwners,
   replacesReply,
   replyToRewrite,
   rewriteTargets,
@@ -243,6 +249,7 @@ import {
 import { createTurnSandboxes } from "./orchestrator/sandboxes.ts";
 import {
   createCredentialCatalog,
+  type CredentialCatalogTurn,
   loadServiceCredentialGrants,
   registerBrokeredTools,
   registerConnectorCredentials,
@@ -673,6 +680,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ? { classifiedAttachments: releasedAttachments }
               : {}),
             ...(fields.kind !== "input" && heldInputAllowedBy ? { allowedInputBy: heldInputAllowedBy } : {}),
+            ...(fields.kind !== "input" && heldInputAllowedBy && heldPeople.size ? { people: [...heldPeople] } : {}),
           },
           input,
           resolution.approvalGrantModes,
@@ -712,12 +720,66 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               ?.slackChannel?.(conversation.channelRef)
               .catch(swallowAs("orchestrator: project home channel read", undefined))
           : undefined;
+      const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
+      const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
+      const hasRoster = !external && conversation.kind !== "dm";
+      const grantReads = new Map<ScopeId | undefined, ReturnType<CredentialCatalogTurn["scopeKeychainGrants"]>>();
+      const credentialGrants = (personaScope: ScopeId | undefined) => {
+        const read =
+          grantReads.get(personaScope) ??
+          Promise.all(
+            [scopeId, ...(personaScope ? [personaScope] : [])].map(async (grantScope) =>
+              (
+                (await deps.keychain?.grantsForScope(grantScope, {
+                  includePersonGrants: input.botActor !== true || grantScope === personaScope,
+                })) ?? []
+              ).map((row) => ({ ...row, grantScope })),
+            ),
+          ).then((scopes) => {
+            const rows = scopes.flat();
+            return rows.filter((row, i) => rows.findIndex((r) => r.credential.id === row.credential.id) === i);
+          });
+        grantReads.set(personaScope, read);
+        return read;
+      };
+      const personaRead =
+        external || !deps.personas
+          ? Promise.resolve(null)
+          : deps.personas.forTurn(input.personaId ?? storedSession?.personaId, actor.id, scopeId);
+      const [rosterMembers, rosterItem, keychainView, boundPersona, boundGrants] = await Promise.all([
+        hasRoster
+          ? conversationRoster(actor, conversation, () => directoryIndexFor(tenant, deps.directory)).catch(
+              swallowAs("orchestrator: conversation roster", undefined),
+            )
+          : undefined,
+        hasRoster && storedSession ? deps.sessions.latestRosterItem(storedSession.id) : undefined,
+        strictReadOnly ? undefined : conversationKeychain(deps, actor, conversation, scopeId, external),
+        personaRead,
+        strictReadOnly || external
+          ? []
+          : personaRead.then((bound) => credentialGrants(bound && typeof bound === "object" ? bound.scope : undefined)),
+      ]);
+      const rosterHistory = rosterItem ? [rosterItem] : [];
+      const previousNames = previousRoster(rosterHistory);
+      const knownNames = new Map<string, string>();
+      for (const { id, displayName } of [
+        ...conversation.audience,
+        ...(rosterMembers ?? []).map((m) => ({ id: m.principalId, displayName: m.displayName })),
+      ]) {
+        const key = personKey(id);
+        if (key && displayName !== undefined && !knownNames.has(key)) knownNames.set(key, displayName);
+      }
+      const nameOf = (id: string): string | undefined => knownNames.get(personKey(id));
+      const keychainNames = keychainOwners(keychainView, boundGrants, nameOf);
+      const shownPeople = peopleToScreen(actor.id, rosterMembers, previousNames, keychainNames);
+      const people = [...new Set(shownPeople.map((p) => p.name))].sort();
       const approvalSession = input.approval ? storedSession : null;
       const approvalRecord = input.approval ? await pending.get(input.approval.requestId) : undefined;
+      const heldPeople = new Set(approvalRecord?.people);
       const approvalReplaysFlaggedRequest =
         !!approvalRecord?.request &&
-        canonicalJson(screenedFields(approvalRecord.request, approvalRecord.homeChannel)) ===
-          canonicalJson(screenedFields(input, homeChannel?.channelName));
+        canonicalJson(screenedFields(approvalRecord.request, approvalRecord.homeChannel, [])) ===
+          canonicalJson(screenedFields(input, homeChannel?.channelName, []));
       const approvalReplaysOwnRequest =
         !!approvalSession && approvalRecord?.sessionId === approvalSession.id && approvalReplaysFlaggedRequest;
       const heldInputAllowedBy =
@@ -726,7 +788,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         (approvalRecord?.kind === "input" || samePerson(approvalRecord?.allowedInputBy, actor.id))
           ? actor.id
           : undefined;
-      const replaysHeldInput = (approvalReplaysOwnRequest && approvalRecord?.kind === "input") || !!heldInputAllowedBy;
+      const replaysHeldInput =
+        ((approvalReplaysOwnRequest && approvalRecord?.kind === "input") || !!heldInputAllowedBy) &&
+        people.every((name) => heldPeople.has(name));
       const releasedAttachments = approvalReplaysOwnRequest ? approvalRecord?.classifiedAttachments : undefined;
       const screenInbound =
         securityPolicy.screening !== "off" && !replaysHeldInput && input.approval?.approved !== false;
@@ -754,12 +818,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             origin: input.origin.kind,
             ...context,
           });
-      const { flaggedScreenedInput, inputUnscreened } = await screenInboundInput({
+      const { flaggedScreenedInput, inputUnscreened, screenedClean } = await screenInboundInput({
         deps,
         input,
         actor,
         conversation,
         homeChannelName: homeChannel?.channelName,
+        people,
         scopeId,
         resolution,
         screenInbound,
@@ -773,6 +838,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         audit,
         approvalGrantsFor,
       });
+      const screenedPeople = screenedRoster(rosterMembers, previousNames, screenedClean ? shownPeople : []);
       if (flaggedScreenedInput) {
         let type: SessionType = "channel";
         if (conversation.kind === "dm") type = "dm";
@@ -802,6 +868,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               command: "security-screen",
               summary: "Let through a message held by the security screen",
               reason: heldReason,
+              ...(people.length ? { people } : {}),
               blocksInput: true,
               kind: "input",
               classifiedAttachments: flaggedScreenedInput.classifiedAttachments,
@@ -815,8 +882,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           throw err;
         }
       }
-      const childFloor = delegatedSession?.spawnMeta?.readOnly === true;
-      const strictReadOnly = input.readOnly === true || input.privateSessionMessage === true || childFloor;
       const notebookOnly =
         input.memoryNotebookOnly === true ||
         delegatedSession?.spawnMeta?.memoryNotebookOnly === true ||
@@ -884,26 +949,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               deps.personas,
               routed,
               input.personaId ?? storedSession?.personaId,
+              boundPersona,
               actor.id,
               scopeId,
             );
       const persona = personaTurn && typeof personaTurn === "object" ? personaTurn : null;
       if (persona && !notebookOnly) resolution.readOnlyScopeIds.push(persona.scope);
-      const credentialScopes = persona ? [scopeId, persona.scope] : [scopeId];
-      const scopeKeychainGrants = async () => {
-        const rows = (
-          await Promise.all(
-            credentialScopes.map(async (grantScope) =>
-              (
-                (await deps.keychain?.grantsForScope(grantScope, {
-                  includePersonGrants: input.botActor !== true || grantScope === persona?.scope,
-                })) ?? []
-              ).map((row) => ({ ...row, grantScope })),
-            ),
-          )
-        ).flat();
-        return rows.filter((row, i) => rows.findIndex((r) => r.credential.id === row.credential.id) === i);
-      };
+      const scopeKeychainGrants = () => credentialGrants(persona?.scope);
 
       const context = await resolveTurnContext({
         tenant,
@@ -997,11 +1049,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const turnEvents: string[] = [];
       if (spendLimit) turnEvents.push(spendLimitNote(spendLimit));
       if (personaNote) turnEvents.push(personaNote);
-      let rosterMembers: DirectoryMember[] | undefined;
-      let scopeAskList: KeychainAsk[] = [];
-      const nameOf = (id: string): string | undefined =>
-        conversation.audience.find((p) => samePerson(p.id, id))?.displayName ??
-        rosterMembers?.find((m) => samePerson(m.principalId, id))?.displayName;
       if (input.privateSessionMessage)
         turnEvents.push(
           "This is a private message from another session. You may read context and reply using session.write with the sender session ID. Replies remain private and read-only. Do not open children or interrupt work. Reply only when there is useful information to send; reply chains are bounded.",
@@ -1544,21 +1591,20 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           orgMemoryWritable,
           ephemeral,
         });
-        ({ rosterMembers, scopeAskList } = await addConversationBlocks({
+        await addConversationBlocks({
           deps,
           actor,
           conversation,
           scopeId,
           external,
-          strictReadOnly,
           turnContextBlocks,
           credentialDescriptions,
           openOwnerKeychain,
           scopeKeychainGrants,
-          directoryIndexFor: (directory) => directoryIndexFor(tenant, directory),
           rosterMembers,
-          scopeAskList,
-        }));
+          keychain: keychainView,
+          keychainNames,
+        });
         const turnCompactionSettings = await compactionSettings();
         const finished = await finishSystemPrompt({
           deps,
@@ -2151,7 +2197,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           sessionTurn || automatedTurn || compactedSinceLastTurn(history) ? await liveNote() : "",
           deps.keychain
             ? await askResolutionEvents(
-                scopeAskList,
+                keychainView?.asks ?? [],
                 lastUserAt ?? session.createdAt,
                 (ownerId) => nameOf(ownerId) ?? ownerId,
                 deps.keychain.getCredential,
@@ -2330,6 +2376,8 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             context,
             recallOutcomes,
             rosterMembers,
+            screenedPeople,
+            rosterHistory,
             rawEntries,
             session,
             deps,

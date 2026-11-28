@@ -19,6 +19,8 @@ export function segmentEnvironment(segment: {
   context: { memoryLabels: Parameters<typeof memoryRecallDelta>[3] };
   recallOutcomes: MemoryProviderOutcome[];
   rosterMembers: Parameters<typeof membershipEvent>[0];
+  screenedPeople: Parameters<typeof membershipEvent>[3];
+  rosterHistory: Item[];
   rawEntries: Item[];
   session: Session;
   deps: OrchestratorDeps;
@@ -41,6 +43,8 @@ export function segmentEnvironment(segment: {
     context,
     recallOutcomes,
     rosterMembers,
+    screenedPeople,
+    rosterHistory,
     rawEntries,
     session,
     deps,
@@ -62,7 +66,7 @@ export function segmentEnvironment(segment: {
     recallOutcomes,
     cards,
   );
-  const snapshot = membershipEvent(rosterMembers, continuation?.history ?? rawEntries, session.id);
+  const snapshot = membershipEvent(rosterMembers, continuation?.history ?? rosterHistory, session.id, screenedPeople);
   const guidance = soulScopeId
     ? guidanceUpdateEvent(
         {

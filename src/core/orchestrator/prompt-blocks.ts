@@ -9,6 +9,7 @@ import { IO_SATURATED_FULL60, type LoadSample } from "../../sandbox/load-probe.t
 import type { Item } from "../../sessions/items.ts";
 import type { Cron, Monitor, Webhook } from "../../triggers/types.ts";
 import type { DirectoryMember } from "../../directory/directory-store.ts";
+import { samePerson } from "../../directory/person.ts";
 import type { PersistedSoulRevision } from "../../resolution/config-store.ts";
 
 const memberLabel = (m: { principalId: string; displayName: string; slackId?: string }): string =>
@@ -35,30 +36,75 @@ export function renderSandboxProviders(
 interface RosterSnapshot {
   roster: Array<{ id: string; name: string }>;
   sessionId: string;
+  screened?: string[];
+}
+
+export function previousRoster(history: readonly Item[]): RosterSnapshot | undefined {
+  return retainedSnapshot(history, rosterOf).previous;
+}
+
+function rosterChanges<M extends { principalId: string }>(roster: readonly M[], previous: RosterSnapshot) {
+  const before = new Set(previous.roster.map((o) => o.id));
+  const current = new Set(roster.map((m) => m.principalId));
+  return {
+    joined: roster.filter((m) => !before.has(m.principalId)),
+    left: previous.roster.filter((o) => !current.has(o.id)),
+  };
+}
+
+function screenedNames(previous: RosterSnapshot | undefined): Map<string, string> {
+  const screened = new Set(previous?.screened);
+  return new Map((previous?.roster ?? []).filter((o) => screened.has(o.id)).map((o) => [o.id, o.name]));
+}
+
+export function peopleToScreen(
+  actorId: string,
+  roster: readonly DirectoryMember[] | undefined,
+  previous: RosterSnapshot | undefined,
+  owners: ReadonlyArray<{ id: string; name?: string }>,
+): Array<{ id: string; name: string }> {
+  const screened = screenedNames(previous);
+  const { joined, left } = roster && previous ? rosterChanges(roster, previous) : { joined: [], left: [] };
+  return [
+    ...[...rosterShown(roster ?? []), ...joined].map((m) => ({ id: m.principalId, name: m.displayName })),
+    ...left,
+    ...owners,
+  ].flatMap(({ id, name }) =>
+    name?.trim() && !samePerson(id, actorId) && screened.get(id) !== name ? [{ id, name }] : [],
+  );
+}
+
+export function screenedRoster(
+  roster: readonly DirectoryMember[] | undefined,
+  previous: RosterSnapshot | undefined,
+  screenedNow: ReadonlyArray<{ id: string; name: string }>,
+): string[] {
+  const current = new Map(roster?.map((m) => [m.principalId, m.displayName]));
+  const screened = [...screenedNames(previous), ...screenedNow.map((p) => [p.id, p.name] as const)];
+  return [...new Set(screened.filter(([id, name]) => current.get(id) === name).map(([id]) => id))].sort();
 }
 
 export function membershipEvent(
   current: ReadonlyArray<{ principalId: string; displayName: string; slackId?: string }> | undefined,
   history: readonly Item[],
   sessionId: string,
+  screened: readonly string[],
 ): { text: string; record?: RosterSnapshot } {
   if (!current) return { text: "" };
   const roster = current
     .map((m) => ({ id: m.principalId, name: m.displayName }))
     .sort((a, b) => a.id.localeCompare(b.id));
-  const { previous } = retainedSnapshot(history, rosterOf);
-  if (!previous) return { text: "", record: { roster, sessionId } };
-  const absentFrom = (list: RosterSnapshot["roster"], id: string) => !list.some((o) => o.id === id);
-  const joined = current
-    .filter((m) => absentFrom(previous.roster, m.principalId))
-    .toSorted((a, b) => a.principalId.localeCompare(b.principalId))
-    .map(memberLabel);
-  const left = previous.roster.filter((m) => absentFrom(roster, m.id)).map((m) => m.name);
+  const record = { roster, sessionId, ...(screened.length ? { screened: [...screened] } : {}) };
+  const previous = previousRoster(history);
+  if (!previous) return { text: "", record };
+  const changes = rosterChanges(current, previous);
+  const joined = changes.joined.toSorted((a, b) => a.principalId.localeCompare(b.principalId)).map(memberLabel);
+  const left = changes.left.map((m) => m.name);
   const parts = [
     joined.length ? `Joined: ${joined.join(", ")}.` : "",
     left.length ? `Left: ${left.join(", ")}.` : "",
   ].filter(Boolean);
-  return { text: parts.join(" "), record: { roster, sessionId } };
+  return { text: parts.join(" "), record };
 }
 
 function rosterOf(item: Item): RosterSnapshot | undefined {
@@ -310,10 +356,13 @@ export function renderStandingObligations(crons: Cron[], webhooks: Webhook[], mo
 }
 
 const ROSTER_CAP = 20;
+function rosterShown(members: readonly DirectoryMember[]): DirectoryMember[] {
+  return members.toSorted((a, b) => a.principalId.localeCompare(b.principalId)).slice(0, ROSTER_CAP);
+}
+
 export function renderConversationRoster(members: DirectoryMember[]): string | null {
   if (members.length === 0) return null;
-  const shown = members.toSorted((a, b) => a.principalId.localeCompare(b.principalId)).slice(0, ROSTER_CAP);
-  const lines = shown.map((m) => `- ${memberLabel(m)}`);
+  const lines = rosterShown(members).map((m) => `- ${memberLabel(m)}`);
   const more = members.length > ROSTER_CAP ? `\n…and ${members.length - ROSTER_CAP} more in this conversation.` : "";
   return (
     [

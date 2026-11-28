@@ -252,6 +252,7 @@ export interface InboundScreenTurn {
   actor: OrchestratorInput["actor"];
   conversation: OrchestratorInput["conversation"];
   homeChannelName: string | undefined;
+  people: readonly string[];
   scopeId: ScopeId;
   resolution: Awaited<ReturnType<OrchestratorDeps["resolution"]["resolve"]>>;
   screenInbound: boolean;
@@ -281,6 +282,7 @@ export function screenedFields(
     conversation: { kind: string };
   },
   homeChannel: string | undefined,
+  people: readonly string[],
 ) {
   const dm = request.conversation.kind === "dm";
   const destinations = (request.deliveryCandidates ?? []).map((c) => c.label);
@@ -291,6 +293,7 @@ export function screenedFields(
       ...shownPlace(request.surface, request.gatewayContext, dm),
       ...(destinations.length ? { destinations } : {}),
       ...(homeChannel ? { homeChannel } : {}),
+      ...(people.length ? { people } : {}),
     },
     overheard: request.overheard ?? [],
     attachments: request.attachments ?? [],
@@ -302,7 +305,7 @@ const contentKey = (bytes: Buffer) => createHash("sha256").update(bytes).digest(
 
 async function buildInboundScreen(turn: InboundScreenTurn) {
   const { deps, input, actor, conversation, scopeId, screenInbound, ambientTurn, sessionTurn, swarmBinding } = turn;
-  const screened = screenedFields(input, turn.homeChannelName);
+  const screened = screenedFields(input, turn.homeChannelName, turn.people);
   const blobTransfer = deps.blobTransfer;
   let overheard: OverheardEntryPayload[] = [];
   if (screenInbound) {
@@ -400,6 +403,7 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
   let flaggedScreenedInput:
     { reason: string; sources: string[]; onceOnly: boolean; classifiedAttachments?: string[] } | undefined;
   let inputUnscreened = false;
+  let screenedClean = false;
   if (replaysHeldInput && enforceScreen) {
     const { screenPayloads, hasUnscreenableAttachment } = await buildInboundScreen({ ...turn, screenInbound: true });
     inputUnscreened = !screenPayloads || hasUnscreenableAttachment;
@@ -429,6 +433,7 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
           },
           { batch: 4 },
         );
+      screenedClean = cleanVerdict(verdict);
       let unscreenableCause: "unscreenable-attachment" | "no-screener" | undefined;
       if (hasUnscreenableAttachment) unscreenableCause = "unscreenable-attachment";
       else if (!deps.securityScreener && !deps.agent.screenSecurity) unscreenableCause = "no-screener";
@@ -471,7 +476,7 @@ export async function screenInboundInput(turn: InboundScreenTurn) {
       break;
     }
   }
-  return { flaggedScreenedInput, inputUnscreened };
+  return { flaggedScreenedInput, inputUnscreened, screenedClean };
 }
 
 export const countSkills = (listed: { skills: readonly unknown[] }) => ({ "qm.skills": listed.skills.length });

@@ -499,6 +499,7 @@ export interface PendingApprovalRecord {
   grantModes?: ApprovalGrantModes;
   request?: TurnRequest;
   homeChannel?: string;
+  people?: string[];
   classifiedAttachments?: string[];
   allowedInputBy?: string;
   blocksInput?: boolean;

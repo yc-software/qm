@@ -372,10 +372,10 @@ export async function routedPersonaTurn(
   personas: Pick<PersonaService, "forTurn">,
   routed: { persona?: string; ruleId: string } | undefined,
   personaId: string | undefined,
+  current: PersonaForTurn | string | null,
   actorId: string,
   contextScope: ScopeId,
 ): Promise<{ turn: PersonaForTurn | string | null; note?: string }> {
-  const current = await personas.forTurn(personaId, actorId, contextScope);
   const currentId = current && typeof current === "object" ? current.persona.id : personaId;
   if (!routed?.persona || routed.persona === currentId) return { turn: current };
   if (current && typeof current === "object" && (current.pinned || actsAsScope(actorId, current.scope)))

@@ -437,6 +437,7 @@ export interface SessionStore {
   appendDelivery(writer: SessionWriter, item: NewItem): Promise<boolean>;
   countItemsBefore(sessionId: string, beforeSeq: number, principalId?: string): Promise<number>;
   getContextWindow(sessionId: string): Promise<ContextWindow>;
+  latestRosterItem(sessionId: string): Promise<Item | undefined>;
   getItem(sessionId: string, seq: number): Promise<Item | undefined>;
   latestItemSeq(sessionId: string): Promise<number>;
   latestToolSteps(turnIds: readonly string[]): Promise<Map<string, ToolStep>>;
