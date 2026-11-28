@@ -1,5 +1,5 @@
 import "./support/auto-fake-sprites.ts";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { MAX_DOCUMENT_TEXT_CHARS } from "../src/core/documents.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
@@ -713,6 +713,7 @@ function fixtureScreen(): SecurityScreener {
   return {
     provider: "fixture-screen",
     async classify(input) {
+      if (input.payload.includes("SCREENING_FIXTURE_FAIL")) throw new Error("fixture screen unavailable");
       return {
         score: 1,
         threshold: 0.5,
@@ -794,6 +795,60 @@ test("held input keeps one approval when held again with keys in another order, 
   assert.equal(again.pendingApprovals?.[0]?.requestId, requestId);
   assert.equal((await built.app.turn({ ...request, approval: { requestId, approved: true } })).status, "ok");
 });
+
+test("allowing held input lets in only the attachments the hold's screen classified", async () => {
+  const built = freshApp({ securityPosture: "auto" }, fixtureScreen());
+  const file = async (name: string) => {
+    const blob = await built.blobTransfer.put(Buffer.from("SCREENING_FIXTURE_BLOCK " + name));
+    return { attachments: [{ name, mimetype: "text/plain", ...blob }] };
+  };
+  const hold = async (request: TurnRequest, scope: "once" | "session" | "always" = "once") => {
+    const requestId = (await built.app.turn(request)).pendingApprovals![0]!.requestId;
+    return async () => {
+      const turn = await built.app.turn({ ...request, approval: { requestId, approved: true, scope } });
+      const requests = await built.sessions.listLlmRequests(turn.sessionId!);
+      return JSON.stringify(requests.findLast((rec) => rec.model === "mock"));
+    };
+  };
+  const said = (ts: string, text: string) => [{ ts, role: "user" as const, name: "Pat", speakerId: "U9", text }];
+  const flagged = said("1700000000.000300", "SCREENING_FIXTURE_BLOCK " + "y".repeat(17_000));
+  const failed = await hold(channel("summarize", { ...(await file("SCREENING_FIXTURE_FAIL")), overheard: flagged }));
+  assert.match(await failed(), /NOT security-screened/);
+  const overheard = said("1700000000.000100", "y".repeat(MAX_DOCUMENT_TEXT_CHARS + 1));
+  const tooLong = await hold(channel("summarize", { ...(await file("long.txt")), overheard }));
+  await hold(channel("thanks", { overheard })).then((allow) => allow());
+  assert.doesNotMatch(await tooLong(), /shared long\.txt \(Files ID/);
+  const partial = said("1700000000.000200", "y".repeat(40_000));
+  const partly = await hold(channel("summarize", { ...(await file("partly.txt")), overheard: partial }));
+  assert.doesNotMatch(await partly(), /shared partly\.txt \(Files ID/);
+  mock.method(built.blobTransfer, "open").mock.mockImplementationOnce(() => Promise.reject(new Error("blob gone")));
+  const unopened = await hold(dm("summarize", await file("SCREENING_FIXTURE_BLOCK.txt")));
+  assert.doesNotMatch(await unopened(), /shared SCREENING_FIXTURE_BLOCK\.txt \(Files ID/);
+  for (const scope of ["once", "session", "always"] as const) {
+    const conversation = { kind: "dm" as const, threadRef: "dm:U1:" + scope };
+    const classified = await hold(dm("summarize", { conversation, ...(await file(scope + ".txt")) }), scope);
+    assert.match(await classified(), new RegExp("shared " + scope + "\\.txt \\(Files ID"));
+  }
+});
+
+for (const [card, securityPosture, text] of [
+  ["tool approval", "strict", "!read notes"],
+  ["quarantine release", "auto", "!screened-run printf SCREENING_FIXTURE_BLOCK"],
+] as const) {
+  test(`a ${card} inside an allowed held turn keeps the attachments the hold classified`, async () => {
+    const built = freshApp({ securityPosture }, fixtureScreen());
+    const blob = await built.blobTransfer.put(Buffer.from("SCREENING_FIXTURE_BLOCK notes"));
+    const request = dm(text, { attachments: [{ name: "tool.txt", mimetype: "text/plain", ...blob }] });
+    const turn = async (requestId: string, scope?: "session") =>
+      built.app.turn({ ...request, approval: { requestId, approved: true, scope } });
+    const held = await built.app.turn(request);
+    const tool = (await turn(held.pendingApprovals![0]!.requestId, "session")).pendingApprovals![0]!;
+    assert.equal("classifiedAttachments" in ((await built.app.getApproval(tool.requestId)) ?? {}), false);
+    await turn(tool.requestId);
+    const last = (await built.sessions.listLlmRequests(held.sessionId!)).findLast((r) => r.model === "mock");
+    assert.match(JSON.stringify(last), /shared tool\.txt \(Files ID/);
+  });
+}
 
 for (const failure of ["error", "timeout"] as const) {
   test(`deployment screening preserves marked fail-open on proxy ${failure}`, async () => {

@@ -663,9 +663,19 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const noApprover = botRequester || isSystemActor(actor.id);
       const issueApproval = async (
         requestId: string,
-        fields: Omit<PendingApprovalRecord, "createdAt" | "request">,
+        fields: Omit<PendingApprovalRecord, "createdAt" | "request" | "homeChannel">,
       ): Promise<PendingApproval> => {
-        const record = newApprovalRecord(fields, input, resolution.approvalGrantModes);
+        const record = newApprovalRecord(
+          {
+            ...fields,
+            homeChannel: homeChannel?.channelName,
+            ...(fields.kind !== "input" && releasedAttachments?.length
+              ? { classifiedAttachments: releasedAttachments }
+              : {}),
+          },
+          input,
+          resolution.approvalGrantModes,
+        );
         await pending.put(requestId, record);
         return approvalView(requestId, record);
       };
@@ -707,11 +717,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         !!approvalRecord?.request &&
         canonicalJson(screenedFields(approvalRecord.request, approvalRecord.homeChannel)) ===
           canonicalJson(screenedFields(input, homeChannel?.channelName));
-      const replaysHeldInput =
-        !!approvalSession &&
-        approvalRecord?.sessionId === approvalSession.id &&
-        approvalRecord.kind === "input" &&
-        approvalReplaysFlaggedRequest;
+      const approvalReplaysOwnRequest =
+        !!approvalSession && approvalRecord?.sessionId === approvalSession.id && approvalReplaysFlaggedRequest;
+      const replaysHeldInput = approvalReplaysOwnRequest && approvalRecord?.kind === "input";
+      const releasedAttachments = approvalReplaysOwnRequest ? approvalRecord?.classifiedAttachments : undefined;
       const screenInbound =
         securityPolicy.screening !== "off" && !replaysHeldInput && input.approval?.approved !== false;
       const screenSession: { id?: string } = {};
@@ -786,9 +795,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               command: "security-screen",
               summary: "Let through a message held by the security screen",
               reason: heldReason,
-              homeChannel: homeChannel?.channelName,
               blocksInput: true,
               kind: "input",
+              classifiedAttachments: flaggedScreenedInput.classifiedAttachments,
               approvalKey: `security-screen:${input.surface ?? "unknown"}`,
               ...(flaggedScreenedInput.onceOnly ? { grantModes: { session: false, always: false } } : {}),
             });
@@ -1919,7 +1928,16 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         if (input.attachments?.some((attachment) => attachment.sourceId)) {
           input.attachments = withoutAlreadyIngested(input.attachments, (await turnWindow()).items);
         }
-        const fileScreenTurn = { deps, session, securityPolicy, enforceScreen, classifyAs, turnAbort, audit };
+        const fileScreenTurn = {
+          deps,
+          session,
+          securityPolicy,
+          enforceScreen,
+          classifyAs,
+          turnAbort,
+          audit,
+          released: new Set(releasedAttachments),
+        };
         const screenInboundFile = createInboundFileScreen(fileScreenTurn);
         const receiveInbound = async (
           attachments: IncomingAttachment[] | undefined,

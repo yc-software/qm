@@ -304,7 +304,13 @@ export interface App {
   getApproval(
     requestId: string,
     viewer?: string,
-  ): Promise<(Omit<PendingApprovalRecord, "call"> & { requestId: string; executesOnApprove?: boolean }) | null>;
+  ): Promise<
+    | (Omit<PendingApprovalRecord, "call" | "classifiedAttachments"> & {
+        requestId: string;
+        executesOnApprove?: boolean;
+      })
+    | null
+  >;
   subscribeSessionStates(cb: (event: SessionStateEvent) => void | Promise<void>, opts?: SubscribeOptions): () => void;
   subscribeLedgerEvents(cb: (event: OwnedLedgerEvent) => void | Promise<void>, opts?: SubscribeOptions): () => void;
   listSessionApprovals(sessionId: string, viewer: string): Promise<PendingApproval[]>;
