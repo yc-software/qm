@@ -75,7 +75,9 @@ Graph (the `microsoft-365` skill). Reuse the same app registration:
   Connectors admin page).
 
 When someone signs in with Microsoft and has not connected Microsoft 365 yet, the portal sends them through
-the connector once on the way in. With admin consent granted there is no prompt, so they arrive connected.
+the connector on the way in, once per person in each browser (a long-lived `portal_auto_connect` cookie
+records it). With admin consent granted there is no prompt, so they arrive connected; someone who declines
+or later disconnects is not sent through it again and can reconnect from the Connectors page.
 Like every personal connector, the token reaches the agent only in that person's own DMs and web chats.
 
 ## Identity
@@ -87,7 +89,7 @@ external guest treatment that generic chat gives any unvouched participant.
 ## Current limits
 
 - Files are not exchanged yet: the Teams host declares no file support, so the agent is told it can't attach files here and pastes content instead, and files people attach in Teams don't reach it.
-- Teams refuses a message over about 28 KB, so a longer reply is split into several messages of at most 9,000 characters (under the limit even when every character takes three bytes); an edit is clipped to that length.
+- Teams refuses a message over about 28 KB, so a longer reply is split into several messages of at most 9,000 characters (under the limit even when every character takes three bytes); an edit that grows past it keeps the first part in place and continues in new messages in the same conversation or thread.
 - Replies arrive as whole messages; Teams streaming (1:1 chats only) is not used yet.
 - Reactions are limited to the ones Teams documents: 👍 ❤️ 😆 😮 😢 😡 👀 ✅ 👋 📌 🚀.
 - Bots cannot post in private channels.
