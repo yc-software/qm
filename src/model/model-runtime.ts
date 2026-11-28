@@ -14,7 +14,6 @@ import {
   type ProviderHeaders,
   type Usage,
 } from "@earendil-works/pi-ai";
-import { getServiceTierCostMultiplier } from "@earendil-works/pi-ai/api/openai-responses";
 import type { LlmCallUsage } from "../sessions/session-store.ts";
 import { claudeSubscriptionBetas, claudeSubscriptionHeaders } from "./claude-subscription.ts";
 import { gatewayModelsJson, gatewayModelsVersion } from "./gateway-models.ts";
@@ -38,6 +37,7 @@ import {
   modelSupportsFastMode,
   resolveModel,
 } from "./pi-models.ts";
+import { captureProviderResponse } from "./provider-capture.ts";
 import { providerTurnError } from "./provider-error.ts";
 import { PrivateNetworkAddressError, publicFetch } from "../util/network.ts";
 import { errMessage } from "../util/errors.ts";
@@ -58,35 +58,27 @@ export function piUsageToCallUsage(
     totalTokens: u.totalTokens ?? 0,
     costUsd: u.cost?.total ?? 0,
   };
-  const card = model?.cost ? servedTierCard(model, fast, servedTier) : undefined;
-  if (!card) return row;
-  const priced: Usage = {
-    input: row.input,
-    output: row.output,
-    cacheRead: row.cacheRead,
-    cacheWrite: row.cacheWrite,
-    ...(typeof u.cacheWrite1h === "number" ? { cacheWrite1h: Math.min(u.cacheWrite1h, row.cacheWrite) } : {}),
-    totalTokens: row.totalTokens,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-  row.costUsd = calculateCost(card, priced).total;
-  return row;
-}
-
-function servedTierCard(
-  model: Model<Api>,
-  fast: boolean | undefined,
-  servedTier: string | undefined,
-): Model<Api> | undefined {
+  if (!model?.cost) return row;
+  const priced = (card: Model<Api>) =>
+    calculateCost(card, {
+      input: row.input,
+      output: row.output,
+      cacheRead: row.cacheRead,
+      cacheWrite: row.cacheWrite,
+      ...(typeof u.cacheWrite1h === "number" ? { cacheWrite1h: Math.min(u.cacheWrite1h, row.cacheWrite) } : {}),
+      totalTokens: row.totalTokens,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    }).total;
   const request = modelRequestOverrides(model.id);
   if (request && servedTier && servedTier !== request.service_tier) {
     const base = resolveModel(request.model);
-    return base?.cost
-      ? ({ ...base, cost: scaleCost(base.cost, getServiceTierCostMultiplier(base, servedTier)) } as Model<Api>)
-      : undefined;
+    const listed = priced(model);
+    if (base?.cost && listed) row.costUsd = (priced(base) * row.costUsd) / listed;
+    return row;
   }
   const servedFast = model.api === "anthropic-messages" && servedTier ? servedTier === "fast" : fast && !servedTier;
-  return servedFast ? ({ ...model, cost: scaleCost(model.cost, FAST_COST_MULTIPLIER) } as Model<Api>) : undefined;
+  if (servedFast) row.costUsd = priced({ ...model, cost: scaleCost(model.cost, FAST_COST_MULTIPLIER) } as Model<Api>);
+  return row;
 }
 
 export interface ProviderKeys {
@@ -132,7 +124,7 @@ export async function buildModelRuntime(
   const modelsPath = customModelsPath();
   const runtime = await ModelRuntime.create({ credentials, modelsPath });
   for (const [provider, apiKey] of Object.entries(apiKeys)) {
-    if (apiKey) await runtime.setRuntimeApiKey(provider, apiKey, { allowNetwork: false });
+    if (apiKey) await runtime.setRuntimeApiKey(provider, apiKey);
   }
   if (modelGateway) {
     const providers = new Set(
@@ -165,14 +157,17 @@ export async function buildModelRuntime(
       return step(transformed === undefined ? payload : transformed);
     };
   const retained = <T extends ModelsSimpleStreamOptions | undefined>(options: T): T =>
-    cacheRetention
-      ? ({
-          ...options,
-          cacheRetention,
-          onPayload: (payload: unknown, model: Model<Api>) =>
-            thenPayload(options, model, (body) => shortConversationCache(body, model.api))(payload),
-        } as T)
-      : options;
+    ({
+      ...options,
+      disableContinuation: true,
+      ...(cacheRetention
+        ? {
+            cacheRetention,
+            onPayload: (payload: unknown, model: Model<Api>) =>
+              thenPayload(options, model, (body) => shortConversationCache(body, model.api))(payload),
+          }
+        : {}),
+    }) as T;
   const wireModelId = <T extends Pick<ModelsSimpleStreamOptions, "onPayload"> | undefined>(
     options: T,
     model: Model<Api>,
@@ -251,12 +246,16 @@ export async function buildModelRuntime(
     options?: ModelsApiStreamOptions<TApi>,
   ) => {
     const routed = route(model, options as ModelsSimpleStreamOptions | undefined);
-    return stream(routed.model as Model<TApi>, context, routed.options as unknown as ModelsApiStreamOptions<TApi>);
+    const capture = captureProviderResponse(routed.model, routed.options);
+    return capture.annotate(
+      stream(routed.model as Model<TApi>, context, capture.options as unknown as ModelsApiStreamOptions<TApi>),
+    );
   }) as typeof runtime.stream;
   const streamSimple = runtime.streamSimple.bind(runtime);
   runtime.streamSimple = ((model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions) => {
     const routed = route(model, options);
-    return streamSimple(routed.model, context, routed.options);
+    const capture = captureProviderResponse(routed.model, routed.options);
+    return capture.annotate(streamSimple(routed.model, context, capture.options));
   }) as typeof runtime.streamSimple;
   return runtime;
 }

@@ -182,6 +182,6 @@ test("routing: no credentials -> null (falls through to gate, no deployment key)
 test("individual OAuth routing preserves exact supported runtime selections", () => {
   assert.equal(resolveIndividualAuthRouting(oauth("anthropic"), null, "claude-sonnet-5")?.model, "claude-sonnet-5");
   assert.equal(resolveIndividualAuthRouting(null, oauth("openai"), "gpt-6-astra")?.model, "codex/gpt-6-astra");
-  assert.equal(resolveIndividualAuthRouting(null, oauth("openai"), "codex/gpt-5.5")?.model, "codex/gpt-5.5");
-  assert.equal(resolveIndividualAuthRouting(null, apikey("openai", "test"), "codex/gpt-5.5"), null);
+  assert.equal(resolveIndividualAuthRouting(null, oauth("openai"), "codex/gpt-5.6-sol")?.model, "codex/gpt-5.6-sol");
+  assert.equal(resolveIndividualAuthRouting(null, apikey("openai", "test"), "codex/gpt-5.6-sol"), null);
 });

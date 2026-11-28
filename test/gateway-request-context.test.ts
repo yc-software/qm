@@ -70,7 +70,7 @@ test("a gateway turn carries the session, actor, scope, purpose and origin it wo
   });
 
   assert.equal((await withModelRequestContext(cronContext, () => harness.runTurn(turn()))).reply, "ok");
-  assert.equal(requests.at(-1)!.url, "https://gateway.test/v1/messages");
+  assert.equal(requests.at(-1)!.url, "https://gateway.test/v1/messages?beta=true");
   assert.equal(requests.at(-1)!.headers.get("api-key"), "gateway-key");
   assert.deepEqual(contextHeaders(requests.at(-1)!.headers), { ...cronHeaders, "x-qm-purpose": "turn" });
 
@@ -143,8 +143,8 @@ test("turns on a user's or the org's own provider key send no request context", 
   assert.deepEqual(
     requests.map((request) => [request.url, request.headers.get("x-api-key"), contextHeaders(request.headers)]),
     [
-      ["https://api.anthropic.com/v1/messages", "org-key", {}],
-      ["https://api.anthropic.com/v1/messages", "user-key", {}],
+      ["https://api.anthropic.com/v1/messages?beta=true", "org-key", {}],
+      ["https://api.anthropic.com/v1/messages?beta=true", "user-key", {}],
     ],
   );
 });

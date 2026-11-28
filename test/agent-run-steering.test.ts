@@ -13,6 +13,8 @@ import { createPostgresRunSignalStore } from "../src/runs/postgres-run-signal-st
 import { PARKED } from "../src/runs/run-store.ts";
 import { personalScope } from "../src/types.ts";
 
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
 type Sink = {
   entries: Item[];
 };
@@ -139,7 +141,7 @@ for (const variant of ["text", "images", "documents", "finished during preparati
         if (!withImages) return { text };
         return {
           text: `${text}\nFile available in inbox/photo.png`,
-          images: [{ mimeType: "image/png", dataBase64: "YWJj", artifactId: "steered-photo" }],
+          images: [{ mimeType: "image/png", dataBase64: PNG, artifactId: "steered-photo" }],
           ...(variant === "documents"
             ? { documents: [{ name: "steered.pdf", mimeType: "application/pdf", dataBase64: documentBase64 }] }
             : {}),
@@ -155,7 +157,7 @@ for (const variant of ["text", "images", "documents", "finished during preparati
       }
       assert.equal(result.reply, "final reply");
 
-      if (withImages) assert.ok(JSON.stringify(requestMessages[1]).includes("YWJj"));
+      if (withImages) assert.ok(JSON.stringify(requestMessages[1]).includes(PNG));
       if (variant === "documents") {
         assert.ok(!JSON.stringify(requestMessages[0]).includes(documentBase64));
         assert.ok(JSON.stringify(requestMessages[1]).includes(documentBase64));

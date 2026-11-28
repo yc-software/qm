@@ -6,7 +6,7 @@ import { ELIDED_IMAGE_TEXT } from "./replay-images.ts";
 const MAX_CAPTURED_PAYLOAD_CHARS = 2_000_000;
 const LLM_REQUEST_TRIM_SLACK_BYTES = 3_000_000;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
