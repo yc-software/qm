@@ -44,7 +44,6 @@ import { resolveBranding } from "../../resolution/branding.ts";
 import { isOwnScopeBotWork, loadsScopeContext } from "../../resolution/context-filter.ts";
 import { audit, isObj, orgScope, resolveSelfRead } from "./shared.ts";
 import { selfReadAudience } from "../../auth/self-read-audience.ts";
-import { isSessionTurn } from "../../core/turn-origin.ts";
 import {
   UI_STATE_KEY_PATTERN,
   UI_STATE_MAX_BYTES,
@@ -55,13 +54,14 @@ import {
 import { redactWebhook } from "./webhooks.ts";
 import { selfSpend } from "./admin/spend.ts";
 import { tenantOf, withActor, type ApiCtx, type Route } from "./route.ts";
+import { actionApproved, routeSignOff } from "../action-approval.ts";
+import { signOffForget } from "../../tools/sign-off.ts";
 import {
   ARTIFACT_TYPES,
+  carriesPersonAuthority,
   authorPublishesSkill,
-  internalPerson,
   isArtifactType,
-  personAtKeyboard,
-  SHARED_SKILL_TRIGGER_REFUSAL,
+  SHARED_SKILL_REFUSAL,
   type SkillEditor,
   splitToScope,
 } from "../artifact-share.ts";
@@ -80,15 +80,14 @@ function isGrant(b: unknown): b is Grant {
 function sharedSkillCreateBlock(capability: ApiCtx["capability"]): string | null {
   if (!capability) return null;
   if (parseScopeId(capability.scopeId).kind === "personal") return null;
-  if (internalPerson(capability)) return null;
-  return SHARED_SKILL_TRIGGER_REFUSAL;
+  if (carriesPersonAuthority(capability)) return null;
+  return SHARED_SKILL_REFUSAL;
 }
 
 function skillEditor(capability: ApiCtx["capability"]): SkillEditor {
-  if (!capability) return { liveActor: true, internalAudience: true };
+  if (!capability) return { personAuthority: true };
   return {
-    liveActor: personAtKeyboard(capability),
-    internalAudience: capability.internalAudience === true,
+    personAuthority: carriesPersonAuthority(capability),
     botActor: capability.botActor === true,
   };
 }
@@ -599,7 +598,6 @@ async function getUiState(ctx: ApiCtx): Promise<void> {
   const key = url.searchParams.get("key") ?? "";
   if (!principalId || !UI_STATE_KEY_PATTERN.test(key))
     return sendJson(res, 400, { error: "bad_request", message: "principalId and a valid key required" });
-  if (!deps.uiState) return sendJson(res, 404, { error: "not_found" });
   const rec = await deps.uiState.get(uiStateId(principalId, key));
   return sendJson(res, 200, rec ?? { value: null, updatedAt: 0 });
 }
@@ -614,7 +612,6 @@ async function putUiState(ctx: ApiCtx): Promise<void> {
   if (b.value === undefined) return sendJson(res, 400, { error: "bad_request", message: "value required" });
   if (Buffer.byteLength(JSON.stringify(b.value)) > UI_STATE_MAX_BYTES)
     return sendJson(res, 413, { error: "payload_too_large", message: "ui state too large" });
-  if (!deps.uiState) return sendJson(res, 404, { error: "not_found" });
   const claimed = typeof b.updatedAt === "number" && Number.isFinite(b.updatedAt) ? b.updatedAt : Date.now();
   const updatedAt = Math.min(claimed, Date.now() + UI_STATE_MAX_FUTURE_SKEW_MS);
   const result = await storeUiState(deps.uiState, uiStateId(principalId, key), { value: b.value, updatedAt });
@@ -814,17 +811,16 @@ const writeMemory = (handle: (...args: [...Parameters<AgentMemoryHandler>, write
     else if (personaScope) {
       if (
         capability.memory?.write &&
-        internalPerson(capability) &&
+        carriesPersonAuthority(capability) &&
         (await ctx.app.managesScope(capability.actorId, personaScope))
       )
         write = personaScope;
     } else write = capability.memory?.write;
     if (!write) {
       let message = "memory capture is not enabled for this conversation";
-      if (requestedScope === "org")
-        message = "org memory writes need an org admin's own turn while it is still running";
+      if (requestedScope === "org") message = "org memory writes need an org admin's own authority";
       else if (personaScope && capability.memory?.write)
-        message = "persona memory writes need a persona owner or write holder on a live turn";
+        message = "persona memory writes need a persona owner or write holder";
       return sendJson(ctx.res, 403, { error: "forbidden", message });
     }
     return handle(ctx, memory, capability, write);
@@ -881,18 +877,21 @@ const deleteFacts = writeMemory(async (ctx, memory, capability, write) => {
   const { res, deps, tenant, body } = ctx;
   const ids = parseIds(body);
   if (typeof ids === "string") return sendJson(res, 400, { error: "bad_request", message: ids });
-  const { forgotten, outcomes, problems } = await forgetFacts(
+  const { signOff, held } = routeSignOff(ctx);
+  const approve = (refs: string[]) => signOffForget(refs, ({ summary }) => signOff(summary));
+  const outcome = await forgetFacts(
     memory,
     write,
     ids,
-    turnAuthority(
-      capability.actorId,
-      capability.memory,
-      internalPerson(capability) && !isSessionTurn((await deps.runs!.get(capability.runId!))!.request),
-    ),
-    capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {},
+    turnAuthority(capability.actorId, capability.memory, carriesPersonAuthority(capability)),
+    { ...(capability.audienceScopeId ? { audienceScopeId: capability.audienceScopeId } : {}), approve },
     capability.sessionId && capability.runId && `${capability.sessionId}:${capability.runId}`,
-  );
+  ).catch((error: unknown) => {
+    if (held()) return null;
+    throw error;
+  });
+  if (!outcome) return;
+  const { forgotten, outcomes, problems } = outcome;
   audit(
     { deps, tenant },
     {
@@ -1008,8 +1007,8 @@ async function restoreSkill(ctx: ApiCtx): Promise<void> {
   }
   if (!principalId) return sendJson(ctx.res, 400, { error: "bad_request", message: "principalId required" });
   const restored = await ctx.app.restoreOwnedSkill(ctx.params.id!, principalId, skillEditor(ctx.capability));
-  if (restored === "trigger_blocked")
-    return sendJson(ctx.res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
+  if (restored === "authority_required")
+    return sendJson(ctx.res, 403, { error: "forbidden", message: SHARED_SKILL_REFUSAL });
   if (restored === "exists")
     return sendJson(ctx.res, 409, {
       error: "exists",
@@ -1048,8 +1047,8 @@ async function updateSkill(ctx: ApiCtx): Promise<void> {
     return sendJson(res, 400, { error: "bad_request", message: "description and body can't be blank" });
   }
   const updated = await app.updateOwnedSkill(id, principalId, patch, skillEditor(capability));
-  if (updated === "trigger_blocked")
-    return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
+  if (updated === "authority_required")
+    return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_REFUSAL });
   if (!updated) return sendJson(res, 404, { error: "not_found", message: "no such skill, or it isn't yours to edit" });
   return sendJson(res, 200, {
     skill: {
@@ -1079,8 +1078,8 @@ async function deleteSkill(ctx: ApiCtx): Promise<void> {
   }
   const outcome = await app.deleteOwnedSkill({ principalId, id, ...skillEditor(capability) });
   if (outcome === "missing") return sendJson(res, 404, { error: "not_found", message: "no such skill" });
-  if (outcome === "trigger_blocked")
-    return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL });
+  if (outcome === "authority_required")
+    return sendJson(res, 403, { error: "forbidden", message: SHARED_SKILL_REFUSAL });
   if (outcome === "forbidden")
     return sendJson(res, 403, { error: "forbidden", message: "that skill isn't yours to archive" });
   return sendJson(res, 200, { ok: true });
@@ -1246,7 +1245,9 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
       ...(typeof b.notify === "boolean" ? { notify: b.notify } : {}),
     },
     capability,
+    ({ summary }) => actionApproved(ctx, { summary }),
   );
+  if (res.writableEnded) return;
   if (!result.ok) {
     return sendJson(res, SHARE_ERROR_STATUS[result.code] ?? 400, {
       error: result.code,
@@ -1266,7 +1267,7 @@ export async function shareArtifact(ctx: ApiCtx): Promise<void> {
 }
 
 async function getCustomEmoji(ctx: ApiCtx): Promise<void> {
-  const catalog = await ctx.deps.config?.getSlackEmojiCatalogDurable(orgScope(ctx.deps));
+  const catalog = await ctx.deps.config.getSlackEmojiCatalogDurable(orgScope(ctx.deps));
   const raw = catalog?.emoji ?? {};
   const emoji: Record<string, string> = {};
   for (const [name, value] of Object.entries(raw)) {
@@ -1278,9 +1279,8 @@ async function getCustomEmoji(ctx: ApiCtx): Promise<void> {
 }
 
 async function getSurfaceConfig(ctx: ApiCtx): Promise<void> {
-  await ctx.deps.refreshModels?.();
+  await ctx.deps.refreshModels();
   const { res, deps } = ctx;
-  if (!deps.config) return sendJson(res, 404, { error: "not_found" });
   const [webuiModels, baseModel, externalSlackParticipants, branding] = await Promise.all([
     deps.config.getWebuiModelsDurable(orgScope(deps)),
     deps.config.getBaseModelDurable(orgScope(deps)),
@@ -1344,10 +1344,9 @@ async function runtimeTarget(ctx: ApiCtx): Promise<{ actorId: string; scope: Sco
 async function getRuntimeConfig(ctx: ApiCtx): Promise<void> {
   const account = ctx.url.searchParams.get("account");
   if (account !== null && account !== "company") return sendJson(ctx.res, 400, { error: "invalid_account" });
-  if (!ctx.deps.config) return sendJson(ctx.res, 404, { error: "not_found" });
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
-  await ctx.deps.refreshModels?.();
+  await ctx.deps.refreshModels();
   return sendJson(
     ctx.res,
     200,
@@ -1361,12 +1360,12 @@ async function getRuntimeConfig(ctx: ApiCtx): Promise<void> {
 }
 
 async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
-  if (!ctx.deps.config || !isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
-  if (ctx.capability && !internalPerson(ctx.capability))
-    return sendJson(ctx.res, 403, { error: "live_actor_required" });
+  if (!isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
+  if (ctx.capability && !carriesPersonAuthority(ctx.capability))
+    return sendJson(ctx.res, 403, { error: "authority_required" });
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
-  await ctx.deps.refreshModels?.();
+  await ctx.deps.refreshModels();
   const config = ctx.deps.config;
   const offered = async (modelId: string) =>
     (await userRuntimeConfigBody(ctx, target.scope, target.actorId)).models.includes(modelId);
@@ -1403,7 +1402,6 @@ async function putRuntimeConfig(ctx: ApiCtx): Promise<void> {
 }
 
 async function getChannelHeaderPin(ctx: ApiCtx): Promise<void> {
-  if (!ctx.deps.config) return sendJson(ctx.res, 404, { error: "not_found" });
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
   const [on, configured, def] = await Promise.all([
@@ -1415,9 +1413,9 @@ async function getChannelHeaderPin(ctx: ApiCtx): Promise<void> {
 }
 
 async function putChannelHeaderPin(ctx: ApiCtx): Promise<void> {
-  if (!ctx.deps.config || !isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
-  if (ctx.capability && !internalPerson(ctx.capability))
-    return sendJson(ctx.res, 403, { error: "live_actor_required" });
+  if (!isObj(ctx.body)) return sendJson(ctx.res, 400, { error: "bad_request" });
+  if (ctx.capability && !carriesPersonAuthority(ctx.capability))
+    return sendJson(ctx.res, 403, { error: "authority_required" });
   const target = await runtimeTarget(ctx);
   if (!target) return sendJson(ctx.res, 403, { error: "forbidden" });
   if (typeof ctx.body.on !== "boolean" && ctx.body.on !== null)

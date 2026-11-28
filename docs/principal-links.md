@@ -64,7 +64,10 @@ before proxying, and the keychain stores credentials under the canonical owner.
 - **Linking merges the users row.** If the linked sign-in already has its own
   user (it is that user's only sign-in), linking folds it into the canonical
   person's user in the same transaction (earliest first-seen time, earliest
-  offboarding, and the person's kind) and deletes it.
+  offboarding, and the person's kind) and deletes it. When the user it joins
+  is an app, the work the sign-in already made becomes bot work in the same
+  transaction: its loops are marked as a bot's and their automatic ship gates
+  are held, the same as when QM first marks a user as an app.
 - **Links are reversible.** Deleting a link restores two separate principals.
   Records written while the link existed stay under the canonical id,
   including the merged user: the sign-in gets a new user of its own only

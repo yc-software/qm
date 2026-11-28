@@ -32,7 +32,7 @@ test("app edit chats start on the app edit runtime and keep a person's pick", as
     const { appState } = await vite.ssrLoadModule("/src/shell-state.ts");
     const { createComposerSurface } = await vite.ssrLoadModule("/src/composer.ts");
     const { render } = await vite.ssrLoadModule("lit");
-    appState.me = { user: "tester", org: "test" };
+    appState.me = { user: "tester", personalScope: "personal:tester", org: "test" };
     const mount = async (threadRef: string) => {
       const host = document.createElement("section");
       document.body.append(host);

@@ -8,7 +8,8 @@ test("a tab reloads onto a newly deployed release only once it regains focus wit
   const h = await harness({
     path: "/s/sess-deep",
     api: (path) => {
-      if (path === "/me") return stamped({ user: "tester", org: "test", permissions: [] });
+      if (path === "/me")
+        return stamped({ user: "tester", personalScope: "personal:tester", org: "test", permissions: [] });
       if (path.startsWith("/api/sessions?")) return stamped({ sessions: [], pinned: [], nextCursor: null });
       return undefined;
     },

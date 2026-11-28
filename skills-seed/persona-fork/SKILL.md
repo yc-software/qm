@@ -26,7 +26,7 @@ routes are listed in `GET /v1/apis` when personas are enabled for the asker.
    so; otherwise copy all. Skills are copies: later edits to the source don't flow through.
 5. **Credentials.** Tell them which services the source had attached (from step 1), that
    those were not copied, and offer to attach their own. Attaching needs a credential the
-   asker owns and a turn they sent: `POST /v1/personas/<new id>/credentials
+   asker owns and raises an approval card to them: `POST /v1/personas/<new id>/credentials
 {credentialId}`. Find their credential ids with `GET /v1/keychain/credentials`.
    Never attach someone else's credential and never re-use the source's grants.
 6. **Sharing.** The fork starts private. If they want others to use it, set roles with

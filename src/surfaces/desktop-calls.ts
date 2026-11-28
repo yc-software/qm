@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { personKey } from "../directory/person.ts";
 import type { RunSignalStore } from "../runs/run-signal-store.ts";
 import type { SessionStateBus } from "../runs/session-state-bus.ts";
@@ -16,7 +17,6 @@ export const DESKTOP_UNAVAILABLE_TEXT =
   "This server can't relay desktop calls for this turn, so nothing ran on the person's Mac.";
 
 export type DesktopCall = (
-  callId: string,
   args: unknown,
   timeoutMs: number,
   signal?: AbortSignal,
@@ -42,7 +42,8 @@ export function desktopCallFor(
   const { bus, uiState, signals } = deps;
   const { runId, clientId, ...to } = turn;
   if (!bus || !uiState || !signals || !runId) return undefined;
-  return async (callId, args, timeoutMs, signal) => {
+  return async (args, timeoutMs, signal) => {
+    const callId = randomUUID();
     const pending: PendingCall = {
       runId,
       args,
@@ -68,13 +69,16 @@ export function desktopCallFor(
 }
 
 export async function claimDesktopCall(uiState: UiStateStore, principalId: string, callId: string, clientId: string) {
+  let won = false;
   const row = await uiState.update(idOf(principalId, callId), (current) => {
+    won = false;
     const call = pendingOf(current);
     if (!call || call.claimedBy || (call.clientId && call.clientId !== clientId)) return current;
+    won = true;
     return { ...current, value: { ...call, claimedBy: clientId } };
   });
   const call = pendingOf(row);
-  return call?.claimedBy === clientId ? { runId: call.runId, args: call.args, deadline: call.deadline } : null;
+  return won && call?.claimedBy === clientId ? { runId: call.runId, args: call.args, deadline: call.deadline } : null;
 }
 
 export async function answerDesktopCall(

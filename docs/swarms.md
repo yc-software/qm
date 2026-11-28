@@ -3,7 +3,7 @@
 A swarm coordinates ordinary QM sessions. The initiating session is its root;
 workers have their own durable transcripts, runs, identity, and editable JSON
 character/context. The existing authenticated session viewer lists worker sessions
-with a `Swarm worker` title. Worker transcripts remain read-only for ordinary messages in the web UI, but the requesting human can allow or deny pending approvals there. Discovery returns their session IDs and portal-relative
+with a `Swarm worker` title. Worker transcripts remain read-only for ordinary messages in the web UI, but the requesting human can approve or decline pending approvals there. Discovery returns their session IDs and portal-relative
 `sessionUrl` links. Session activity and results use the normal viewer and run APIs.
 
 ## Deployment
@@ -94,7 +94,7 @@ provider creation/retry loops.
 Each worker gets a dedicated **blank** computer owned by the parent's
 authorization scope. No parent files are copied. Data access, keychain policy,
 memory resolution, and approval grants continue through QM's existing scope and
-identity rules; a worker turn carries no person's live authority of its own. Session
+identity rules; a worker turn carries no person's authority of its own. Session
 grants belong only to the session that received them, not its workers. A computer's backing storage key
 is not an authorization principal. Existing provider persistence behavior is
 unchanged; swarms add no filesystem snapshots, immutable copies, or restores.
@@ -160,7 +160,7 @@ a notification for the root or for a worker the bot may no longer direct is stor
 `mailbox` instead of waking it, so no bot turn runs for it; a person's next turn in the
 root reads it. A queued notification means the run was accepted, not that the agent has
 finished. Idle recipients wake through the normal durable worker queue. Active
-recipients receive queued unattended turns, not forged human steer signals.
+recipients receive queued turns, not forged human steer signals.
 Notification enqueue uses a stable deduplication key so a crash between enqueue
 and acknowledgment does not enqueue another run. Agent-only turns have no Slack
 delivery target, and the delivery layer also refuses swarm result delivery.
@@ -254,7 +254,7 @@ allowed to view that session and belong to the swarm scope. People can inspect t
 swarm and send `control` actions; `spawn`, `send`, `context` and message reads are
 agent-only. Request actor and provenance selector fields are rejected rather than
 ignored. Human-origin actions are separately recorded; their asynchronous
-notifications still run unattended.
+notifications run as queued agent turns.
 
 Agent operations require credentials bound to the exact session, run attempt, and
 unexpired execution lease. Swarm writes recheck that lease inside their database

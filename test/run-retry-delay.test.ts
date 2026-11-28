@@ -1,11 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import type { Pool } from "pg";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import type { OrchestratorInput } from "../src/core/orchestrator.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
-import { seedTestTenant } from "./support/test-tenant.ts";
 
 const request: OrchestratorInput = {
   actor: { id: "retry-test", type: "internal" },
@@ -21,18 +19,7 @@ for (const backend of ["memory", "postgres"] as const) {
       skip: backend === "postgres" && !process.env.DATABASE_URL,
     },
     async (t) => {
-      let connectionString = process.env.DATABASE_URL!;
-      let admin: Pool | undefined;
-      const schema = `retry_${randomUUID().replaceAll("-", "")}`;
-      if (backend === "postgres") {
-        const pg = (await import("pg")).default;
-        admin = new pg.Pool({ connectionString });
-        await admin.query(`CREATE SCHEMA ${schema}`);
-        const url = new URL(connectionString);
-        url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
-        await seedTestTenant(url.toString());
-        connectionString = url.toString();
-      }
+      const connectionString = backend === "postgres" ? testDatabaseUrl() : "";
       const runtime =
         backend === "memory" ? createPostgresRunStore(testDatabaseUrl()) : createPostgresRunStore(connectionString);
       let { runs } = runtime;
@@ -70,13 +57,6 @@ for (const backend of ["memory", "postgres"] as const) {
       } finally {
         t.mock.timers.reset();
         await runs.close?.();
-        if (admin) {
-          try {
-            await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-          } finally {
-            await admin.end();
-          }
-        }
       }
     },
   );
@@ -85,18 +65,7 @@ for (const backend of ["memory", "postgres"] as const) {
     `${backend}: failed returns wait durably without delaying new work or acknowledging results`,
     { skip: backend === "postgres" && !process.env.DATABASE_URL },
     async (t) => {
-      let connectionString = process.env.DATABASE_URL!;
-      let admin: Pool | undefined;
-      const schema = `return_retry_${randomUUID().replaceAll("-", "")}`;
-      if (backend === "postgres") {
-        const pg = (await import("pg")).default;
-        admin = new pg.Pool({ connectionString });
-        await admin.query(`CREATE SCHEMA ${schema}`);
-        const url = new URL(connectionString);
-        url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
-        await seedTestTenant(url.toString());
-        connectionString = url.toString();
-      }
+      const connectionString = backend === "postgres" ? testDatabaseUrl() : "";
       let { runs } =
         backend === "memory" ? createPostgresRunStore(testDatabaseUrl()) : createPostgresRunStore(connectionString);
       try {
@@ -141,13 +110,6 @@ for (const backend of ["memory", "postgres"] as const) {
       } finally {
         t.mock.timers.reset();
         await runs.close?.();
-        if (admin) {
-          try {
-            await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-          } finally {
-            await admin.end();
-          }
-        }
       }
     },
   );
@@ -160,14 +122,9 @@ test(
   },
   async () => {
     const pg = (await import("pg")).default;
-    const admin = new pg.Pool({ connectionString: process.env.DATABASE_URL });
-    const schema = `run_history_${randomUUID().replaceAll("-", "")}`;
-    await admin.query(`CREATE SCHEMA ${schema}`);
-    const url = new URL(process.env.DATABASE_URL!);
-    url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
-    await seedTestTenant(url.toString());
-    const runtime = createPostgresRunStore(url.toString());
-    const pool = new pg.Pool({ connectionString: url.toString() });
+    const url = testDatabaseUrl();
+    const runtime = createPostgresRunStore(url);
+    const pool = new pg.Pool({ connectionString: url });
     try {
       await runtime.runs.list({ limit: 1 });
       const client = await pool.connect();
@@ -184,11 +141,6 @@ test(
     } finally {
       await runtime.close();
       await pool.end();
-      try {
-        await admin.query(`DROP SCHEMA ${schema} CASCADE`);
-      } finally {
-        await admin.end();
-      }
     }
   },
 );

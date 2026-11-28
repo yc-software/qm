@@ -8,6 +8,7 @@ import {
   type GrantMode,
 } from "../../credentials/keychain.ts";
 import { parseScopeId } from "../../types.ts";
+import { actionApproved } from "../action-approval.ts";
 import { samePerson } from "../../directory/person.ts";
 import { approvalCardDestination } from "../../credentials/keychain-approval.ts";
 import { sendJson } from "../http.ts";
@@ -17,7 +18,7 @@ import { botWorkInPersonsName, type CapabilityClaims } from "../../auth/capabili
 import {
   audit,
   BOT_WORK_PERSON_CREDENTIAL,
-  livePersonTurn,
+  requirePersonAuthority,
   personalCapability,
   resolveCapabilityDestination,
 } from "./shared.ts";
@@ -35,7 +36,7 @@ async function resolveScopeNames(
   if (!wanted.length) return {};
   const names: Record<string, string> = {};
   const sessionScopes =
-    (await Promise.resolve(deps.sessions?.distinctScopes()).catch(swallowAs("keychain scope names: sessions", null))) ??
+    (await Promise.resolve(deps.sessions.distinctScopes()).catch(swallowAs("keychain scope names: sessions", null))) ??
     [];
   const byScope = new Map(sessionScopes.filter((s) => s.channelName).map((s) => [s.scopeId, s.channelName!]));
   let channelsById: Map<string, string> | null = null;
@@ -230,8 +231,9 @@ const keychainOverview = keychainRoute(async ({ res, app, deps }, kc, { actorId 
 
 const deleteCredential = keychainRoute(async (ctx, kc, { actorId, scopeId }) => {
   const { res, params } = ctx;
-  if (!livePersonTurn(ctx)) return;
+  if (!requirePersonAuthority(ctx)) return;
   const id = params.id!;
+  if (!(await actionApproved(ctx, { summary: `Delete saved credential ${id}` }))) return;
   const ok = await kc.remove(actorId, id);
   if (ok) audit(ctx, { principalId: actorId, action: "keychain.delete", resource: id, scopeLabel: scopeId });
   return ok ? sendJson(res, 200, { ok: true }) : sendJson(res, 404, { error: "not_found" });
@@ -246,7 +248,7 @@ const listGrants = keychainRoute(async ({ res }, kc, { actorId, scopeId }) => {
 
 const revokeGrant = keychainRoute(async (ctx, kc, { actorId, scopeId }) => {
   const { res, params } = ctx;
-  if (!livePersonTurn(ctx)) return;
+  if (!requirePersonAuthority(ctx)) return;
   const id = params.id!;
   const ok = await kc.revokeGrant(actorId, id);
   if (ok) audit(ctx, { principalId: actorId, action: "keychain.revoke", resource: id, scopeLabel: scopeId });
@@ -346,7 +348,7 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
   if (scope.kind !== "channel" && scope.kind !== "personal" && scope.kind !== "group") {
     return sendJson(res, 403, { error: "forbidden", message: "asks require a personal or shared conversation" });
   }
-  if (await botWorkInPersonsName(ctx.deps.admin?.users, capability))
+  if (await botWorkInPersonsName(ctx.deps.admin.users, capability))
     return sendJson(res, 403, { error: "forbidden", message: BOT_WORK_PERSON_CREDENTIAL });
   let credentialId = typeof b.credential === "string" ? b.credential : undefined;
   if (credentialId === undefined) {
@@ -374,7 +376,7 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
   const dest = resolveCapabilityDestination(capability, undefined);
   const requesterDestination =
     (dest.ok && dest.destination) || (cron?.ownerScopeId === capability.scopeId ? cron.destination : undefined);
-  const originRun = capability.runId ? await deps.runs?.get(capability.runId) : null;
+  const originRun = capability.runId ? await deps.runs.get(capability.runId) : null;
   const requesterSeq = originRun && originRun.sessionId === capability.threadRef ? originRun?.turnUserSeq : null;
   const runRequest = originRun && originRun.sessionId === capability.threadRef ? originRun.request : undefined;
   const humanOrigin = runRequest?.origin.kind === "human" ? runRequest.origin : undefined;
@@ -405,7 +407,7 @@ const createAsk = keychainRoute(async (ctx, kc, capability) => {
   });
   const cardDestination = approvalCardDestination(ask);
   if (cardDestination)
-    await deps.deliveries?.enqueue({
+    await deps.deliveries.enqueue({
       destination: cardDestination,
       text: notice,
       idempotencyKey: `ask:${ask.id}:notice`,

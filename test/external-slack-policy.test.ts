@@ -17,6 +17,7 @@ import { createDirectory } from "../src/slack/directory.ts";
 import { createTurnHandler } from "../src/slack/turn-handler.ts";
 import { createPostgresRunStore } from "../src/runs/postgres-run-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 const policy = {
   companyDomains: ["company.example"],
@@ -157,7 +158,7 @@ test("external account directory lookups admit only company workspace DMs", asyn
       client,
     );
     assert.equal(turns.length, trusted ? 1 : 0);
-    assert.deepEqual(personalScopes, trusted ? ["personal:employee@company.example"] : []);
+    assert.deepEqual(personalScopes, trusted ? [personalScope("employee@company.example")] : []);
     if (trusted) {
       assert.equal(turns[0]?.surfaceOrigin?.policyNamespace, externalSlackNamespace("TPARTNER", policy));
       assert.equal(turns[0]?.surfaceOrigin?.audience, "internal");

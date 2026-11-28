@@ -112,6 +112,8 @@ export const isUserItem = (item: Pick<Item, "kind">): item is Item<"UserMessage"
   USER_ITEM_KINDS.includes(item.kind);
 export const isAgentReply = (item: { kind: ItemKind; variant?: AgentMessageVariant | null }): boolean =>
   item.kind === "AgentMessage" && !item.variant;
+export const isNarration = (item: Pick<Item, "kind" | "variant">): boolean =>
+  item.kind === "AgentMessage" && item.variant === "narration";
 export const typedBy = (item: Pick<Item, "kind" | "body">): string | undefined =>
   isUserItem(item) && typeof item.body.speakerId === "string" ? item.body.speakerId : undefined;
 export const isShownReply = (item: Pick<Item, "kind" | "variant" | "text" | "body">): boolean =>

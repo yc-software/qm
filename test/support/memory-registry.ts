@@ -1,8 +1,12 @@
 import { deriveConnectorKey } from "../../src/connectors/connector-client-store.ts";
-import type { MemoryRegistryStore } from "../../src/memory/registry.ts";
+import { resolveMemoryRegistry, type MemoryRegistryStore } from "../../src/memory/registry.ts";
 
-export const emptyMemoryRegistry: Pick<MemoryRegistryStore, "current" | "overlayIds" | "key"> = {
-  overlayIds: new Set(),
-  key: deriveConnectorKey("test-memory-registry-key", "memory-registry"),
+const key = deriveConnectorKey("test-memory-registry-key", "memory-registry");
+const overlayIds = new Set<string>();
+
+export const emptyMemoryRegistry: Pick<MemoryRegistryStore, "current" | "overlayIds" | "key" | "resolve"> = {
+  overlayIds,
+  key,
   current: async () => ({ version: "", record: null }),
+  resolve: async (record) => resolveMemoryRegistry(record, { overlayIds, key }),
 };

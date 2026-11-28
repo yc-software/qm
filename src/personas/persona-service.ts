@@ -47,6 +47,7 @@ export interface PersonaService {
   enabledFor(principalId: string): Promise<boolean>;
   roles(principalId: string): Promise<Map<string, PersonaRole>>;
   role(principalId: string, personaId: string, contextScope?: ScopeId): Promise<PersonaRole | null>;
+  get(id: string): Promise<Persona | null>;
   list(principalId: string): Promise<PersonaResult<PersonaView[]>>;
   summaries(tenant: Tenant, principalId: string, contextScope?: ScopeId): Promise<PersonaSummary[]>;
   detail(principalId: string, id: string): Promise<PersonaResult<PersonaDetail>>;
@@ -180,6 +181,7 @@ export function createPersonaService(deps: {
   }
 
   return {
+    get: (id) => store.get(id),
     enabledFor,
     role,
     roles: async (principalId) => store.roles(await granteeScopes(principalId)),

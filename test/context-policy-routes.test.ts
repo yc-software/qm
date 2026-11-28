@@ -5,6 +5,7 @@ import type { ApiCtx } from "../src/api/routes/route.ts";
 import { createPostgresChannelPolicyStore } from "../src/surface-cache/channel-policy-store.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { testTenant } from "./support/test-tenant.ts";
+import { personalScope } from "../src/types.ts";
 
 function fakeRes() {
   const out = { status: 0, body: undefined as unknown };
@@ -72,7 +73,7 @@ test("context policy read requires membership and a Slack-backed scope", async (
 
   const personal = makeCtx({
     url: "http://x/v1/contexts/personal:alice/ambient-policy?principalId=alice",
-    contexts: ["personal:alice"],
+    contexts: [personalScope("alice")],
   });
   await getContextPolicy(personal.ctx);
   assert.equal(personal.out.status, 400);

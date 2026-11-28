@@ -72,6 +72,7 @@ export function runResultDelivery(run: Run, adminUrlFor?: AdminUrlFor, notice?: 
     sourceScopeId: conversationScope(run.request.conversation, run.request.actor.id),
     sourceThreadRef: run.request.conversation.threadRef,
     ...(run.result?.sessionId ? { sourceSessionId: run.result.sessionId } : {}),
+    sourceRunId: run.id,
     ...(run.result?.sourceUserSeq !== undefined ? { sourceUserSeq: run.result.sourceUserSeq } : {}),
     ...(run.result?.sourceAssistantEntrySeq !== undefined
       ? { sourceAssistantEntrySeq: run.result.sourceAssistantEntrySeq }

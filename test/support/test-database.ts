@@ -8,7 +8,6 @@ import { createPostgresAdvisoryLock, type AdvisoryLock } from "../../src/persist
 import { createPostgresMapFactory, type DurableMap } from "../../src/persistence/durable-map.ts";
 import { createPgPool, type PgPool } from "../../src/persistence/pg-pool.ts";
 import { APP_ROLE, boundUrl, ownerUrl } from "./test-tenant.ts";
-import { APP_TABLES } from "../../src/deploy/page-views.ts";
 import { configStoreMaps, createConfigStore } from "../../src/resolution/config-store.ts";
 import { orgId } from "../../src/config.ts";
 import { scopeId } from "../../src/types.ts";
@@ -22,7 +21,7 @@ function baseDatabaseUrl(): URL {
 
 let databaseWorker: { worker: Worker; signal: Int32Array; port: MessagePort } | undefined;
 
-function createDatabaseSync(request: { template?: string; bare?: boolean }): string {
+function askDatabaseWorker(request: { template?: string; bare?: boolean; database?: string; sql?: string }): string {
   if (!databaseWorker) {
     const signal = new Int32Array(new SharedArrayBuffer(4));
     const { port1, port2 } = new MessageChannel();
@@ -54,31 +53,71 @@ function databaseUrl(name: string): string {
 }
 
 export function testDatabaseUrl(): string {
-  return boundUrl(databaseUrl(createDatabaseSync({})));
+  return boundUrl(databaseUrl(askDatabaseWorker({})));
 }
 
 export function testBareDatabaseUrl(): string {
-  return databaseUrl(createDatabaseSync({ bare: true }));
+  return databaseUrl(askDatabaseWorker({ bare: true }));
 }
 
 export function testMigratedDatabaseUrl(): string {
   const template = process.env.QM_TEST_TEMPLATE_DATABASE;
   if (!template) throw new Error("QM_TEST_TEMPLATE_DATABASE is unset: run tests through scripts/run-pg-tests.mjs");
-  return boundUrl(databaseUrl(createDatabaseSync({ template })), APP_ROLE);
+  return boundUrl(databaseUrl(askDatabaseWorker({ template })), APP_ROLE);
 }
 
-let shared: { url: string; maps: ReturnType<typeof createPostgresMapFactory> } | undefined;
+let shared: { name: string; url: string; maps: ReturnType<typeof createPostgresMapFactory> } | undefined;
 
 function sharedDatabase(): NonNullable<typeof shared> {
   if (!shared) {
-    const url = testDatabaseUrl();
-    shared = { url, maps: createPostgresMapFactory(url) };
+    const name = askDatabaseWorker({});
+    const url = boundUrl(databaseUrl(name));
+    shared = { name, url, maps: createPostgresMapFactory(url) };
   }
   return shared;
 }
 
+const mapTable = (table: string, fields: readonly string[] = []): string => `
+  CREATE TABLE ${table} (LIKE ack_emoji INCLUDING ALL);
+  ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY tenant_isolation ON ${table} USING (tenant_id = qm_bound_tenant()) WITH CHECK (tenant_id = qm_bound_tenant());
+  CREATE FUNCTION claim_${table}() RETURNS TABLE(tenant_id uuid, id text) LANGUAGE sql SECURITY DEFINER
+    SET search_path = public, pg_temp
+    AS $$ SELECT tenant_id, id FROM ${table} WHERE tenant_id IN (SELECT qm_serving_tenants()) ORDER BY tenant_id, id $$;
+  CREATE FUNCTION claim_${table}_tenants() RETURNS TABLE(tenant_id uuid, id text) LANGUAGE sql SECURITY DEFINER
+    SET search_path = public, pg_temp
+    AS $$ SELECT DISTINCT tenant_id, '${table}'::text FROM ${table} WHERE tenant_id IN (SELECT qm_serving_tenants()) $$;${fields
+      .map((field) => {
+        const name = `${table}_${field.toLowerCase()}`;
+        return `
+  CREATE INDEX ${name}_fold ON ${table} USING hash (lower(json->>'${field}'));
+  CREATE INDEX ${name}_unicode ON ${table} (id) WHERE json->>'${field}' ~ '[^\\x01-\\x7f]';
+  CREATE STATISTICS ${name}_stats ON (json->>'${field}') FROM ${table};
+  CREATE FUNCTION claim_${table}_tenants_by_${field.toLowerCase()}(value text) RETURNS TABLE(tenant_id uuid, id text)
+    LANGUAGE sql SECURITY DEFINER SET search_path = public, pg_temp
+    AS $$ SELECT DISTINCT tenant_id, '${table}'::text FROM ${table}
+      WHERE lower(json->>'${field}') = lower(value) AND tenant_id IN (SELECT qm_serving_tenants()) $$;`;
+      })
+      .join("")}`;
+
+export async function createTestMapTables(
+  databaseUrl: string,
+  tables: Record<string, readonly string[]>,
+): Promise<void> {
+  const client = new pg.Client({ connectionString: ownerUrl(databaseUrl).toString() });
+  await client.connect();
+  try {
+    for (const [table, fields] of Object.entries(tables)) await client.query(mapTable(table, fields));
+  } finally {
+    await client.end();
+  }
+}
+
 export function testMap<T>(indexedFields?: readonly Extract<keyof T, string>[]): DurableMap<T> {
-  return sharedDatabase().maps.map<T>(`t_${randomBytes(8).toString("hex")}`, indexedFields);
+  const { name, maps } = sharedDatabase();
+  const table = `t_${randomBytes(8).toString("hex")}`;
+  askDatabaseWorker({ database: name, sql: mapTable(table, indexedFields) });
+  return maps.map<T>(table, indexedFields);
 }
 
 export async function readyTestMap<T>(): Promise<DurableMap<T>> {
@@ -137,11 +176,7 @@ export function testDeployBackings(
   const maps = createPostgresMapFactory(databaseUrl);
   return {
     databaseUrl,
-    deployments: maps.map<import("../../src/deploy/deploy-store.ts").PublishedApp>(
-      "deployments",
-      undefined,
-      APP_TABLES,
-    ),
+    deployments: maps.map<import("../../src/deploy/deploy-store.ts").PublishedApp>("deployments"),
     drafts: maps.map<import("../../src/deploy/deploy-store.ts").AppDraft>("deployment_drafts"),
     pg: maps.pool,
     ...backings,

@@ -2,7 +2,7 @@ import type { DurableMap } from "../persistence/durable-map.ts";
 import { tenantListeners } from "../tenants/cache.ts";
 import type { AttestAudience } from "../directory/person.ts";
 
-export type McpServerAuthMode = "none" | "bearer" | "client-credentials" | "oauth-user";
+export type McpServerAuthMode = "none" | "bearer" | "client-credentials" | "oauth-user" | "organization";
 
 export type McpApprovalPolicy = "annotations" | "all" | "none";
 

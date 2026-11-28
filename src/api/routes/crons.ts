@@ -96,6 +96,8 @@ function isCronPatch(b: unknown): b is {
   title?: string;
   task?: string;
   action?: string;
+  text?: string;
+  message?: string;
   schedule?: unknown;
   enabled?: boolean;
   archived?: boolean;
@@ -104,20 +106,15 @@ function isCronPatch(b: unknown): b is {
 } {
   if (!isObj(b) || !isCronRuntime(b.runtime)) return false;
   if (!hasCronPatchFields(b)) return true;
-  const hasTitle = b.title !== undefined;
-  const hasAction = b.action !== undefined;
-  const hasTask = b.task !== undefined;
-  const hasSchedule = b.schedule !== undefined;
-  const hasEnabled = b.enabled !== undefined;
-  const hasArchived = b.archived !== undefined;
-  const hasUnfurlLinks = b.unfurlLinks !== undefined;
-  if (hasTitle && typeof b.title !== "string") return false;
-  if (hasAction && typeof b.action !== "string") return false;
-  if (hasTask && typeof b.task !== "string") return false;
-  if (hasEnabled && typeof b.enabled !== "boolean") return false;
-  if (hasArchived && typeof b.archived !== "boolean") return false;
-  if (hasUnfurlLinks && typeof b.unfurlLinks !== "boolean") return false;
-  if (hasSchedule && userScheduleFromBody(b.schedule) === null) return false;
+  if (b.title !== undefined && typeof b.title !== "string") return false;
+  if (b.action !== undefined && typeof b.action !== "string") return false;
+  if (b.task !== undefined && typeof b.task !== "string") return false;
+  if (b.text !== undefined && typeof b.text !== "string") return false;
+  if (b.message !== undefined && typeof b.message !== "string") return false;
+  if (b.enabled !== undefined && typeof b.enabled !== "boolean") return false;
+  if (b.archived !== undefined && typeof b.archived !== "boolean") return false;
+  if (b.unfurlLinks !== undefined && typeof b.unfurlLinks !== "boolean") return false;
+  if (b.schedule !== undefined && userScheduleFromBody(b.schedule) === null) return false;
   if (b.session !== undefined && typeof b.session !== "boolean") return false;
   return true;
 }
@@ -128,6 +125,8 @@ function hasCronPatchFields(b: Record<string, unknown>): boolean {
     b.title !== undefined ||
     b.action !== undefined ||
     b.task !== undefined ||
+    b.text !== undefined ||
+    b.message !== undefined ||
     b.schedule !== undefined ||
     b.enabled !== undefined ||
     b.archived !== undefined ||
@@ -291,7 +290,6 @@ async function runCronNow(ctx: ApiCtx): Promise<void> {
   }
   const cron = await gateSourceCron(ctx, id);
   if (!cron) return;
-  if (!deps.scheduler) return sendJson(res, 404, { error: "not_found", message: "scheduler not wired" });
   if (cron.archived || !cron.enabled)
     return sendJson(res, 400, {
       error: "bad_request",
@@ -325,7 +323,7 @@ async function cronRuns(ctx: ApiCtx): Promise<void> {
 }
 
 const CRON_PATCH_BAD_REQUEST =
-  "expected a cron patch: title (string), task (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), and/or session (boolean)";
+  "expected a cron patch: title (string), task (string), text (string), schedule, enabled (boolean), archived (boolean), unfurlLinks (boolean), and/or session (boolean)";
 
 async function cronById(ctx: ApiCtx): Promise<void> {
   const { res, app, url, pathname, method, body, capability } = ctx;
@@ -351,13 +349,15 @@ async function cronById(ctx: ApiCtx): Promise<void> {
     }
     const schedule =
       body.schedule !== undefined ? userScheduleFromBody(body.schedule, defaultTimezoneFor(capability))! : undefined;
-    const task = body.action ?? body.task;
+    const task = taskText(body);
+    const text = exactText(body);
     const r = await ctx.deps.control.patchCron(
       id,
       {
         ...(body.runtime !== undefined ? { runtime: body.runtime } : {}),
         ...(body.title !== undefined ? { title: body.title } : {}),
         ...(task !== undefined ? { action: task } : {}),
+        ...(text !== undefined ? { text } : {}),
         ...(schedule !== undefined ? { schedule } : {}),
         ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
         ...(body.archived !== undefined ? { archived: body.archived } : {}),

@@ -3,42 +3,38 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { harness, SESSION } from "./deep-link-boot-fixture.ts";
 
-test("Slack message bubbles render the message text without template whitespace", async () => {
-  const text = "can you switch to fable here?\nsecond line";
+test("Slack message bubbles render Slack mrkdwn as Markdown", async () => {
+  const lines = "can you switch to fable here?\nsecond line";
   const h = await harness({
     path: "/s/sess-deep",
     session: { ...SESSION, type: "dm", createdAt: 1, surface: "slack", canContinue: false },
-    items: [item("UserMessage", { seq: 1, createdAt: 1, text })],
+    items: [
+      item("UserMessage", { seq: 1, createdAt: 1, text: lines }),
+      item("UserMessage", { seq: 2, createdAt: 2, text: "see <https://example.com/x?y=1&amp;z=2> ok" }),
+      item("UserMessage", { seq: 4, createdAt: 4, text: "# 1. _it_ ~st~ a_b_c" }),
+      item("UserMessage", {
+        seq: 3,
+        createdAt: 3,
+        text: "&gt; *Our plan:* ship it <@U1|ada>, `*code*` and 2*3*4 stay",
+      }),
+    ],
   });
   try {
     await h.boot();
-    let bubble: Element | null = null;
-    for (let i = 0; i < 100 && !bubble; i++) {
-      bubble = document.querySelector(".slack-wire-text");
-      if (!bubble) await new Promise((resolve) => setTimeout(resolve, 10));
+    let quote: Element | null = null;
+    for (let i = 0; i < 300 && !quote; i++) {
+      quote = document.querySelector(".slack-wire-text blockquote");
+      if (!quote) await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    assert.ok(bubble, "Slack bubble rendered");
-    assert.equal(bubble.textContent, text);
-  } finally {
-    await h.close();
-  }
-});
-
-test("bare URLs in Slack message text render as links", async () => {
-  const h = await harness({
-    path: "/s/sess-deep",
-    session: { ...SESSION, type: "dm", createdAt: 1, surface: "slack", canContinue: false },
-    items: [item("UserMessage", { seq: 1, createdAt: 1, text: "see https://example.com/x?y=1&amp;z=2 ok" })],
-  });
-  try {
-    await h.boot();
-    let link: HTMLAnchorElement | null = null;
-    for (let i = 0; i < 100 && !link; i++) {
-      link = document.querySelector<HTMLAnchorElement>(".slack-wire-text a.inbox-text-link");
-      if (!link) await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    assert.equal(link?.getAttribute("href"), "https://example.com/x?y=1&z=2");
-    assert.equal(document.querySelector(".slack-wire-text")?.textContent, "see https://example.com/x?y=1&z=2 ok");
+    const paragraphs = [...document.querySelectorAll(".slack-wire-text > qm-markdown p")];
+    assert.equal(paragraphs[0]?.textContent, lines);
+    assert.equal(paragraphs[1]?.textContent, "see https://example.com/x?y=1&z=2 ok");
+    assert.equal(paragraphs[1]?.querySelector("a")?.getAttribute("href"), "https://example.com/x?y=1&z=2");
+    assert.equal(quote?.querySelector("strong")?.textContent, "Our plan:");
+    assert.equal(quote?.querySelector(".slack-mention")?.textContent, "@ada");
+    assert.equal(quote?.querySelector("code")?.textContent, "*code*");
+    assert.ok(quote?.textContent?.includes("2*3*4 stay"));
+    assert.equal(paragraphs[2]?.innerHTML, "# 1. <em>it</em> <del>st</del> a_b_c");
   } finally {
     await h.close();
   }

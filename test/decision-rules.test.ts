@@ -19,6 +19,8 @@ import { createDecisionBackend } from "../src/decisions/providers.ts";
 import { withModelRequestContext } from "../src/model/request-context.ts";
 import { turnStartState } from "../src/decisions/hooks.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { personalScope } from "../src/types.ts";
+import { testCore } from "./support/build-app.ts";
 
 const PROVIDERS: DecisionProvider[] = [{ id: "gw", protocol: "chat-completions" }];
 const MODELS = new Set(["m-deep"]);
@@ -439,7 +441,7 @@ test("the decisions resource checks the model catalog and lets an admin's agent 
   };
   const apply = (body: unknown, capability: unknown = null) =>
     ADMIN_RESOURCE_BY_ID.get("decisions")!.apply(
-      { body, capability, tenant, deps: { decisions } } as never,
+      { body, capability, tenant, deps: { ...testCore(), decisions } } as never,
       { id: "admin@x.com" },
       "org:default-org",
     );
@@ -469,7 +471,7 @@ test("decision hooks load active rules for the hook, decide, and audit every ver
   const decide = createDecisionHooks(store, fixed({ keep: 0.2, deep: 0.8 }), audit);
   const verdict = await decide("turn_start", "refactor the scheduler", {
     tenant,
-    scopeLabel: "personal:a",
+    scopeLabel: personalScope("a"),
     sessionId: "s1",
   });
   assert.deepEqual(asked, ["turn_start"]);
@@ -509,7 +511,7 @@ test("observe-only rules do not hold up the turn and are still audited", async (
   const decide = createDecisionHooks(store, backend, audit);
   const verdict = await decide("turn_start", "refactor the scheduler", {
     tenant,
-    scopeLabel: "personal:a",
+    scopeLabel: personalScope("a"),
     sessionId: "s1",
   });
   assert.equal(verdict[0]?.ruleId, "router");
@@ -535,7 +537,7 @@ test("turn_start rules see the turn's context alongside the message", () => {
     runtime: { modelId: "claude-opus" },
     runtimePinned: true,
     continueTurn: true,
-    scopeLabel: "personal:someone@example.com",
+    scopeLabel: personalScope("someone@example.com"),
     conversation: "dm",
   });
   for (const line of [
@@ -661,7 +663,7 @@ test("the reply check is armed only when a turn_end rule is active, enforces onl
       return Object.fromEntries(Object.keys(questions).map((k) => [k, p]));
     },
   });
-  const turn = { tenant, scopeLabel: "personal:a", sessionId: "s1" };
+  const turn = { tenant, scopeLabel: personalScope("a"), sessionId: "s1" };
   const factory = (rules: DecisionRule[], p: Record<string, number>) =>
     createReplyCheck(
       { rules: async () => rules },
@@ -729,7 +731,7 @@ test("wildcard persona options validate, expand, and fall back to onError on loo
   const audit = { record: () => {} } as never;
   const fail = () => Promise.reject(new Error("db down"));
   const decide = createDecisionHooks({ rules: async () => [ok.rule] } as never, fixed({}), audit, fail);
-  const [res] = await decide("turn_start", "hi", { tenant, actorId: "u1", scopeLabel: "personal:u1" });
+  const [res] = await decide("turn_start", "hi", { tenant, actorId: "u1", scopeLabel: personalScope("u1") });
   assert.equal(res?.option, "keep");
   assert.match(res?.error ?? "", /db down/);
 });

@@ -16,6 +16,7 @@ import {
 import type { AddressFetch } from "../src/util/network.ts";
 import { loopbackFetch, startMcpTestServer } from "./support/mcp-test-server.ts";
 import { emptyMemoryRegistry } from "./support/memory-registry.ts";
+import { personalScope } from "../src/types.ts";
 
 const change = { actor: "U1", now: 1_762_128_000_000, overlayIds: new Set<string>(), key: emptyMemoryRegistry.key };
 const BRAIN = memberBrainId("U1");
@@ -42,7 +43,7 @@ function ownedBy(url: string, owner: string): MemoryRegistry {
     change,
   );
   const owned = { ...registered, brains: registered.brains.map((brain) => ({ ...brain, url, owner })) };
-  return putBinding(owned, BRAIN, { brain: BRAIN, scope: `personal:${owner}`, capture: "explicit" }, change);
+  return putBinding(owned, BRAIN, { brain: BRAIN, scope: personalScope(owner), capture: "explicit" }, change);
 }
 
 function serving(record: MemoryRegistry, registryFetch?: AddressFetch) {
@@ -55,9 +56,13 @@ function serving(record: MemoryRegistry, registryFetch?: AddressFetch) {
   });
   const search = () =>
     withProviders("search", async (report) =>
-      (await memory.query("personal:U1", "bees", 5, { actorId: "U1", audienceScopeId: "personal:U1", report })).map(
-        ({ text }) => text,
-      ),
+      (
+        await memory.query(personalScope("U1"), "bees", 5, {
+          actorId: "U1",
+          audienceScopeId: personalScope("U1"),
+          report,
+        })
+      ).map(({ text }) => text),
     );
   return { search, errors };
 }

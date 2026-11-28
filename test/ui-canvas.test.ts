@@ -3,8 +3,8 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { type BuiltApp } from "../src/wiring.ts";
-import { buildApp } from "./support/build-app.ts";
+import { type Core } from "../src/wiring.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import { createInsecureTestServer, createServer } from "../src/api/server.ts";
 import { scopeId, type TurnRequest } from "../src/types.ts";
 import { mintCapabilityToken, CAPABILITY_TTL_MS, CONTROL_PLANE_AUD } from "../src/auth/capability-token.ts";
@@ -23,7 +23,7 @@ const SECRET = "ui-canvas-test-secret-value!".repeat(2);
 const THREAD = "web:U1:canvas";
 
 describe("ui canvas and ui observe", () => {
-  let built: BuiltApp;
+  let built: Core;
   let agentServer: Server;
   let sourceServer: Server;
   let browserServer: Server;
@@ -33,7 +33,6 @@ describe("ui canvas and ui observe", () => {
   let sessionId: string;
   const runs = new Map<string, { id: string; status: string; request: { actor: { id: string } } }>([
     ["run-live", { ...liveRun("U1", THREAD), id: "run-live" }],
-    ["run-done", { id: "run-done", status: "done", request: { actor: { id: "U1" } } }],
   ]);
   const events: SessionStateEvent[] = [];
 
@@ -45,7 +44,7 @@ describe("ui canvas and ui observe", () => {
         aud: CONTROL_PLANE_AUD,
         exp: Date.now() + CAPABILITY_TTL_MS,
         internalAudience: true,
-        liveActor: true,
+        personAuthority: true,
         surface: "web",
         ...liveRunBinding("U1"),
         runId: "run-live",
@@ -83,16 +82,17 @@ describe("ui canvas and ui observe", () => {
       runs: { get: async (id: string) => runs.get(id) ?? null } as never,
     };
     agentServer = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       ...deps,
     });
-    sourceServer = createInsecureTestServer(built.app, deps);
+    sourceServer = createInsecureTestServer(built.app, { ...testCore(built), ...deps });
     browserServer = createServer(built.app, {
+      ...testCore(built),
       replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
       signingSecret: SECRET,
       ...browserSessionDeps,
-      admin: built.admin,
       ...deps,
     });
     await new Promise<void>((resolve) => browserServer.listen(0, resolve));
@@ -126,13 +126,11 @@ describe("ui canvas and ui observe", () => {
     await built.featureFlags.setEnabled("ui_canvas", scopeId("personal", "U1"), true, "test");
   });
 
-  it("refuses tokens that are not a live web turn", async () => {
-    for (const extra of [{ surface: "slack" }, { liveActor: false }, { triggered: true }, { botActor: true }]) {
+  it("refuses tokens that are not a web turn, and bot work", async () => {
+    for (const extra of [{ surface: "slack" }, { personAuthority: false }, { botActor: true }]) {
       const r = await agent("POST", "/v1/ui/canvas", { html: "x" }, extra as Partial<CapabilityClaims>);
       assert.equal(r.status, 403, JSON.stringify(extra));
     }
-    const ended = await agent("POST", "/v1/ui/canvas", { html: "x" }, { runId: "run-done" });
-    assert.equal(ended.status, 403);
   });
 
   it("writes, updates, pins, replaces and signals only the owner", async () => {

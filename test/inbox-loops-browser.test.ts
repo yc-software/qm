@@ -6,7 +6,6 @@ import { API_ALIASES } from "../src/api/browser-session.ts";
 import { createServer } from "../src/api/server.ts";
 import { CAPABILITY_TTL_MS, CONTROL_PLANE_AUD, mintCapabilityToken } from "../src/auth/capability-token.ts";
 import { scopeId } from "../src/types.ts";
-import { serverDeps } from "../src/wiring.ts";
 import { buildApp, stopAtEnd } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
 import { browserImpersonationCookie, browserSessionCookie, browserSessionDeps } from "./support/browser-session.ts";
@@ -16,7 +15,7 @@ const config = testConfig({ signingSecret: SECRET, capabilitySecret: SECRET, pub
 const built = stopAtEnd(buildApp(config));
 const itemImages = new Map<string, () => Response>();
 const server = createServer(built.app, {
-  ...serverDeps(config, built),
+  ...built,
   ...browserSessionDeps,
   itemImageFetch: async (input) => {
     const fake = itemImages.get(String(input));
@@ -85,7 +84,7 @@ test("agents keep using loops through their capability without the person flag",
       scopeId: scopeId("personal", "hal"),
       aud: CONTROL_PLANE_AUD,
       internalAudience: true,
-      liveActor: true,
+      personAuthority: true,
       exp: Date.now() + CAPABILITY_TTL_MS,
     },
     SECRET,
@@ -94,7 +93,7 @@ test("agents keep using loops through their capability without the person flag",
   assert.equal(response.status, 200, await response.clone().text());
 });
 
-test("loop grants and decisions need the person's own session or running turn", async () => {
+test("loop grants and decisions refuse an impersonating admin and a token with no run to carry a card", async () => {
   await flag("fay", true);
   const loopId = await firstInboxLoop("fay");
   const impersonating = `${browserSessionCookie("admin-alice")}; ${browserImpersonationCookie("admin-alice", "fay")}`;
@@ -112,14 +111,14 @@ test("loop grants and decisions need the person's own session or running turn", 
       path,
     );
   }
-  const ended = await mintCapabilityToken(
+  const unbound = await mintCapabilityToken(
     {
       actorId: "fay",
       scopeId: scopeId("personal", "fay"),
       aud: CONTROL_PLANE_AUD,
       internalAudience: true,
-      liveActor: true,
-      runId: "run-that-ended",
+      personAuthority: true,
+      runId: "run-not-stored",
       runLeaseToken: "lease",
       runAttempt: 1,
       threadRef: "dm:fay",
@@ -127,14 +126,14 @@ test("loop grants and decisions need the person's own session or running turn", 
     },
     SECRET,
   );
-  const asEnded = (path: string, body: unknown) =>
+  const asUnbound = (path: string, body: unknown) =>
     fetch(`${base}${path}`, {
       method: "POST",
-      headers: { "x-agent-capability": ended, "content-type": "application/json" },
+      headers: { "x-agent-capability": unbound, "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-  const late = await asEnded(`/v1/loops/${loopId}/grants`, { shipAction: "send" });
-  assert.deepEqual([late.status, ((await late.json()) as { error: string }).error], [403, "human_required"]);
+  const grant = await asUnbound(`/v1/loops/${loopId}/grants`, { shipAction: "send" });
+  assert.deepEqual([grant.status, ((await grant.json()) as { error: string }).error], [403, "approval_unavailable"]);
   assert.deepEqual(await built.loops.grants.byLoop(loopId), []);
 });
 

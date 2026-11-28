@@ -15,6 +15,7 @@ import type { Directory } from "../src/slack/directory.ts";
 import type { SlackCoreClient } from "../src/api/slack-core-client.ts";
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testAdvisoryLock, testDatabaseUrl, testMap } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 async function fixture() {
   let now = Date.now();
@@ -31,12 +32,12 @@ async function fixture() {
   });
   const credential = await keychain.save({ ownerId: "alice@example.com", service: "aws", secret: "fixture-secret" });
   const sessions = createPostgresSessionStore(testDatabaseUrl());
-  const session = await sessions.getOrCreateByThread("web:alice:fixture", "dm", "personal:alice@example.com");
+  const session = await sessions.getOrCreateByThread("web:alice:fixture", "dm", personalScope("alice@example.com"));
   await sessions.addParticipant(session.id, "alice@example.com");
   const { ask } = await keychain.createAsk({
     credentialId: credential.id,
     requesterId: "alice@example.com",
-    requesterScopeId: "personal:alice@example.com",
+    requesterScopeId: personalScope("alice@example.com"),
     requesterThreadRef: session.threadRef,
     requesterSeq: 120,
     requestedMode: "standing",
@@ -311,13 +312,17 @@ test("the card goes where the request came from, never to someone else's DM", ()
 
 test("a sub-agent request shows in both sessions, and deciding anywhere syncs the posted card", async () => {
   const f = await fixture();
-  const child = await f.sessions.getOrCreateByThread("agent:main:subagent:c1", "dm", "personal:alice@example.com");
+  const child = await f.sessions.getOrCreateByThread(
+    "agent:main:subagent:c1",
+    "dm",
+    personalScope("alice@example.com"),
+  );
   await f.sessions.addParticipant(child.id, "alice@example.com");
   await f.sessions.setParentSession(child.id, f.session.id);
   const { ask } = await f.keychain.createAsk({
     credentialId: f.ask.credentialId,
     requesterId: "alice@example.com",
-    requesterScopeId: "personal:alice@example.com",
+    requesterScopeId: personalScope("alice@example.com"),
     requesterThreadRef: child.threadRef,
     requesterDestination: { type: "slack", target: "D1:9.9" },
     purpose: "Read the report",

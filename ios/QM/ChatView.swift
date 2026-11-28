@@ -4,7 +4,6 @@ import SwiftUI
 struct ChatView: View {
   @State private var model: ChatModel
   var initialSequence: Int? = nil
-  var onShowConversations: (() -> Void)?
   @State private var targetSequence: Int?
   @State private var pinsExpanded = false
   @State private var dictation: NativeDictationModel
@@ -22,6 +21,15 @@ struct ChatView: View {
   @State private var openedConversation: Conversation?
   @State private var startingSideChat = false
   @State private var followsLatest = true
+  // The bottom bar's height with the dictation panel closed, and how far the open panel
+  // rises above it. While dictating, the transcript's inset stays at the closed height and
+  // the transcript is lifted instead, so it moves on the panel's own spring.
+  @State private var restingBarHeight: CGFloat = 0
+  @State private var dictationLift: CGFloat = 0
+  // The last open panel's lift, so the next open can start moving the text on the tap
+  // instead of a layout pass later. The first open uses a typical panel height.
+  @State private var expectedDictationLift: CGFloat = 160
+  @State private var liftsTranscript = false
   @State private var previewingAttachment: UploadAttachment?
   @State private var stopping = false
   @State private var retryingHistory = false
@@ -29,12 +37,12 @@ struct ChatView: View {
   @State private var approvalSubmission: (id: String, approved: Bool)?
   @State private var showingWorkers = false
   @State private var swarm: SwarmModel?
-  @FocusState private var composerFocused: Bool
+  @State private var composerFocused = false
+  @Environment(\.shellNavRoom) private var navRoom
 
   init(
-    model: ChatModel, initialSequence: Int? = nil, onShowConversations: (() -> Void)? = nil
+    model: ChatModel, initialSequence: Int? = nil
   ) {
-    self.onShowConversations = onShowConversations
     _model = State(initialValue: model)
     _dictation = State(
       initialValue: NativeDictationModel(provider: OnDeviceSpeechToTextProvider()))
@@ -45,10 +53,13 @@ struct ChatView: View {
     _inheritedExpanded = State(initialValue: initialSequence != nil)
   }
 
+  private var hasDraft: Bool {
+    !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      || !model.attachments.isEmpty
+  }
+
   private var canSend: Bool {
-    (!model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      || !model.attachments.isEmpty)
-      && !dictation.busy && !model.sending && !model.uploading
+    hasDraft && !dictation.busy && !model.sending && !model.uploading
       && !model.approvals.contains(where: \.blocksComposer)
   }
 
@@ -111,6 +122,10 @@ struct ChatView: View {
     }
   }
 
+  private var navigationTitleText: String {
+    model.conversation.localOnly == true ? "" : model.conversation.label
+  }
+
   var body: some View {
     ScrollViewReader { proxy in
       GeometryReader { geometry in
@@ -124,8 +139,27 @@ struct ChatView: View {
             .id(model.hasLoadedTranscript)
         }
         .animation(reduceMotion ? nil : .smooth(duration: 0.45), value: model.hasLoadedTranscript)
+        // Changing the inset re-anchors the transcript in one step while the panel springs
+        // open, which clipped the last message for a beat. Lifting it is drawn, not laid
+        // out, so it tracks the panel frame for frame.
+        .offset(y: liftsTranscript ? -dictationLift : 0)
+        .animation(reduceMotion ? nil : liftMotion, value: dictationLift)
         .safeAreaInset(edge: .bottom, spacing: 0) {
           bottomBar(proxy)
+            .fixedSize(horizontal: false, vertical: dictation.busy)
+            .onGeometryChange(for: CGFloat.self) {
+              $0.size.height
+            } action: { height in
+              if dictation.busy {
+                dictationLift = max(0, height - restingBarHeight)
+                expectedDictationLift = dictationLift
+              } else {
+                restingBarHeight = height
+                dictationLift = 0
+              }
+            }
+            // The open panel overflows upward from the closed bar's height.
+            .frame(height: dictation.busy ? restingBarHeight : nil, alignment: .bottom)
         }
       }
     }
@@ -133,7 +167,8 @@ struct ChatView: View {
     .toolbarBackground(QMTheme.paper, for: .navigationBar)
     .toolbarBackground(.visible, for: .navigationBar)
     .environment(\.qmSessionID, model.conversation.id)
-    .navigationTitle(model.conversation.label)
+    // A blank chat has no title; the greeting says enough.
+    .navigationTitle(navigationTitleText)
     .navigationBarTitleDisplayMode(.inline)
     .toolbar { conversationToolbar }
     .navigationDestination(item: $openedConversation) { conversation in
@@ -229,14 +264,6 @@ struct ChatView: View {
 
   @ToolbarContentBuilder
   private var conversationToolbar: some ToolbarContent {
-    if let onShowConversations {
-      ToolbarItem(placement: .topBarLeading) {
-        Button(action: onShowConversations) {
-          Image(systemName: "chevron.left")
-        }
-        .accessibilityLabel("Conversations")
-      }
-    }
     ToolbarItem(placement: .topBarTrailing) {
       Menu {
         if model.conversation.localOnly != true {
@@ -494,6 +521,8 @@ struct ChatView: View {
     let visible = inheritedExpanded ? inherited + current : current
     let sections = NativeChatTranscriptSection.grouped(
       visible, activeRunID: model.activeRunID, status: model.workStatus)
+    let slack =
+      model.conversation.surface == "slack" ? NativeSlackThreadLayout(messages) : nil
     let showSpeakers =
       model.conversation.isShared
       || Set(messages.filter { $0.role == "user" }.compactMap(\.speaker)).count > 1
@@ -521,22 +550,27 @@ struct ChatView: View {
           && model.earlierItems == 0 && visible.isEmpty && model.displayedPartial.isEmpty
           && model.activeRunID == nil && model.pending == nil && model.workStatus == nil
         {
-          ContentUnavailableView {
+          // A quiet greeting, ChatGPT-style, centred in the space above the composer.
+          VStack(spacing: 20) {
             Text("What shall we work on?")
-          } description: {
-            Text("Ask a question or hand off a task.")
-          }
-          .padding(.top, 60)
-          if model.draft.isEmpty, model.attachments.isEmpty, model.conversation.canReply,
-            let identity, !model.conversation.isShared
-          {
-            NativeSuggestedActivities(model: suggestions, identity: identity) { activity in
-              guard model.draft.isEmpty else { return }
-              model.draft = activity.prompt
-              model.saveDraft()
-              composerFocused = true
+              .font(.custom("IowanOldStyle-Roman", size: 28, relativeTo: .title))
+              .foregroundStyle(QMTheme.ink)
+              .multilineTextAlignment(.center)
+              .frame(maxWidth: .infinity)
+            if model.draft.isEmpty, model.attachments.isEmpty, model.conversation.canReply,
+              let identity, !model.conversation.isShared
+            {
+              NativeSuggestedActivities(model: suggestions, identity: identity) { activity in
+                guard model.draft.isEmpty else { return }
+                model.draft = activity.prompt
+                model.saveDraft()
+                composerFocused = true
+              }
             }
           }
+          .containerRelativeFrame(.vertical, alignment: .center) { height, _ in height * 0.85 }
+          // Glide up with the keyboard rather than snapping to the new centre.
+          .animation(.smooth(duration: 0.3), value: composerFocused)
         }
         ForEach(sections) { section in
           VStack(alignment: .leading, spacing: 16) {
@@ -558,7 +592,7 @@ struct ChatView: View {
                 },
                 onInspect: { followsLatest = false })
             } else if let item = section.items.first {
-              timelineRow(item, showSpeakers: showSpeakers, forkable: forkable)
+              timelineRow(item, showSpeakers: showSpeakers, forkable: forkable, slack: slack)
             }
           }
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -588,7 +622,8 @@ struct ChatView: View {
   }
 
   @ViewBuilder private func timelineRow(
-    _ item: NativeChatTimelineItem, showSpeakers: Bool, forkable: Set<String>
+    _ item: NativeChatTimelineItem, showSpeakers: Bool, forkable: Set<String>,
+    slack: NativeSlackThreadLayout?
   ) -> some View {
     switch item.content {
     case .message(let message):
@@ -600,7 +635,14 @@ struct ChatView: View {
           ? { Task { await fork(from: message.id) } } : nil,
         onAskAbout: !model.conversation.isSubagent && model.conversation.localOnly != true
           ? { message in Task { await askAbout(message) } } : nil,
-        forking: forkingMessageID == message.id, streaming: item.streaming
+        forking: forkingMessageID == message.id, streaming: item.streaming,
+        slack: slack.flatMap { slack in
+          NativeSlackThreadLayout.shows(message)
+            ? NativeSlackRowStyle(
+              continued: slack.continued.contains(message.id),
+              appIconURL: identity?.slackAppIconUrl.flatMap(URL.init(string:)))
+            : nil
+        }
       )
       .accessibilityIdentifier(item.streaming ? "streamingResponse" : "message-\(item.id)")
     case .work, .reasoning:
@@ -627,6 +669,7 @@ struct ChatView: View {
       bottomControls(proxy)
     }
     .padding(.horizontal, 16).padding(.vertical, 12)
+    .padding(.bottom, navRoom)
     .frame(maxWidth: QMTheme.conversationWidth)
     .frame(maxWidth: .infinity)
     // Leave the bar's 12pt top padding plus a 16pt overlap clear so, as on web, the
@@ -767,9 +810,16 @@ struct ChatView: View {
     // the chrome, the rows above it that hide while dictating, and the buttons all move in
     // one transaction; animating only the composer let the bar snap and the buttons jump.
     // Closing settles without bounce.
-    .animation(
-      reduceMotion ? nil : .spring(duration: 0.42, bounce: dictation.busy ? 0.16 : 0),
-      value: dictation.busy)
+    .animation(reduceMotion ? nil : barSpring, value: dictation.busy)
+  }
+
+  private var barSpring: Animation {
+    .spring(duration: 0.42, bounce: dictation.busy ? 0.16 : 0)
+  }
+
+  /// The text leads the panel up so the last lines are never under it, and trails it down.
+  private var liftMotion: Animation {
+    dictation.busy ? .smooth(duration: 0.26) : .smooth(duration: 0.5)
   }
 
   private func send(_ proxy: ScrollViewProxy) {
@@ -828,6 +878,8 @@ struct ChatView: View {
         } else {
           Button {
             composerFocused = false
+            liftsTranscript = followsLatest
+            dictationLift = expectedDictationLift
             dictation.start()
           } label: {
             Image(systemName: "mic")
@@ -845,16 +897,16 @@ struct ChatView: View {
               Task { await stop() }
             } label: {
               Image(systemName: "stop.fill")
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 12, weight: .bold))
                 .modifier(NativeLoadingPulse(active: stopping))
                 .foregroundStyle(QMTheme.paper)
-                .frame(width: 44, height: 44)
-                .background(QMTheme.ink, in: Circle())
+                .composerCircle(QMTheme.ink)
             }
             .accessibilityLabel(stopping ? "Stopping response" : "Stop response")
             .disabled(stopping)
             .transition(.opacity)
-          } else {
+          } else if hasDraft || model.sending {
+            // Hidden until there is something to send, so an empty composer shows no dead button.
             Button {
               send(proxy)
             } label: {
@@ -867,6 +919,7 @@ struct ChatView: View {
           }
         }
       }
+      .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: hasDraft)
       if !dictation.busy, dynamicTypeSize.isAccessibilitySize, verticalSizeClass != .compact {
         modelSelector
       }
@@ -893,17 +946,20 @@ struct ChatView: View {
   }
 
   private var composerTextField: some View {
-    TextField(
-      model.activeRunID == nil ? "Message QM" : "Queue a message", text: $model.draft,
-      axis: .vertical
+    let placeholder = model.activeRunID == nil ? "Message QM" : "Queue a message"
+    return ComposerField(
+      text: $model.draft, focused: $composerFocused, placeholder: placeholder,
+      maxLines: verticalSizeClass == .compact ? 1 : dynamicTypeSize.isAccessibilitySize ? 3 : 8,
+      onPasteImages: model.addAttachments
     )
-    .lineLimit(
-      1...(verticalSizeClass == .compact ? 1 : dynamicTypeSize.isAccessibilitySize ? 3 : 8)
-    )
+    .overlay(alignment: .topLeading) {
+      if model.draft.isEmpty {
+        Text(placeholder).foregroundStyle(Color(uiColor: .placeholderText))
+          .allowsHitTesting(false).accessibilityHidden(true)
+      }
+    }
     .padding(.horizontal, 8).padding(.top, 8)
-    .focused($composerFocused)
     .disabled(model.sending)
-    .accessibilityIdentifier("composer")
   }
 
   private var modelSelector: some View {
@@ -948,13 +1004,22 @@ struct ComposerSendLabel: View {
         NativeWave().foregroundStyle(QMTheme.paper)
           .transition(.opacity.combined(with: .scale(scale: 0.8)))
       } else {
-        Image(systemName: "arrow.up").font(.system(size: 18, weight: .semibold))
+        Image(systemName: "arrow.up").font(.system(size: 14, weight: .bold))
           .transition(.opacity.combined(with: .scale(scale: 0.8)))
       }
     }
     .foregroundStyle(QMTheme.paper)
-    .frame(width: 44, height: 44)
-    .background(QMTheme.ink.opacity(enabled ? 1 : 0.25), in: Circle())
+    .composerCircle(QMTheme.ink.opacity(enabled ? 1 : 0.25))
+  }
+}
+
+extension View {
+  /// The composer's round buttons: a 32pt circle inside a full 44pt tap target.
+  func composerCircle(_ fill: Color) -> some View {
+    frame(width: 32, height: 32)
+      .background(fill, in: Circle())
+      .frame(width: 44, height: 44)
+      .contentShape(Rectangle())
   }
 }
 

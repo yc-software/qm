@@ -20,6 +20,8 @@ import { headSlice } from "../../util/text.ts";
 import { approvalGrantId, replayableRequest } from "./turn-helpers.ts";
 import type { OrchestratorDeps, OrchestratorInput } from "./types.ts";
 import { approvalCardId, approvedCallId } from "../approval-id.ts";
+import { redactCommandSecrets } from "../../sandbox/exec-process-session.ts";
+import { isSensitiveKey, redactSecrets } from "../../../plugins/chassis/src/redact-secrets.ts";
 
 function grantModesWithin(
   allowed: ApprovalGrantModes,
@@ -60,7 +62,23 @@ export function approvalView(requestId: string, record: PendingApprovalRecord): 
     ...(record.approvalKey ? { approvalKey: record.approvalKey } : {}),
     ...(record.kind ? { kind: record.kind } : {}),
     ...executesOnApprove(record),
+    ...visibleCall(record),
   };
+}
+
+function redactedValue(value: unknown): unknown {
+  if (typeof value === "string") return redactCommandSecrets(redactSecrets(value));
+  if (Array.isArray(value)) return value.map(redactedValue);
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, isSensitiveKey(k) ? "[redacted]" : redactedValue(v)]),
+    );
+  return value;
+}
+
+export function visibleCall(record: Pick<PendingApprovalRecord, "call">): Pick<PendingApproval, "call"> {
+  if (!record.call) return {};
+  return { call: { tool: record.call.tool, input: redactedValue(record.call.input) as Record<string, unknown> } };
 }
 
 const APPROVED_CALL_RAN_NOTE =
@@ -352,6 +370,8 @@ export function createApprovalDecisions(turn: ApprovalDecisionTurn) {
         author,
         body: {
           command: record.command,
+          ...(record.purpose ? { purpose: record.purpose } : {}),
+          ...(record.summary && record.call ? { summary: record.summary } : {}),
           ...(decided.scope ? { scope: decided.scope } : {}),
           ...(call && record.approvalKey ? { call, approvalKey: record.approvalKey } : {}),
         },
@@ -436,7 +456,17 @@ export async function applyTurnApprovals(
   const recovered = !!input.approval && earlier?.decided.has(input.approval.requestId) === true;
   if (earlier?.unstarted.length || recovered) turnEvents.push(APPROVED_CALL_RAN_NOTE);
   if (input.approval && !recovered) return decideApproval(turn, decisions, input.approval);
+  if (input.declinePendingApprovals && !input.approval) await declinePendingOnReply(turn, decisions);
   return undefined;
+}
+
+async function declinePendingOnReply(turn: ApprovalDecisionTurn, decisions: ApprovalDecisions): Promise<void> {
+  const { deps, actor, session } = turn;
+  const rows = await deps.approvals.selectEntries({ where: { field: "sessionId", anyOfFold: [session.id] } });
+  for (const [requestId, record] of rows) {
+    if (approvalRefusal(record, session.id, actor.id) || record.blocksInput === false) continue;
+    await decideApproval(turn, decisions, { requestId, approved: false });
+  }
 }
 
 async function decideApproval(
@@ -474,7 +504,7 @@ async function decideApproval(
     return {
       status: "refused",
       sessionId: session.id,
-      reason: "only the person who requested this command can approve or deny it",
+      reason: "only the person who requested this command can approve or decline it",
     };
   }
   if (!approval.approved) {
@@ -488,7 +518,7 @@ async function decideApproval(
         deps.sessions.append(writer, {
           kind: "UserMessage",
           hidden: true,
-          text: `The requesting human denied this pending operation, so it did not run: ${headSlice(p.summary ?? p.command, 2_000)}\nDo not retry it unless they ask again.`,
+          text: `The requesting human declined this pending operation, so it did not run: ${headSlice(p.summary ?? p.command, 2_000)}\nDo not retry it unless they ask again.`,
         }),
       );
     audit({
@@ -500,7 +530,7 @@ async function decideApproval(
     return {
       status: "refused",
       sessionId: session.id,
-      reason: `approval denied for ${p.command}`,
+      reason: `approval declined for ${p.command}`,
       refusalKind: "approval_denied",
     };
   }
@@ -523,11 +553,11 @@ async function approveDecision(
     p.approvalKey?.startsWith("security-screen-release:") === true || p.approvalKey?.startsWith("quarantine:") === true;
   const recordDisallowsScope = scope !== "once" && (quarantineRelease || p.grantModes?.[scope] === false);
   if (scope !== "once" && (!resolution.approvalGrantModes[scope] || recordDisallowsScope)) {
-    let reason = `the "${scope}" approval option is disabled by an admin here — approve once or deny`;
+    let reason = `the "${scope}" approval option is disabled by an admin here — approve once or decline`;
     if (recordDisallowsScope && resolution.approvalGrantModes[scope]) {
       reason = quarantineRelease
-        ? `quarantined content can only be released once — approve once or deny`
-        : `this approval does not allow the "${scope}" option — approve once or deny`;
+        ? `quarantined content can only be released once — approve once or decline`
+        : `this approval does not allow the "${scope}" option — approve once or decline`;
     }
     audit({
       action: `command_approval.${scope}`,

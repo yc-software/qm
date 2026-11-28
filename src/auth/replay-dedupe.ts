@@ -6,16 +6,8 @@ export interface ReplayDedupe {
 
 const PRUNE_INTERVAL_MS = 60_000;
 
-const SCHEMA = [
-  `CREATE TABLE IF NOT EXISTS source_auth_replay (
-  event_id TEXT PRIMARY KEY,
-  expires_at TIMESTAMPTZ NOT NULL
-)`,
-  `CREATE INDEX IF NOT EXISTS source_auth_replay_expires_at ON source_auth_replay (expires_at)`,
-];
-
 export function createPostgresReplayDedupe(connectionString: string): ReplayDedupe {
-  const pg = createPgPool(connectionString, [{ id: "auth/replay-dedupe/0001", statements: SCHEMA }]);
+  const pg = createPgPool(connectionString);
   let nextPruneAt = Number.NEGATIVE_INFINITY;
   return {
     async claim(eventId, expiresAtMs) {

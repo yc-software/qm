@@ -28,6 +28,7 @@ import { loadTenantSettings } from "../src/tenants/settings.ts";
 import { TEST_APP_HANDLE } from "./support/app-handle.ts";
 import { ownerUrl, TEST_TENANT } from "./support/test-tenant.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { testCore } from "./support/build-app.ts";
 
 const externalSharingOn = { enabled: async () => true } as unknown as FeatureFlagStore;
 
@@ -105,6 +106,7 @@ test("app-only gateway checks exact current personal read grants without inherit
     throw new Error("app-only must not consult inherited permission");
   };
   const server = createApiServer(app, {
+    ...testCore(),
     featureFlags: externalSharingOn,
     identity,
     signingSecret: secret,
@@ -191,7 +193,7 @@ test("app-only gateway checks exact current personal read grants without inherit
     assert.equal((await get("renamed")).status, 200, "same immutable app retains its grant after rename");
     await app.archiveApp(shared.id);
     assert.equal((await get("renamed")).status, 404, "archived app cannot be reached even with its grant");
-    await app.setAppPublic("shared", true, { createdBy: "owner@example.test", personAtKeyboard: true });
+    await app.setAppPublic("shared", true, { createdBy: "owner@example.test", signOff: async () => true });
     const publicVisit = await get("shared");
     assert.equal(publicVisit.status, 200);
     assert.equal(JSON.parse(publicVisit.body)["x-portal-identity"], undefined, "public link access remains anonymous");

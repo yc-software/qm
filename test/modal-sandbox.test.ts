@@ -1235,3 +1235,21 @@ test("a computer's memory size reaches every Modal create, and a resize restart 
   assert.deepEqual(sizes, [4, 4, 8, 999, 8]);
   assert.equal(s.profile.sizesMemory, true);
 });
+
+test("a computer's chosen image reaches every Modal create for it, including a resize restart", async () => {
+  const images: unknown[] = [];
+  const s = make({
+    imageFor: async (id: string) => (id === scope ? "toolchain" : undefined),
+    client: {
+      ...fake.client,
+      create: async (options: Parameters<ModalClient["create"]>[0]) => {
+        images.push(options.image);
+        return fake.client.create(options);
+      },
+    },
+  });
+  await s.provision(scope);
+  await s.restartComputer!(scope, 8);
+  await s.provision(scopeId("personal", "other"));
+  assert.deepEqual(images, ["toolchain", "toolchain", undefined]);
+});

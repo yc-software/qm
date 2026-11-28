@@ -212,6 +212,7 @@ export function computerTools(kit: ToolKit) {
     ...(opts?.sandboxResources ? ["list", "create", ...(opts.botActor ? [] : ["set_default"]), "retire"] : []),
   ];
   const memorySizedBackends = opts?.sandboxResources ? (opts.memorySizedBackends ?? []) : [];
+  const sandboxImages = opts?.sandboxResources ? (opts.sandboxImages ?? []) : [];
   const sandboxManagement = defineTool({
     name: "sandbox",
     label: "sandbox",
@@ -235,12 +236,24 @@ export function computerTools(kit: ToolKit) {
             ),
           }
         : {}),
+      ...(sandboxImages.length
+        ? {
+            image: Type.Optional(
+              Type.String({
+                enum: sandboxImages,
+                description:
+                  "create: boot this named image instead of the provider's default; list shows which providers offer it.",
+              }),
+            ),
+          }
+        : {}),
       purpose: Type.String({ description: "As for execute." }),
     }),
     async execute(callId, params) {
       const tc = ref.current;
       if (!tc) return text("[error] no active tool context");
       const memoryGib = (params as { memory_gib?: number }).memory_gib;
+      const image = (params as { image?: string }).image;
       await recordCall(callId, {
         tool: "sandbox",
         action: params.action,
@@ -249,6 +262,7 @@ export function computerTools(kit: ToolKit) {
         ...(params.backend ? { backend: params.backend } : {}),
         ...(params.name ? { name: params.name } : {}),
         ...(memoryGib !== undefined ? { memory_gib: memoryGib } : {}),
+        ...(image !== undefined ? { image } : {}),
       });
       try {
         if (["list", "create", "set_default", "retire"].includes(params.action)) {
@@ -260,6 +274,7 @@ export function computerTools(kit: ToolKit) {
               name: params.name,
               sandboxId: params.sandbox_id,
               ...(memoryGib !== undefined ? { memoryGb: memoryGib } : {}),
+              ...(image !== undefined ? { image } : {}),
             },
           );
           return recordResult(callId, { tool: "sandbox", action: params.action }, text(JSON.stringify(result)));
@@ -381,7 +396,7 @@ export function computerTools(kit: ToolKit) {
       "watch: wake this conversation as a new turn on new output (optionally only lines matching `pattern`) and once on exit, to keep the user posted on long work; pass since_cursor and `instructions` for your future self. unwatch: disarm by monitor_id. " +
       `Jobs stop after a hard TTL (default ${bgTtlMin} min, max ${bgTtlMaxMin}); anything that finishes within ${execCeilingSec}s should just use execute. ` +
       "To wait for a job, poll with wait_seconds (it returns on new output or exit) or watch it and end your turn; never sleep in execute. " +
-      `The job has the same environment as foreground execute ($AGENT_API_URL, $AGENT_API_TOKEN, $AGENT_CREDENTIAL_TOKEN). ${capabilityExpiry} Connected-app (Composio) calls stop working when the launching turn ends, so keep them in foreground execute. It cannot deliver files; attach them from a live turn.\n` +
+      `The job has the same environment as foreground execute ($AGENT_API_URL, $AGENT_API_TOKEN, $AGENT_CREDENTIAL_TOKEN). ${capabilityExpiry} It cannot deliver files; attach them from a turn instead.\n` +
       "INTERACTIVE LOGINS (`gh auth login` etc., anything printing a URL/code then waiting) must run with background:true: relay the URL/code to the user, then watch or poll until exit; answer prompts with send_input; never run one in the foreground or stop it mid-flight. Read and follow the `interactive-login` skill first.",
     parameters: Type.Object({
       action: Type.Union([
@@ -621,7 +636,7 @@ const operationFields: Record<string, Record<string, string[]>> = {
     status: ["sandbox_id"],
     restart: ["sandbox_id", "memory_gib"],
     list: [],
-    create: ["backend", "name", "memory_gib"],
+    create: ["backend", "name", "memory_gib", "image"],
     set_default: ["sandbox_id"],
     retire: ["sandbox_id"],
   },

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { CoreSession } from "../src/core-bridge.ts";
-import { harness, SESSION, type Harness } from "./deep-link-boot-fixture.ts";
+import { harness, SESSION, settle, type Harness } from "./deep-link-boot-fixture.ts";
 
 test("a share link paints its conversation from the transcript, without waiting for the session list", async () => {
   const h = await harness({ path: "/s/sess-deep" });
@@ -332,7 +332,7 @@ test("saved empty welcome stays an empty chat and doesn't show another starter h
   const h = await harness({ path: "/s/sess-deep", welcome: true });
   try {
     await h.boot();
-    await waitForText(h, /Connect your apps/);
+    await waitForText(h, /Connect your accounts/);
     assert.ok(document.querySelector(".empty-chat qm-onboarding-welcome"));
     assert.equal(document.querySelector(".chat-cta"), null);
   } finally {
@@ -418,6 +418,64 @@ test("opening a title-only search hit opens the chat at its latest messages", as
     await new Promise((resolve) => setTimeout(resolve, 50));
     assert.ok(!h.requests.some((p) => p.includes("beforeSeq=")));
     assert.equal(document.querySelector(".linked-message"), null);
+  } finally {
+    await h.close();
+  }
+});
+
+const markdownFile = (path: string): Response | undefined => {
+  if (path === "/api/files/doc1")
+    return Response.json({ id: "doc1", name: "housing index.md", mimetype: "text/markdown" });
+  if (path.startsWith("/api/files/doc1/content")) return new Response("# Housing index");
+  if (path === "/api/files/pdf1") return Response.json({ id: "pdf1", name: "report.pdf", mimetype: "application/pdf" });
+  return undefined;
+};
+const stubShowModal = (): void => {
+  document.defaultView!.HTMLDialogElement.prototype.showModal = function () {
+    this.open = true;
+  };
+};
+const viewerShows = async (): Promise<string | undefined> => {
+  const shown = () => document.querySelector<HTMLElement & { content?: string }>(".file-viewer qm-markdown")?.content;
+  for (let i = 0; i < 1000 && !shown(); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  return shown();
+};
+
+test("a file link opens that file in the viewer with its Markdown rendered", async () => {
+  const h = await harness({ path: "/files?file=doc1", api: markdownFile });
+  stubShowModal();
+  const booted = h.boot();
+  try {
+    assert.equal(await viewerShows(), "# Housing index");
+    assert.equal(document.querySelector(".file-viewer-head strong")?.textContent, "housing index.md");
+  } finally {
+    h.releaseRemoteSplit();
+    h.releaseSessions();
+    await booted;
+    await h.close();
+  }
+});
+
+test("a file link clicked in a chat previews the file over that chat", async () => {
+  const h = await harness({ path: "/s/sess-deep", api: markdownFile });
+  stubShowModal();
+  const windows: unknown[] = [];
+  const opened = { opener: document.defaultView };
+  document.defaultView!.open = (url) => (windows.push(url), opened as Window);
+  const click = (file: string): boolean => {
+    const link = Object.assign(document.createElement("a"), { href: `/files?file=${file}`, target: "_blank" });
+    document.body.append(link);
+    return !link.dispatchEvent(new document.defaultView!.MouseEvent("click", { bubbles: true, cancelable: true }));
+  };
+  try {
+    await h.boot();
+    assert.equal(click("doc1"), true, "the link must not open the app in another window");
+    assert.equal(await viewerShows(), "# Housing index");
+    assert.equal(click("pdf1"), true);
+    await settle(() => windows.length > 0);
+    assert.deepEqual(windows, ["/api/files/pdf1/content/report.pdf"], "a file with no preview opens on its own");
+    assert.equal(opened.opener, null);
+    assert.equal(h.visibleConversation().state.sessionId, SESSION.id);
   } finally {
     await h.close();
   }

@@ -31,7 +31,7 @@ import {
   sweepUnreadMailWakes,
   wakeForUnreadMail,
 } from "../src/sessions/subagent-mail.ts";
-import { scopeId, type Conversation, type Principal, type ScopeId, type Session } from "../src/types.ts";
+import { scopeId, type Conversation, type Principal, type ScopeId, type Session, personalScope } from "../src/types.ts";
 import type { Monitor } from "../src/triggers/types.ts";
 import type { SessionStore } from "../src/sessions/session-store.ts";
 import type { Run, RunStore } from "../src/runs/run-store.ts";
@@ -3341,7 +3341,7 @@ test("children of a Slack group turn keep its source so external-workspace polic
   }
 });
 
-test("sessions list shows only sidebar sessions the whole audience can see and create needs a live turn", async () => {
+test("sessions list shows only sidebar sessions the whole audience can see, and read-only or bot turns cannot create", async () => {
   const sessions = createPostgresSessionStore(testDatabaseUrl());
   const { runs } = createPostgresRunStore(testDatabaseUrl());
   const started: Array<{ forkOf?: string; text?: string; title?: string; scopeId: ScopeId }> = [];
@@ -3382,13 +3382,11 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
     },
   });
   const forTurn = (
-    liveTurn: boolean,
     opts: { readOnly?: boolean; botActor?: boolean; audience?: Principal[]; surface?: string; memory?: string } = {},
   ) =>
     factory.forTurn({
       session: room,
       scopeId: scope,
-      liveTurn,
       ...(opts.memory ? { memoryContext: { audience: opts.memory } } : {}),
       request: {
         surface: opts.surface ?? "web",
@@ -3399,25 +3397,25 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
         ...(opts.botActor ? { botActor: true } : {}),
       } as Parameters<typeof factory.forTurn>[0]["request"],
     });
-  const live = forTurn(true);
-  const listed = await live.list!();
+  const web = forTurn();
+  const listed = await web.list!();
   assert.ok(listed.ok);
   assert.deepEqual(listed.sessions.map((s) => [s.title, s.current]).sort(), [
     ["peer", false],
     ["room", true],
   ]);
-  const shared = await forTurn(false, { audience: [actor, guest] }).list!();
+  const shared = await forTurn({ audience: [actor, guest] }).list!();
   assert.ok(shared.ok);
   assert.deepEqual(
     shared.sessions.map((s) => s.title),
     ["room"],
   );
-  assert.deepEqual(await live.start!({ fork: false }), {
+  assert.deepEqual(await web.start!({ fork: false }), {
     ok: false,
     message: "new requires `text`: the new session's first message.",
   });
-  assert.equal((await live.start!({ fork: false, text: "hello", title: "fresh" })).ok, true);
-  assert.equal((await live.start!({ fork: true })).ok, true);
+  assert.equal((await web.start!({ fork: false, text: "hello", title: "fresh" })).ok, true);
+  assert.equal((await web.start!({ fork: true })).ok, true);
   assert.deepEqual(started, [
     { scopeId: scope, origin: { kind: "human" }, sessionSenderId: room.id, text: "hello", title: "fresh" },
     { scopeId: scope, origin: { kind: "human" }, sessionSenderId: room.id, forkOf: room.id },
@@ -3427,8 +3425,8 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
   await sessions.addParticipant(child.id, actor.id);
   await sessions.setParentSession(child.id, room.id);
   for (const out of [
-    await live.read({ peer: true, target: child.id }),
-    await live.write({ peer: true, target: child.id, text: "hi" }),
+    await web.read({ peer: true, target: child.id }),
+    await web.write({ peer: true, target: child.id, text: "hi" }),
   ])
     assert.deepEqual(out, {
       ok: false,
@@ -3437,7 +3435,6 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
   const fromChild = factory.forTurn({
     session: child,
     scopeId: scope,
-    liveTurn: true,
     request: {
       surface: "web",
       conversation: { kind: "dm", threadRef: child.threadRef, audience: [actor] },
@@ -3447,28 +3444,32 @@ test("sessions list shows only sidebar sessions the whole audience can see and c
   });
   for (const out of [await fromChild.list!(), await fromChild.start!({ fork: true })])
     assert.equal(out.ok, true, JSON.stringify(out));
-  const cron = forTurn(false, { surface: "cron" });
+  const cron = forTurn({ surface: "cron" });
   assert.equal((await cron.list!()).ok, true);
   assert.equal((await cron.read({ peer: true, target: peer.id })).ok, true);
-  assert.equal((await cron.start!({ fork: true })).ok, false);
-  const slack = forTurn(true, { surface: "slack" });
+  assert.equal((await cron.start!({ fork: true })).ok, true);
+  const slack = forTurn({ surface: "slack" });
   for (const out of [
     await slack.list!(),
     await slack.start!({ fork: true }),
     await slack.read({ peer: true, target: peer.id }),
   ])
     assert.equal(out.ok, true, JSON.stringify(out));
-  for (const blocked of [forTurn(false), forTurn(true, { readOnly: true }), forTurn(true, { botActor: true })]) {
+  for (const blocked of [forTurn({ readOnly: true }), forTurn({ botActor: true })]) {
     const out = await blocked.start!({ fork: true });
     assert.equal(out.ok, false);
   }
-  assert.equal(started.length, 4);
+  assert.equal(started.length, 5);
 });
 
 test("stopping a session tree tells its root who stopped it and its descendants that their parent was stopped", async () => {
   const sent: Array<{ runId: string; signal: unknown }> = [];
-  const root = { id: "root", scopeId: "personal:a", threadRef: "web:root" } as unknown as Session;
-  const child = { id: "child", scopeId: "personal:a", threadRef: "agent:main:subagent:child" } as unknown as Session;
+  const root = { id: "root", scopeId: personalScope("a"), threadRef: "web:root" } as unknown as Session;
+  const child = {
+    id: "child",
+    scopeId: personalScope("a"),
+    threadRef: "agent:main:subagent:child",
+  } as unknown as Session;
   const stopped = await stopSessionTree(
     {
       sessions: { childrenOf: async (id: string) => (id === "root" ? [child] : []) },

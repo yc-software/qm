@@ -273,7 +273,7 @@ export function createTurnMethods(
       const individualAuth = modelAccount !== "company";
       const automated = req.origin?.kind === "automation";
       const runtimePurpose = turnRuntimePurpose(
-        { surface: req.surface, triggered: automated, infrequentCron: req.infrequentCron },
+        { surface: req.surface, automated, infrequentCron: req.infrequentCron },
         isSubagentThreadRef(req.conversation.threadRef),
       );
       const modelRefusal = await turnModelRefusal(deps, req, actor.id, individualAuth, runtimePurpose);
@@ -337,7 +337,7 @@ export function createTurnMethods(
         ...(req.attachments?.length ? { attachments: req.attachments } : {}),
         ...(req.inboundNotes?.length ? { inboundNotes: req.inboundNotes } : {}),
         ...((!individualAuth || req.surface === "web") && req.model ? { model: req.model } : {}),
-        ...turnModelOptions({ ...req, triggered: automated }),
+        ...turnModelOptions({ ...req, automated }),
         ...(req.readOnly ? { readOnly: true } : {}),
         ...(privateRequest
           ? {
@@ -352,7 +352,9 @@ export function createTurnMethods(
         ...(req.cronScript && origin.kind === "automation" ? { cronScript: req.cronScript } : {}),
         ...(req.cronScriptTrial && origin.kind === "automation" ? { cronScriptTrial: true } : {}),
         ...(req.infrequentCron && origin.kind === "automation" ? { infrequentCron: true } : {}),
-        ...(req.personaId && origin.kind === "automation" && req.surface === "cron"
+        ...(req.personaId &&
+        ((origin.kind === "automation" && req.surface === "cron") ||
+          (req.surface === "slack" && req.surfaceOrigin?.author.account === `persona:${req.personaId}`))
           ? { personaId: req.personaId }
           : {}),
         ...(req.botActor ? { botActor: true } : {}),
@@ -367,6 +369,9 @@ export function createTurnMethods(
         ...(typeof req.turnWallClockMs === "number" ? { turnWallClockMs: req.turnWallClockMs } : {}),
         ...(typeof req.timezone === "string" && req.timezone ? { timezone: req.timezone } : {}),
         ...(req.approval ? { approval: req.approval } : {}),
+        ...(req.declinePendingApprovals && !req.approval && origin.kind === "human"
+          ? { declinePendingApprovals: true }
+          : {}),
         ...(sessionParticipantIds ? { sessionParticipantIds } : {}),
         ...(project ? { scopeVersion: project.version } : {}),
       };

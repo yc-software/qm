@@ -12,7 +12,6 @@ import { withActor, type ApiCtx, type Route } from "./route.ts";
 import {
   requireLoopAuthority,
   loadAdministrable,
-  loopDeps,
   actingPrincipal,
   forInboxLoopsPeople,
   inboxPreviewEnabled,
@@ -139,7 +138,7 @@ async function ingestItems(ctx: ApiCtx): Promise<void> {
     return sendJson(ctx.res, 400, { error: "bad_request", message: `at most ${MAX_ITEMS_PER_INGEST} items per call` });
   }
   const sessionId = ctx.capability.threadRef
-    ? ((await ctx.deps.sessions?.getByThread(ctx.capability.threadRef))?.id ?? undefined)
+    ? ((await ctx.deps.sessions.getByThread(ctx.capability.threadRef))?.id ?? undefined)
     : undefined;
   const entries: IngestEntryInput[] = [];
   for (const [at, raw] of body.items.entries()) {
@@ -157,7 +156,6 @@ async function loadItem(ctx: ApiCtx): Promise<{
   loop: Loop;
   item: LoopItem;
   actorId: string;
-  liveHuman: () => Promise<boolean>;
 } | null> {
   const loaded = await loadAdministrable(ctx);
   if (!loaded) return null;
@@ -172,7 +170,6 @@ async function loadItem(ctx: ApiCtx): Promise<{
     loop: loaded.loop,
     item,
     actorId: loaded.acting.actorId,
-    liveHuman: loaded.acting.liveHuman,
   };
 }
 
@@ -215,7 +212,7 @@ async function serveItemImage(ctx: ApiCtx): Promise<void> {
   const slackHosted = host === "slack.com" || host.endsWith(".slack.com");
   let authHeader: Record<string, string> = {};
   if (slackHosted) {
-    const tokens = ctx.deps.loopSourceTokens;
+    const tokens = ctx.deps.keychain;
     const token = tokens
       ? ((await tokens.connectorAccessToken("slack.com", loop.owner, "personal")) ??
         (await tokens.connectorAccessToken("slack.com", loop.owner)))
@@ -317,8 +314,6 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
   }
 
   if (kind === "prioritize" || kind === "ungroup") {
-    if (ctx.capability)
-      return sendJson(ctx.res, 403, { error: "forbidden", message: "only a person can override triage" });
     const priority = LOOP_ITEM_PRIORITIES.find((value) => value === args.priority);
     if (kind === "prioritize" && !priority)
       return sendJson(ctx.res, 400, { error: "bad_request", message: "priority must be urgent, high, normal, or low" });
@@ -373,7 +368,7 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
         error: "forbidden",
         message: `a Slack bot's turn cannot ${kind} as the loop's owner`,
       });
-    const tokens = ctx.deps.loopSourceTokens;
+    const tokens = ctx.deps.keychain;
     if (!tokens) return sendJson(ctx.res, 404, { error: "not_found", message: "connectors are not wired" });
     const decisionToken = await deps.items.acquireDecision(item.id);
     if (!decisionToken)
@@ -384,9 +379,8 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
         return sendJson(ctx.res, 409, { error: "already_actioned", message: "this item was already actioned" });
       if (current.proposal?.at !== item.proposal?.at) return draftChanged();
       item = current;
-      const slackClient = ctx.deps.loopSlackClient;
       const result = await adapter.act(
-        { owner: loop.owner, actor: proposalAuthor, tokens, ...(slackClient ? { slackClient } : {}) },
+        { owner: loop.owner, actor: proposalAuthor, tokens, slackClient: ctx.deps.loopSlackClient },
         item,
         kind,
         args,
@@ -405,7 +399,6 @@ async function actOnItem(ctx: ApiCtx): Promise<void> {
     }
   }
 
-  if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   if (!(await requireLoopAuthority(ctx, deps, loop))) return;
   if (!(await ownerInstructs(ctx, loop, loaded.actorId))) return;
   const turn = await deps.fire.itemAction(loop, item, kind, args);
@@ -464,7 +457,6 @@ async function followUpOnItem(ctx: ApiCtx): Promise<void> {
       message: "the draft changed; review it before continuing",
     });
   }
-  if (!deps.fire) return sendJson(ctx.res, 404, { error: "not_found", message: "loop firing is not wired" });
   if (!(await ownerInstructs(ctx, loop, loaded.actorId))) return;
   try {
     const next = await deps.fire.followUp(
@@ -496,8 +488,7 @@ export function cronSummary(cron: Cron | null): {
 }
 
 async function getInboxLoop(ctx: ApiCtx): Promise<void> {
-  const deps = loopDeps(ctx);
-  if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
+  const deps = ctx.deps.loops;
   const acting = actingPrincipal(ctx);
   if (!acting) return;
   const loop =
@@ -511,8 +502,7 @@ async function getInboxLoop(ctx: ApiCtx): Promise<void> {
 export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
   const owner = ctx.actor?.p;
   if (!owner) return sendJson(ctx.res, 403, { error: "forbidden" });
-  const deps = loopDeps(ctx);
-  if (!deps) return sendJson(ctx.res, 404, { error: "not_found" });
+  const deps = ctx.deps.loops;
   const body = isObj(ctx.body) ? ctx.body : {};
   const threadId = typeof body.threadId === "string" ? body.threadId.trim() : "";
   if (!threadId || threadId.length > 200 || jsonSize(body) > MAX_SOURCE_PAYLOAD_BYTES)
@@ -564,8 +554,7 @@ export async function ensureSentChat(ctx: ApiCtx): Promise<void> {
 }
 
 async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
-  const deps = loopDeps(ctx);
-  if (!deps) return sendJson(ctx.res, 404, { error: "not_found", message: "loops are not wired on this deployment" });
+  const deps = ctx.deps.loops;
   const acting = actingPrincipal(ctx);
   if (!acting) return;
   if (!(await inboxPreviewEnabled(ctx.deps, acting.actorId)))
@@ -623,7 +612,7 @@ async function ensureInboxSyncCron(ctx: ApiCtx): Promise<void> {
 
 function serializeItemAction(handler: (ctx: ApiCtx) => Promise<void>): (ctx: ApiCtx) => Promise<void> {
   return (ctx) => {
-    const lock = loopDeps(ctx)?.lock;
+    const lock = ctx.deps.loops.lock;
     return lock && !ctx.capability
       ? lock.withLock(`loop-lifecycle:${ctx.params.id ?? ""}`, () => handler(ctx))
       : handler(ctx);

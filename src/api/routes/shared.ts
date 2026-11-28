@@ -13,7 +13,7 @@ import type { Tenant } from "../../tenants/context.ts";
 import { headerValue, refuseWithoutPerson, sendJson } from "../http.ts";
 import { currentModelRequestContext } from "../../model/request-context.ts";
 import { constantTimeEqual } from "../../util/crypto.ts";
-import { internalPerson } from "../artifact-share.ts";
+import { carriesPersonAuthority } from "../artifact-share.ts";
 
 export const orgScope = (_deps?: unknown): string => configOrgScope();
 
@@ -43,33 +43,7 @@ export function audit(
   e: Omit<AuditEvent, "at" | "impersonatedBy">,
 ): void {
   const impersonatedBy = ctx.actor?.imp;
-  ctx.deps.auditLog?.record(tenantOf(ctx), { at: Date.now(), ...e, ...(impersonatedBy ? { impersonatedBy } : {}) });
-}
-
-export async function runIsActive(ctx: Pick<ApiCtx, "deps" | "capability">): Promise<boolean> {
-  const cap = ctx.capability;
-  if (!cap) return true;
-  const run = cap.runId ? await ctx.deps.runs?.get(cap.runId) : null;
-  return (
-    !!run &&
-    run.status === "running" &&
-    !!cap.runLeaseToken &&
-    run.leaseToken === cap.runLeaseToken &&
-    run.attempts === cap.runAttempt &&
-    run.sessionId === cap.threadRef &&
-    samePerson(run.request.actor.id, cap.actorId) &&
-    (run.leaseExpiresAt ?? 0) > Date.now()
-  );
-}
-
-export async function activeRun(ctx: ApiCtx): Promise<boolean> {
-  if (await runIsActive(ctx)) return true;
-  sendJson(ctx.res, 403, {
-    error: "inactive_run",
-    message:
-      "This call needs the current token of a running turn: the turn that issued this token is no longer running, or the token belongs to another run. A background job or script that outlives its turn loses this access; make the call from a foreground command while the turn is running.",
-  });
-  return false;
+  ctx.deps.auditLog.record(tenantOf(ctx), { at: Date.now(), ...e, ...(impersonatedBy ? { impersonatedBy } : {}) });
 }
 
 export function resolveSelfRead(
@@ -94,8 +68,8 @@ export function resolveSelfRead(
   return { principalId, ...audience };
 }
 
-export function livePersonTurn(ctx: Pick<ApiCtx, "capability" | "res">): boolean {
-  if (!ctx.capability || internalPerson(ctx.capability)) return true;
+export function requirePersonAuthority(ctx: Pick<ApiCtx, "capability" | "res">): boolean {
+  if (!ctx.capability || carriesPersonAuthority(ctx.capability)) return true;
   refuseWithoutPerson(ctx.res);
   return false;
 }
@@ -103,8 +77,8 @@ export function livePersonTurn(ctx: Pick<ApiCtx, "capability" | "res">): boolean
 function rawAdminActor(ctx: Pick<ApiCtx, "req" | "deps" | "capability" | "actor">): Principal | null {
   if (ctx.capability) return { id: ctx.capability.actorId, type: "internal" };
   if (ctx.actor)
-    return ctx.deps.admin?.resolveActor(`${ctx.actor.p}@${configOrgId()}`) ?? { id: ctx.actor.p, type: "internal" };
-  return ctx.deps.admin?.resolveActor(headerValue(ctx.req, "x-admin-actor")) ?? null;
+    return ctx.deps.admin.resolveActor(`${ctx.actor.p}@${configOrgId()}`) ?? { id: ctx.actor.p, type: "internal" };
+  return ctx.deps.admin.resolveActor(headerValue(ctx.req, "x-admin-actor")) ?? null;
 }
 
 export function adminActorFrom(ctx: Pick<ApiCtx, "req" | "deps" | "capability" | "actor">): Principal | null {
@@ -119,11 +93,16 @@ export async function adminStanding(
 ): Promise<"inactive" | "org_admin" | "owner" | "member"> {
   const id = canonicalPerson(principalId);
   if (!(await activePrincipal(deps, id))) return "inactive";
-  return adminStatusFromGrants((await deps.admin?.listGrants(tenant)) ?? [], id).role ?? "member";
+  return adminStatusFromGrants(await deps.admin.listGrants(tenant), id).role ?? "member";
 }
 
 export interface AuthorizedAdmin extends Principal {
   role: AdminRole;
+}
+
+export async function isOrgAdmin(ctx: Pick<ApiCtx, "deps" | "tenant">, principalId: string): Promise<boolean> {
+  const standing = await adminStanding(ctx.deps, tenantOf(ctx), principalId);
+  return standing === "org_admin" || standing === "owner";
 }
 
 export async function authorizeAdmin(
@@ -131,10 +110,6 @@ export async function authorizeAdmin(
   scope: string,
 ): Promise<AuthorizedAdmin | null> {
   const { res, deps } = ctx;
-  if (!deps.admin) {
-    sendJson(res, 404, { error: "not_found" });
-    return null;
-  }
   const actor = adminActorFrom(ctx);
   const standing = actor ? await adminStanding(deps, tenantOf(ctx), actor.id) : "member";
   if (standing === "inactive") {
@@ -155,7 +130,6 @@ export async function authorizeAdmin(
 }
 
 export async function activePrincipal(deps: ServerDeps, principalId: string): Promise<boolean> {
-  if (!deps.identity) return true;
   await deps.identity.refresh();
   return deps.identity.classify(principalId).type === "internal";
 }
@@ -187,12 +161,12 @@ export async function verifiedConversationSpeaker(
   if (ctx.capability?.runId) {
     const own = await runs.get(ctx.capability.runId);
     if (!own || own.sessionId !== threadRef || isTerminal(own.status)) {
-      return { error: "no live turn to verify the speaker against" };
+      return { error: "no turn in flight to verify the speaker against" };
     }
     turnRuns = [own];
   } else {
     turnRuns = await runs.inFlightForThread(threadRef);
-    if (!turnRuns.length) return { error: "no live turn to verify the speaker against" };
+    if (!turnRuns.length) return { error: "no turn in flight to verify the speaker against" };
   }
   const spoke = turnRuns.map((run) => run.request.actor.id);
   for (const run of turnRuns) {

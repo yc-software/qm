@@ -55,6 +55,8 @@ import { slackMessageContent } from "./message-content.ts";
 import type { AckEmojiPicker } from "./ack-emoji.ts";
 import { slackSurfaceOrigin } from "../surfaces/slack/adapter.ts";
 import { type SlackConversationKind, conversationPlaceLabel } from "./messaging.ts";
+import { personalScope } from "../types.ts";
+import type { SlackStatusCard } from "./session-status.ts";
 
 interface Incoming {
   kind: "dm" | "channel";
@@ -115,11 +117,13 @@ function channelLocation(
 
 export function createTurnHandler(deps: {
   accountId?: string;
+  personaId?: string;
   externalAccess?: ExternalSlackAccess;
   continuePrivate?: (runId: string, task: string) => Promise<void>;
   rateLimitNotice?: SlackRateLimitNotice;
   onEngaged?: (runId: string, channel: string, threadTs?: string) => void;
   onSettled?: () => void;
+  card?: (channel: string, threadTs: string) => Pick<SlackStatusCard, "posted"> | undefined;
   core: SlackCoreClient;
   flow: TurnFlow;
   directory: Directory;
@@ -194,6 +198,7 @@ export function createTurnHandler(deps: {
       (classified.actor.isExternalGuest || classified.actor.isBot || !inc.userId || inc.synthetic)
     )
       return;
+    if (deps.personaId && inc.unprompted) return;
     if (deps.externalAccess && inc.unprompted) inc = { ...inc, unprompted: false };
     if (deps.allowActor && !deps.allowActor(classified.actor)) return;
     const actor = botAuthoredActor(classified.actor, inc, ids.identityMode);
@@ -223,7 +228,7 @@ export function createTurnHandler(deps: {
       if (deps.externalAccess) threadRef = `slack-account:${ids.ownTeamId}:${threadRef}`;
       replyThreadTs = inc.threadTs;
       if (!actor.isBot && !actor.isExternalGuest)
-        deps.ensureHeader?.(client, inc.channel, `personal:${actor.externalId}`, "dm");
+        deps.ensureHeader?.(client, inc.channel, personalScope(actor.externalId), "dm");
     } else {
       channelRef = inc.channel;
       channelObservedAt = Date.now();
@@ -250,8 +255,10 @@ export function createTurnHandler(deps: {
       threadTs: replyThreadTs,
       reactable: () => allowedTs,
       ...(deps.webUiPublicUrl ? { webUiPublicUrl: deps.webUiPublicUrl } : {}),
+      ...(core.readSurfaceMessages ? { readSurfaceMessages: core.readSurfaceMessages.bind(core) } : {}),
       ...(deps.onEngaged ? { onEngaged: deps.onEngaged } : {}),
       ...(deps.onSettled ? { onSettled: deps.onSettled } : {}),
+      ...(deps.card ? { card: deps.card } : {}),
     });
 
     if (inc.kind === "channel") {
@@ -329,6 +336,8 @@ export function createTurnHandler(deps: {
       let overheard: OverheardMessage[] | undefined;
       let detectContext: string | undefined;
       let detectOpener: string | undefined;
+      let threadFiles: SlackFile[] = [];
+      let nameById: ReadonlyMap<string, string> | undefined;
       if (inc.kind === "channel" || (inc.kind === "dm" && inc.threadTs)) {
         const serialize = () =>
           serializer.serializeSlackConversation(client, inc, {
@@ -353,9 +362,13 @@ export function createTurnHandler(deps: {
         if (rendered.detectContext) detectContext = rendered.detectContext;
         if (rendered.detectOpener) detectOpener = rendered.detectOpener;
         allowedTs = rendered.allowedTs;
+        threadFiles = serialized.threadFiles ?? [];
+        nameById = serialized.view.nameById;
       }
 
-      const ownFiles = inc.files.map((f) => (f.user || !inc.userId ? f : { ...f, user: inc.userId }));
+      const ownFiles = [...inc.files, ...threadFiles].map((f) =>
+        f.user || !inc.userId ? f : { ...f, user: inc.userId },
+      );
       const { attachments, issues } = await stageSlackFiles(client, ownFiles, {
         token: deps.botToken,
         where: { account: ids.ownTeamId, chat: inc.channel },
@@ -397,8 +410,9 @@ export function createTurnHandler(deps: {
           const candidates = deliveryCandidatesFor(conversationKind, inc.channel, replyThreadTs, channelName);
           return candidates ? { deliveryCandidates: candidates } : {};
         })(),
-        text,
+        text: resolveMentions(text, nameById),
         gatewayContext,
+        ...(deps.personaId ? { personaId: deps.personaId } : {}),
         ...(actor.isBot ? { botActor: true } : {}),
         ...(conversationHeader ? { conversationHeader } : {}),
         ...(priorTurns ? { priorTurns } : {}),

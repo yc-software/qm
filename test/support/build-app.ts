@@ -1,11 +1,11 @@
 import { after, afterEach, beforeEach } from "node:test";
 import type { Config } from "../../src/config.ts";
 import type { Agent, ScreenSecurityInput } from "../../src/agent/agent.ts";
-import { buildApp as buildProductionApp, type BuiltApp } from "../../src/wiring.ts";
+import { buildApp as buildProductionApp, type Core } from "../../src/wiring.ts";
 import { createMockAgent } from "./mock-agent.ts";
 
-const built: BuiltApp[] = [];
-const runningTests = new Map<object, BuiltApp[]>();
+const built: Core[] = [];
+const runningTests = new Map<object, Core[]>();
 const isTopLevel = (t: { name: string; fullName: string }) => t.fullName === t.name;
 beforeEach((t) => {
   if (isTopLevel(t)) runningTests.set(t, []);
@@ -17,7 +17,54 @@ afterEach(async (t) => {
 });
 after(() => Promise.all(built.splice(0).map((app) => app.runtime.stop())));
 
-export function stopAtEnd(app: BuiltApp): BuiltApp {
+const none = async () => undefined;
+const empty = async () => [];
+
+const absentServices = {
+  identity: {
+    refresh: none,
+    classify: (id: string) => ({ id, type: "internal" }),
+    isInternal: (p: { type: string }) => p.type === "internal",
+    deactivationSource: () => undefined,
+  },
+  auditLog: { record: () => {} },
+  credentialUsage: { record: () => {} },
+  featureFlags: { enabled: async () => false },
+  mcpServers: { list: empty },
+  mcpToolService: { appConnections: empty },
+  loopIngress: { list: empty },
+  slackInstallation: { get: none },
+  slackAccounts: { get: none },
+  connectorTokens: { connectorDerivedAuth: none },
+} as unknown as Partial<Core>;
+
+export function testCore(core = {} as Core): Core {
+  return {
+    ...absentServices,
+    ...core,
+    signingSecret: undefined,
+    capabilitySecret: undefined,
+    portalIdentitySecret: undefined,
+    requireSignedPortalIdentity: undefined,
+    spendExportToken: undefined,
+    deploymentControlSecret: undefined,
+    deploymentLiveSmoke: undefined,
+    portalUrl: undefined,
+    publicUrl: undefined,
+    apiBaseUrl: undefined,
+    brandingDefault: undefined,
+    companySubscriptionAuth: undefined,
+    emailAuthPrincipals: undefined,
+    emailAuthDomain: undefined,
+    slackAllowFrom: undefined,
+    deployGateSecret: undefined,
+    deployAppsSessionSecret: undefined,
+    deployAppsLoginUrl: undefined,
+    deployAppsLoginPath: undefined,
+  };
+}
+
+export function stopAtEnd(app: Core): Core {
   const [owner, ...others] = runningTests.values();
   (owner && !others.length ? owner : built).push(app);
   return app;
@@ -48,7 +95,7 @@ function recordingModelCalls(agent: Agent, calls: ModelCall[]): Agent {
 export function buildApp(
   config: Config,
   overrides: Parameters<typeof buildProductionApp>[1] = {},
-): BuiltApp & { modelCalls: ModelCall[] } {
+): Core & { modelCalls: ModelCall[] } {
   const modelCalls: ModelCall[] = [];
   let testStartedWorkers = false;
   let waiting = 0;

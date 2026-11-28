@@ -102,7 +102,7 @@ Deployment-specific safety belongs here too. For example, an ambiently authentic
 
 ## Delivery and pins
 
-When `sandbox/` exists, every `up` sends its descriptors and complete text skill trees to source-authenticated `PUT /v1/deployment-layer`. Without `sandbox/`, `up` skips layer sync and leaves the deployed layer unchanged. Core validates submitted bundles again, stores them in Postgres table `deployment_layer`, versions them by a canonical SHA-256 content hash, records an audit event, hydrates them before serving, and returns the restorable bundle with its metadata and resolved runtime state from source-authenticated `GET /v1/deployment-layer`. Removed layer-owned skills are archived. Filesystem `DEPLOYMENT_LAYER` remains a bootstrap input for local and recovery use.
+When `sandbox/` exists, every `up` sends its descriptors and complete text skill trees to source-authenticated `PUT /v1/deployment-layer`. Without `sandbox/`, `up` skips layer sync and leaves the deployed layer unchanged. Core validates submitted bundles again, stores them in Postgres table `deployment_layer`, versions them by a canonical SHA-256 content hash, records an audit event, loads them into the deployment's shared skill catalog before serving and on every core when they change, and returns the restorable bundle with its metadata and resolved runtime state from source-authenticated `GET /v1/deployment-layer`. Every tenant reads layer-owned skills from that catalog, so a removed skill disappears everywhere at once; a tenant keeps its own rows only for skills it edited or archived. Filesystem `DEPLOYMENT_LAYER` remains a bootstrap input for local and recovery use.
 
 The sandbox handoff is a layer content hash. Sprites boxes boot the platform's stock image; the layer's tool descriptors and skills arrive through the deployment-layer sync. AWS with `sandbox.backend: "aws"` (or no sandbox block) uses `infra build-image` to package the guest agent as a Lambda MicroVM image and records its immutable image version and execution role. Service task definitions use immutable pins, not mutable tags.
 
@@ -168,13 +168,19 @@ same `credential`, `url`, `method`, `headers`, and string `body` fields the agen
 credential broker accepts. Keep the token on the server; it authorizes calls as the
 immutable publisher, not the person viewing the app.
 
-Every enabled broker-delivery credential is available to published apps by default; an
-administrator switches a credential off for apps without affecting agent turns. The
-token is long-lived and names the app, so the broker refuses a credential whose switch
-was flipped after the app shipped and the audit row records which app called. Disabling
-the credential revokes access on the next call. The token is minted at deploy time from
-the credentials switched on at that moment, so a credential added later reaches an app
-on its next deploy.
+An app may borrow an enabled broker-delivery credential that is granted to its whole
+audience: the publisher, the app's home, the channel or team it was created in (whose
+writers can push new code to it), and everyone it is shared with. A credential granted
+org-wide qualifies for every app. A narrower grant qualifies only when one grantee covers
+that whole audience: the grantee is the home, creation scope or share itself, or a team
+every shared person belongs to. A public app borrows only org-wide credentials. An administrator
+switches a credential off for apps without affecting agent turns. The token is long-lived
+and names the app, so on every call the broker refuses a credential whose switch was
+flipped after the app shipped, or whose grant no longer covers the app because it was
+shared further, made public or moved, and the audit row records which app called.
+Disabling the credential revokes access on the next call. The token is minted at deploy
+time from the credentials the app qualifies for at that moment, so a credential granted
+later reaches an app on its next deploy.
 
 The destination host, HTTP methods, and paths remain constrained by the credential
 record. If its injection configuration enables actor attestation, the broker sets
@@ -187,7 +193,7 @@ A publisher can let their app call any of their connected apps (mail, calendar, 
 files, and so on) as them, the same way apps use org credentials through the broker.
 Nothing is lent by default. The publisher opts in per app and per connected-app host with
 `POST /v1/apps/:id/connectors` and `{"connectors": ["<host>", ...]}`; `[]`
-withdraws. Only the publisher may call it, from a live turn or a signed-in session, and
+withdraws. Only the publisher may call it; an agent's call raises an approval card to them, and
 sharing the app (`POST /v1/shares/deploy/:id`, or `POST /v1/share` for a deploy) takes the
 same: an app's sharees reach the connectors it borrows. Public
 apps cannot borrow connectors, and an app that borrows them cannot be made public. When

@@ -9,7 +9,7 @@ import { McpCallError, type McpClient } from "../src/mcp/mcp-client.ts";
 import { createMcpMemoryProvider } from "../src/memory/mcp-memory-provider.ts";
 import { TimeoutError } from "../src/util/async.ts";
 import { reportEnvelope } from "../src/memory/provider-outcome.ts";
-import { scopeId, type ScopeId } from "../src/types.ts";
+import { parseScopeId, scopeId, type ScopeId, personalScope } from "../src/types.ts";
 import type { Sandbox, SandboxHandle } from "../src/sandbox/sandbox.ts";
 import { createPostgresMemoryService } from "../src/memory/postgres-memory-service.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
@@ -38,7 +38,7 @@ function ctxFor(opts: {
     grantedHandles: [],
     deploy: {} as never,
     acl: {} as never,
-    createdBy: opts.scope.split(":")[1] ?? opts.scope,
+    createdBy: parseScopeId(opts.scope).ref ?? opts.scope,
     memory: opts.memory,
     memoryScopeId: opts.memoryScopeId ?? opts.scope,
     memoryAccess: { write: opts.memoryScopeId ?? opts.scope, read: [opts.memoryScopeId ?? opts.scope] },
@@ -262,8 +262,8 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
     (await ctx.memoryRead(org)) ?? "",
     /### org:default-org\n```untrusted-data\n#2 \(2026-05-31\) deploys are frozen in December/,
   );
-  assert.equal(await ctx.memoryRead("personal:someone-else"), null);
-  assert.equal(await ctx.memorySearch("deploys", 20, "personal:someone-else"), null);
+  assert.equal(await ctx.memoryRead(personalScope("someone-else")), null);
+  assert.equal(await ctx.memorySearch("deploys", 20, personalScope("someone-else")), null);
   assert.deepEqual((await ctx.memorySearch("deploys", 20, org))?.hits, [
     `[${org}] #2 (2026-05-31) deploys are frozen in December`,
   ]);
@@ -271,7 +271,7 @@ test("memorySearch spans every readable notebook, tagging hits when more than on
     (t) => t.name === "memory",
   );
   assert.match(textOf(await call(tool, { action: "read", scope: org })), /December/);
-  assert.match(textOf(await call(tool, { action: "read", scope: "personal:someone-else" })), /isn't available/);
+  assert.match(textOf(await call(tool, { action: "read", scope: personalScope("someone-else") })), /isn't available/);
   assert.match(
     textOf(await call(tool, { action: "add", scope: org, facts: [{ text: "stolen" }] })),
     /scope is only allowed/,
@@ -294,7 +294,7 @@ test("explicit capture uses the conversation origin rather than the notebook des
     context = metadata;
     return capture(scope, facts, at, author, metadata);
   };
-  const tool = ctxFor({ scope: "group:origin", memoryScopeId: "personal:alice", memory });
+  const tool = ctxFor({ scope: "group:origin", memoryScopeId: personalScope("alice"), memory });
   assert.equal((await tool.memoryAdd(["synthetic fact"]))?.added, 1);
   assert.equal(context?.conversationScopeId, "group:origin");
 });
@@ -416,7 +416,7 @@ test("the `memory` tool quotes what it reads", async () => {
   );
 });
 
-test("the memory tool forgets notebook ids and brain refs in one call, a brain ref only on a turn the person sent in their own DM", async () => {
+test("the memory tool forgets notebook ids and brain refs in one call; a brain ref needs a sign-off and the person's own DM", async () => {
   const notebook = createPostgresMemoryService(testDatabaseUrl());
   const personal = scopeId("personal", "U1");
   await notebook.capture(personal, ["Alice drinks rooibos.", "Alice sits at desk 4B."], at);
@@ -459,7 +459,13 @@ test("the memory tool forgets notebook ids and brain refs in one call, a brain r
     const current = ctxFor({
       scope: personal,
       memory: memory as ReturnType<typeof createPostgresMemoryService>,
-      deps: { sessionId: "s1", audienceScopeId: personal, personTurn: true, ...deps },
+      deps: {
+        sessionId: "s1",
+        audienceScopeId: personal,
+        personAuthority: true,
+        authorizeCommand: () => true,
+        ...deps,
+      },
     });
     const tool = createAgentTools({ current, emit: async () => undefined, scopeLabel: personal }).find(
       (t) => t.name === "memory",
@@ -468,10 +474,14 @@ test("the memory tool forgets notebook ids and brain refs in one call, a brain r
   };
   const forgets = () => calls.filter(({ tool }) => tool === "forget_fact").map(({ args }) => args.id);
 
-  for (const deps of [{ audienceScopeId: scopeId("channel", "C1") }, { personTurn: false }])
+  assert.match(
+    await run({ action: "delete", ids: ["#1", "acme:7"] }, { authorizeCommand: () => false }),
+    /^\[blocked: needs human approval\] needs your sign-off/,
+  );
+  for (const deps of [{ audienceScopeId: scopeId("channel", "C1") }, { personAuthority: false }])
     assert.match(
       await run({ action: "delete", ids: ["#1", "acme:7"] }, deps),
-      /^\[error\] Only the person, on a turn they sent in their own DM/,
+      /^\[error\] Only the person, in their own DM with QM, can forget a brain fact/,
     );
   assert.match(await run({ action: "delete", ids: ["default:1"] }), /^\[error\] Memory provider default doesn't serve/);
   assert.match(await run({ action: "delete", ids: ["#9", "acme:7"] }), /^\[error\] No fact #9 /);

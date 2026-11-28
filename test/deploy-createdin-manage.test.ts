@@ -22,6 +22,7 @@ import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-dat
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { testCore } from "./support/build-app.ts";
 
 const SECRET = "deploy-createdin-secret".repeat(3);
 const CH = "CBUILT";
@@ -55,6 +56,7 @@ async function fixture() {
     identity: createIdentityService(testMap(), { externalMembers: testMap() }),
   } as unknown as Parameters<typeof createApp>[0]);
   const server: Server = createServer(app, {
+    ...testCore(),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
   });
@@ -78,7 +80,7 @@ const capFor = (actorId: string) =>
       scopeId: scopeId("personal", actorId),
       aud: CONTROL_PLANE_AUD,
       internalAudience: true,
-      liveActor: true,
+      personAuthority: true,
       exp: Date.now() + CAPABILITY_TTL_MS,
     },
     SECRET,
@@ -358,7 +360,7 @@ test("a Slack bot's turn in the creation channel gets neither git write nor mana
           scopeId: scopeId("channel", CH),
           aud: CONTROL_PLANE_AUD,
           internalAudience: true,
-          liveActor: true,
+          personAuthority: true,
           botActor: true,
           exp: Date.now() + CAPABILITY_TTL_MS,
         },
@@ -426,7 +428,10 @@ test("bot work that runs as a shared system actor cannot republish, open up or s
       name: "ambient-app",
     });
     await assert.rejects(republish, /not authorized/);
-    await assert.rejects(f.deploy.setAppPublic(own.id, true, { ...asBot, personAtKeyboard: true }), /only the owner/);
+    await assert.rejects(
+      f.deploy.setAppPublic(own.id, true, { ...asBot, signOff: async () => true }),
+      /only the owner/,
+    );
     await assert.rejects(f.deploy.shareApp(own.id, scopeId("personal", "U2"), "read", asBot), /only the owner/);
     assert.equal((await f.deploy.getApp(own.id))?.currentVersion, own.currentVersion);
     assert.deepEqual(await f.deploy.appGrantees(own.id), []);

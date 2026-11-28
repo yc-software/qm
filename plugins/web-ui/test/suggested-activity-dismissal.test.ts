@@ -114,6 +114,7 @@ test("each dismissal is saved at once, and a burst of dismissals asks for one re
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const me = {
     user: "tester",
+    personalScope: "personal:tester",
     org: "test",
     suggestedActivitiesGeneration: true,
     suggestedActivities: ["a", "b", "c", "d", "e"].map(activity),
@@ -159,7 +160,13 @@ test("a poll that was already in flight cannot bring back a suggestion dismissed
   served = ["a", "b", "c"].map(activity);
   let release = () => {};
   hold = new Promise((resolve) => (release = resolve));
-  const me = { user: "tester", org: "test", suggestedActivitiesGeneration: true, suggestedActivities: served };
+  const me = {
+    user: "tester",
+    personalScope: "personal:tester",
+    org: "test",
+    suggestedActivitiesGeneration: true,
+    suggestedActivities: served,
+  };
   const loading = loadGeneratedActivities(me);
   await flush();
   dismissGeneratedActivity(me, activity("a"), () => {});
@@ -188,7 +195,13 @@ test("every request of a refresh asks again, so dismissals made during a running
   requests.length = 0;
   served = ["x", "y", "z"].map(activity);
   pendingResponses = 1;
-  const me = { user: "tester", org: "test", suggestedActivitiesGeneration: true, suggestedActivities: served };
+  const me = {
+    user: "tester",
+    personalScope: "personal:tester",
+    org: "test",
+    suggestedActivitiesGeneration: true,
+    suggestedActivities: served,
+  };
   const loading = loadGeneratedActivities(me, () => {}, true);
   await flush();
   t.mock.timers.tick(10_000);
@@ -204,7 +217,13 @@ test("a refresh loop waiting between polls stops when another dismissal starts t
   requests.length = 0;
   served = ["x", "y", "z"].map(activity);
   pendingResponses = 1;
-  const me = { user: "tester", org: "test", suggestedActivitiesGeneration: true, suggestedActivities: served };
+  const me = {
+    user: "tester",
+    personalScope: "personal:tester",
+    org: "test",
+    suggestedActivitiesGeneration: true,
+    suggestedActivities: served,
+  };
   const loading = loadGeneratedActivities(me, () => {}, true);
   await flush();
   dismissGeneratedActivity(me, activity("x"), () => {});

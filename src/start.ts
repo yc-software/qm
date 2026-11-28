@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { once } from "node:events";
 import type { Config } from "./config.ts";
-import { buildApp, serverDeps } from "./wiring.ts";
+import { buildApp } from "./wiring.ts";
 import { createServer } from "./api/server.ts";
 import { dockerDaemonFailure } from "./deploy/docker-deploy-provider.ts";
 import { errMessage, reportFailureAs, swallowAs } from "./util/errors.ts";
@@ -13,7 +13,7 @@ import { createSlackRuntimeReconciler } from "./surfaces/slack-runtime.ts";
 import { createTenantSlackRuntimes } from "./surfaces/slack-tenants.ts";
 import type { SlackPluginConfig } from "./slack/config.ts";
 import { cronQueueMisconfigured, installCronQueue } from "./cron/job-queue.ts";
-import { migrateRegisteredPgSchemas } from "./persistence/pg-pool.ts";
+import { migrateDatabase } from "./persistence/pg-pool.ts";
 import { bindBootTenant, inBootTenant, readBootTenant } from "./tenants/boot.ts";
 import { loadTenant, perTenant } from "./tenants/cache.ts";
 import { sessionLifetime } from "../plugins/portal/src/session.ts";
@@ -58,14 +58,13 @@ export async function startQm(
   { env = {}, ...overrides }: Parameters<typeof buildApp>[1] & { env?: NodeJS.ProcessEnv } = {},
 ) {
   const built = buildApp(config, overrides);
-  await migrateRegisteredPgSchemas(config.databaseUrl);
+  if (config.databaseUrl) await migrateDatabase(config.databaseUrl);
   if (config.databaseUrl)
     await installCronQueue(config.databaseUrl).catch((error: unknown) => {
       if (!cronQueueMisconfigured(error)) throw error;
       console.error(`[scheduler] misconfiguration: could not install the cron job queue: ${errMessage(error)}`);
     });
   const tenant = await bindBootTenant(() => readBootTenant(config.databaseUrl!));
-  if (config.backgroundWorkEnabled) await inBootTenant(tenant, () => built.ownSharedState());
   const slackConfig = slackPluginConfigFromEnv(env);
   let slackEnvironmentState: "absent" | "configured" | "partial" =
     env.SLACK_BOT_TOKEN || env.SLACK_APP_TOKEN ? "partial" : "absent";
@@ -93,9 +92,11 @@ export async function startQm(
           ),
         };
   const server = createServer(built.app, {
-    ...serverDeps(config, built, slackEnvironmentState, slackConfig?.botToken),
+    ...built,
+    slackEnvironmentState,
+    slackEnvBotToken: slackConfig?.botToken,
     managedSlack,
-    ...(config.openaiApiKey ? { openaiApiKey: config.openaiApiKey } : {}),
+    openaiApiKey: config.openaiApiKey,
     ...(env.PORTAL_SESSION_SECRET
       ? {
           portalSession: {
@@ -111,8 +112,7 @@ export async function startQm(
 
   await inBootTenant(tenant, async () => {
     if (tenant) await loadTenant().catch(swallowAs("boot tenant load", undefined));
-    await built.deploymentLayerReady;
-    built.deploymentLayerRefresh.start();
+    await built.deploymentLayerReady();
   });
   server.listen(config.port);
   await once(server, "listening");
@@ -155,14 +155,22 @@ export async function startQm(
   if (!config.backgroundWorkEnabled)
     console.log("[qm] background work disabled; scheduler and runtime loops will not start");
 
-  const slackRuntimeFor = (slackTenant: string) =>
-    createSlackRuntimeReconciler({
+  const slackRuntimeFor = (slackTenant: string) => {
+    const base = createSlackRuntimeReconciler({
       startPaused: true,
       load: async () => {
         const status = await built.slackInstallation.status();
         const stored = await built.slackInstallation.get();
         if (stored) {
           if (stored.installId && !managedSlack) return null;
+          let receiverFactory:
+            | ((staging?: import("./slack/envelope-staging.ts").EnvelopeStaging) => import("@slack/bolt").Receiver)
+            | undefined;
+          if (stored.installId && managedSlack) {
+            receiverFactory = (staging) => managedSlack.receiver(stored.installId!, staging);
+          } else if (stored.signingSecret && !stored.appToken) {
+            receiverFactory = (staging) => built.slackInstallation.receiver("base", stored.signingSecret!, staging);
+          }
           const dynamic = slackPluginConfigFromEnv(
             {
               ...env,
@@ -170,9 +178,7 @@ export async function startQm(
               SLACK_APP_TOKEN: stored.appToken,
               SLACK_EVENTS_MODE: stored.appToken ? "socket" : env.SLACK_EVENTS_MODE,
             },
-            stored.installId && managedSlack
-              ? (staging) => managedSlack.receiver(stored.installId!, staging)
-              : undefined,
+            receiverFactory,
           );
           if (dynamic && stored.installId) dynamic.installationId = stored.installId;
           return dynamic ? { version: stored.version, config: dynamic } : null;
@@ -184,6 +190,70 @@ export async function startQm(
       startPlugin: (desired) => startSlackPlugin(desired, built.slackCore, slackTenant),
       onError: reportFailureAs("slack plugin reconciliation", undefined, `tenant=${slackTenant}`),
     });
+
+    const personas = new Map<string, { version: string; stop(): Promise<void> }>();
+    let running = false;
+    let inFlight: Promise<void> | null = null;
+    const reconcilePersonas = async (): Promise<void> => {
+      if (!running) return;
+      const connected = await built.slackInstallation.listPersonaApps();
+      const desired = new Map(connected.filter((a) => a.personaId && a.signingSecret).map((a) => [a.personaId!, a]));
+      for (const [personaId, active] of personas.entries()) {
+        const next = desired.get(personaId);
+        if (!next || next.version !== active.version) {
+          personas.delete(personaId);
+          await active.stop().catch(reportFailureAs("persona slack stop", undefined, `persona=${personaId}`));
+        }
+      }
+      for (const [personaId, app] of desired) {
+        if (!running || personas.has(personaId)) continue;
+        const plugin = await startSlackPlugin(
+          {
+            botToken: app.botToken,
+            accountId: `persona:${personaId}`,
+            personaId,
+            coreSingleton: false,
+            ...(env.PUBLIC_WEB_URL ? { webUiPublicUrl: env.PUBLIC_WEB_URL } : {}),
+            receiverFactory: (staging) => built.slackInstallation.receiver(personaId, app.signingSecret!, staging),
+          },
+          built.slackCore,
+          slackTenant,
+        );
+        if (!running) {
+          await plugin.stop().catch(() => {});
+          return;
+        }
+        personas.set(personaId, { version: app.version, stop: plugin.stop });
+      }
+    };
+    const triggerPersonas = (): Promise<void> => {
+      if (!running) return Promise.resolve();
+      if (inFlight) return inFlight;
+      inFlight = reconcilePersonas()
+        .catch(reportFailureAs("persona slack reconciliation", undefined, `tenant=${slackTenant}`))
+        .finally(() => {
+          inFlight = null;
+        });
+      return inFlight;
+    };
+
+    return {
+      start() {
+        running = true;
+        base.start();
+        void triggerPersonas();
+      },
+      async reconcile() {
+        await Promise.all([base.reconcile(), triggerPersonas()]);
+      },
+      async stop() {
+        running = false;
+        const active = [...personas.values()];
+        personas.clear();
+        await Promise.all([base.stop(), ...active.map((a) => a.stop())]);
+      },
+    };
+  };
   const slackRuntime = createTenantSlackRuntimes({
     runtimeFor: slackRuntimeFor,
     tenants: async () => [tenant, ...(await built.sessions.tenantLookup.slackTenants())],
@@ -226,7 +296,6 @@ export async function startQm(
       for (const runtime of slackAccountRuntimes)
         void runtime.stop().catch((e: unknown) => console.error("[qm] slack account stop failed:", errMessage(e)));
       void built.scheduler.stop().catch((e: unknown) => console.error("[qm] scheduler stop failed:", errMessage(e)));
-      built.deploymentLayerRefresh.stop();
       await built.runtime.stop({
         fatal,
         beforeClose: async () => {

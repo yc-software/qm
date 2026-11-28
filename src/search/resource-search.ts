@@ -52,34 +52,8 @@ const sources = {
 } satisfies Record<ResourceKind, { table: string; title: string; description: string }>;
 
 export function createPostgresResourceSearch(pg: PgPool): ResourceSearchStore {
-  const migrations = Object.entries(sources).map(([kind, source]) => ({
-    id: `resource-search/${kind}/0001`,
-    statements: [
-      "SET LOCAL lock_timeout = '2s'",
-      "SET LOCAL statement_timeout = '15s'",
-      `CREATE TABLE IF NOT EXISTS ${source.table} (id TEXT PRIMARY KEY, json JSONB NOT NULL)`,
-      `CREATE INDEX IF NOT EXISTS ${source.table}_resource_search_gin ON ${source.table} USING GIN (to_tsvector('simple', ${source.title} || ' ' || ${source.description}))`,
-      ...(kind === "skills"
-        ? ["CREATE INDEX IF NOT EXISTS skills_resource_name_idx ON skills ((json->'manifest'->>'name'))"]
-        : []),
-    ],
-  }));
-  for (const migration of migrations) pg.registerMigration(migration);
-  const ready = new Map<ResourceKind, Promise<void>>();
-  const ensure = (kind: ResourceKind): Promise<void> => {
-    let pending = ready.get(kind);
-    if (!pending) {
-      pending = pg.migrate(migrations[Object.keys(sources).indexOf(kind)]!).catch((error) => {
-        ready.delete(kind);
-        throw error;
-      });
-      ready.set(kind, pending);
-    }
-    return pending;
-  };
   return {
     async skillMetadata(names) {
-      await ensure("skills");
       const [rows, homes] = await Promise.all([
         pg.q(
           "SELECT id, json->>'scopeId' AS scope, json->>'status' AS status, json->'manifest'->>'name' AS name FROM skills WHERE json->'manifest'->>'name' = ANY($1::text[]) ORDER BY id",
@@ -101,7 +75,6 @@ export function createPostgresResourceSearch(pg: PgPool): ResourceSearchStore {
       const terms = tsPrefixQuery(query);
       if (!terms) return [];
       const source = sources[kind];
-      await ensure(kind);
       const vector = `to_tsvector('simple', ${source.title} || ' ' || ${source.description})`;
       const rows = await pg.q(
         `SELECT id, ${source.title} AS title, ${source.description} AS description,

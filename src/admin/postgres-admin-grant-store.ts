@@ -1,7 +1,6 @@
 import { createPgPool } from "../persistence/pg-pool.ts";
 import type { ScopeId } from "../types.ts";
 import type { AdminGrant, AdminGrantPersistence, AdminRole } from "./admin-grant-store.ts";
-import { tenantTables } from "../tenants/migrations.ts";
 
 function rowToGrant(r: Record<string, unknown>): AdminGrant {
   return {
@@ -13,24 +12,8 @@ function rowToGrant(r: Record<string, unknown>): AdminGrant {
   };
 }
 
-const SCHEMA_SQL = [
-  `CREATE TABLE IF NOT EXISTS admin_grants(
-    principal_id TEXT   NOT NULL,
-    scope_id     TEXT   NOT NULL,
-    role         TEXT   NOT NULL,
-    granted_by   TEXT,
-    created_at   BIGINT,
-    PRIMARY KEY (principal_id, scope_id, role)
-  )`,
-];
-
 export function createPostgresAdminGrantStore(connectionString: string): AdminGrantPersistence {
-  const pg = createPgPool(connectionString, [
-    { id: "admin/grants/0001", statements: SCHEMA_SQL },
-    ...tenantTables("admin/grants/0002-tenants", [
-      { table: "admin_grants", primaryKey: "principal_id, scope_id, role" },
-    ]),
-  ]);
+  const pg = createPgPool(connectionString);
 
   return {
     async all(tenant) {

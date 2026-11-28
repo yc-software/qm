@@ -4,23 +4,18 @@ import { renderAgentApis } from "../src/api/agent-api-catalog.ts";
 import { findRoute } from "../src/api/routes/route.ts";
 import { apiRoutes, rawRoutes } from "../src/api/routes/index.ts";
 import type { CapabilityClaims } from "../src/auth/capability-token.ts";
+import { personalScope } from "../src/types.ts";
 
-const base: CapabilityClaims = { actorId: "U1", scopeId: "personal:U1", exp: Date.now() + 60_000 };
+const base: CapabilityClaims = { actorId: "U1", scopeId: personalScope("U1"), exp: Date.now() + 60_000 };
 
 function advertised(): Array<{ method: string; path: string }> {
   const listings = [
     renderAgentApis(
-      { ...base, internalAudience: true, liveAuthor: true, memory: { read: ["personal:U1"], write: "personal:U1" } },
-      { isAdmin: true },
-      { swarmsEnabled: true, personasEnabled: true },
-    ),
-    renderAgentApis(
       {
         ...base,
         internalAudience: true,
-        liveActor: true,
-        triggered: true,
-        memory: { read: ["personal:U1"], write: "personal:U1" },
+        personAuthority: true,
+        memory: { read: [personalScope("U1")], write: personalScope("U1") },
       },
       { isAdmin: true },
       { swarmsEnabled: true, personasEnabled: true },

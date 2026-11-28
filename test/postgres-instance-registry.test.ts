@@ -1,4 +1,4 @@
-import { test, before } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresMapFactory } from "../src/persistence/durable-map.ts";
 import { createPostgresInstanceRegistry } from "../src/runs/instance-registry.ts";
@@ -6,15 +6,6 @@ import { settle } from "./support/settle.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the instance-registry tests";
-
-before(async () => {
-  if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query("DROP TABLE IF EXISTS instance_heartbeats CASCADE");
-  await p.end();
-});
 
 test(
   "supersession: a newer different-sha instance drains the old one; same sha and stale beats don't",

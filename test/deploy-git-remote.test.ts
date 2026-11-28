@@ -16,6 +16,7 @@ import type { DeployGitArchive } from "../src/deploy/deploy-git-store.ts";
 import { scopeId } from "../src/types.ts";
 import { testMap, testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
+import { testCore } from "./support/build-app.ts";
 
 const execFileP = promisify(execFile);
 const SECRET = "deploy-git-remote-secret".repeat(3);
@@ -53,6 +54,7 @@ async function fixture(): Promise<{
     appGitRepoPath: async (id: string) => (id === publishedApp.id ? await readerStore.repoUrl(id) : null),
   } as unknown as App;
   const server: Server = createServer(app, {
+    ...testCore(),
     replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
     signingSecret: SECRET,
   });

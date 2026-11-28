@@ -15,7 +15,7 @@ export async function modelRegistry(ctx: ApiCtx): Promise<void> {
   const store = ctx.deps.modelRegistry;
   if (!store) return sendJson(ctx.res, 404, { error: "not_found" });
   if (ctx.method === "GET") {
-    await ctx.deps.refreshModels?.();
+    await ctx.deps.refreshModels();
     const ids = new Set([
       ...MODEL_REGISTRY.map((model) => model.id),
       ...getBuiltinModels("openai").map((model) => model.id),
@@ -85,7 +85,7 @@ export async function lookupRegistryModel(ctx: ApiCtx): Promise<void> {
   const input = modelLookupInput.safeParse(ctx.body);
   if (!input.success)
     return sendJson(ctx.res, 400, { error: "bad_request", message: "Choose a provider and enter a valid model ID." });
-  await ctx.deps.refreshModels?.();
+  await ctx.deps.refreshModels();
   try {
     const saved = (await ctx.deps.modelRegistry?.statuses())?.find(
       (row) => row.spec.id === input.data.id && !row.disabled,
@@ -140,8 +140,7 @@ export async function enableBuiltinModel(ctx: ApiCtx): Promise<void> {
       message: "Choose a provider and explicitly consent to verification with verify: true.",
     });
   const { config, modelVerifier } = ctx.deps;
-  if (!config || !modelVerifier) return sendJson(ctx.res, 503, { error: "verification_unavailable" });
-  await ctx.deps.refreshModels?.();
+  await ctx.deps.refreshModels();
   const spec = builtinModelSpec(input.data);
   if (!spec)
     return sendJson(ctx.res, 400, {
@@ -155,7 +154,7 @@ export async function enableBuiltinModel(ctx: ApiCtx): Promise<void> {
     const apply = async () => {
       if ((await modelVerifier(spec)).fingerprint !== context.fingerprint)
         throw new ModelVerificationError("changed_during_verification", "Serving credentials changed. Verify again.");
-      const managed = await ctx.deps.modelCredentials?.availability();
+      const managed = await ctx.deps.modelCredentials.availability();
       const catalog = managed?.openrouter
         ? await selectableModelCatalog(ctx.deps.modelCredentialFetch)
         : builtInModelCatalog();

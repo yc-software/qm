@@ -14,6 +14,7 @@ import { mintSignedPayload } from "../src/auth/signed-token.ts";
 import { singleProcessDeps } from "./support/single-process.ts";
 import { testDeployBackings, testDatabaseUrl } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testCore } from "./support/build-app.ts";
 
 function svc() {
   const deployStore = createDeployStore(testDeployBackings());
@@ -73,6 +74,7 @@ test("HTTP: the /name (slug) route does not shadow /display-name", async () => {
   } as unknown as Parameters<typeof createApp>[0]);
   const identitySecret = "deployment-route-identity-secret";
   const server = createInsecureTestServer(app, {
+    ...testCore(),
     portalIdentitySecret: identitySecret,
     requireSignedPortalIdentity: true,
   });

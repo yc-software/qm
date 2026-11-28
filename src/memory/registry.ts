@@ -1,7 +1,8 @@
 import { perTenant } from "../tenants/cache.ts";
 import { decryptSecret, encryptSecret, type SecretKey } from "../connectors/connector-client-store.ts";
+import { createEncryptedSecretStore, deleteReplacedSecrets, type SecretStore } from "../credentials/secret-store.ts";
 import type { DurableMap } from "../persistence/durable-map.ts";
-import { parseScopeId, scopeId, type ScopeId } from "../types.ts";
+import { parseScopeId, scopeId, type ScopeId, scopeLabel } from "../types.ts";
 import { hashId } from "../util/crypto.ts";
 import { errMessage } from "../util/errors.ts";
 import {
@@ -149,11 +150,32 @@ function brainBlock(
 export interface RegistryContext {
   overlayIds: ReadonlySet<string>;
   key: SecretKey;
+  secrets?: SecretStore;
+}
+
+async function openBrainSecrets(
+  record: MemoryRegistry,
+  { secrets }: RegistryContext,
+): Promise<ReadonlyMap<string, string | Error>> {
+  const opened = new Map<string, string | Error>();
+  if (!secrets) return opened;
+  await Promise.all(
+    record.brains.map(async ({ auth: { clientSecretEnc } }) => {
+      if (!clientSecretEnc) return;
+      try {
+        opened.set(clientSecretEnc, await secrets.get(clientSecretEnc));
+      } catch (error) {
+        opened.set(clientSecretEnc, error instanceof Error ? error : new Error(errMessage(error)));
+      }
+    }),
+  );
+  return opened;
 }
 
 export function resolveMemoryRegistry(
   record: MemoryRegistry,
   { overlayIds, key }: RegistryContext,
+  opened?: ReadonlyMap<string, string | Error>,
 ): { config: MemoryProviderConfig; disabled: DisabledRegistryRoute[] } {
   const config: MemoryProviderConfig = { providers: [], routes: [] };
   const disabled: DisabledRegistryRoute[] = [];
@@ -186,7 +208,9 @@ export function resolveMemoryRegistry(
     }
     let clientSecret: string;
     try {
-      clientSecret = decryptSecret(brain.auth.clientSecretEnc!, key);
+      const open = opened?.get(brain.auth.clientSecretEnc!);
+      if (open instanceof Error) throw open;
+      clientSecret = open ?? decryptSecret(brain.auth.clientSecretEnc!, key);
     } catch (error) {
       disable(
         "invalid_config",
@@ -209,6 +233,7 @@ export function resolveMemoryRegistry(
 export interface RegistryChange extends RegistryContext {
   actor: string;
   now: number;
+  clientSecretRef?: string;
 }
 
 function object(value: unknown): Record<string, unknown> {
@@ -258,7 +283,8 @@ export function putBrain(
   if (clientSecret !== undefined && (body.url === undefined || body.url === null))
     throw invalid("a request that sets clientSecret must restate url, so the secret goes only to a url it names");
   const kept = url === existing?.url ? existing.auth.clientSecretEnc : undefined;
-  const clientSecretEnc = clientSecret === undefined ? kept : encryptSecret(clientSecret, change.key);
+  const clientSecretEnc =
+    clientSecret === undefined ? kept : (change.clientSecretRef ?? encryptSecret(clientSecret, change.key));
   const timeoutMs = body.timeoutMs ?? existing?.timeoutMs;
   const brain: RegistryBrain = {
     id,
@@ -315,7 +341,7 @@ export function putBinding(record: MemoryRegistry, id: string, input: unknown, c
       binding.brain === brain.id &&
       (binding.scope === scope || binding.scope === "personal" || scope === "personal"),
   );
-  if (twin) throw conflict(`${twin.scope} is already bound to brain ${brain.id} by binding ${twin.id}`);
+  if (twin) throw conflict(`${scopeLabel(twin.scope)} is already bound to brain ${brain.id} by binding ${twin.id}`);
   const binding: RegistryBinding = {
     id,
     brain: brain.id,
@@ -449,14 +475,23 @@ const versioned = (record: MemoryRegistry): MemoryRegistry => ({
   schema: record.brains.some((brain) => brain.owner) ? 2 : 1,
 });
 
+const brainSecretName = (id: string) => `memory-brains/${id}`;
+
+const brainSecretRefs = (registry: MemoryRegistry) => registry.brains.map((brain) => brain.auth.clientSecretEnc);
+
 export interface MemoryRegistryStore extends RegistryContext {
   current(): Promise<{ version: string; record: unknown }>;
-  update(change: (record: MemoryRegistry) => MemoryRegistry): Promise<MemoryRegistry>;
+  resolve(record: MemoryRegistry): Promise<{ config: MemoryProviderConfig; disabled: DisabledRegistryRoute[] }>;
+  update(
+    change: (record: MemoryRegistry, clientSecretRef?: string) => MemoryRegistry,
+    secret?: { brainId: string; value: string },
+  ): Promise<MemoryRegistry>;
 }
 
 export function createMemoryRegistryStore(opts: {
   map: DurableMap<MemoryRegistry>;
   key: SecretKey;
+  secrets?: SecretStore;
   overlay?: MemoryProviderConfig;
 }): MemoryRegistryStore {
   const caches = perTenant<{ cached?: { version: string; record: unknown } }>(() => ({}));
@@ -466,17 +501,42 @@ export function createMemoryRegistryStore(opts: {
     if (slot.cached?.version !== version) slot.cached = { version, record: await opts.map.get(RECORD_ID) };
     return slot.cached;
   };
-  return {
+  const secrets = opts.secrets ?? createEncryptedSecretStore(opts.key);
+  const ctx: RegistryContext = {
     overlayIds: new Set(opts.overlay?.providers.map(({ id }) => id) ?? []),
     key: opts.key,
+    secrets,
+  };
+  return {
+    ...ctx,
     current,
-    async update(change) {
-      const seen = readRegistry((await current()).record);
-      if (change(seen) === seen) return seen;
-      const [next] = await opts.map.mutateMany([
-        { id: RECORD_ID, apply: (stored) => versioned(change(readRegistry(stored))) },
-      ]);
-      return next!;
+    async resolve(record) {
+      return resolveMemoryRegistry(record, ctx, await openBrainSecrets(record, ctx));
+    },
+    async update(change, secret) {
+      const clientSecretRef = secret ? await secrets.put(brainSecretName(secret.brainId), secret.value) : undefined;
+      let previous: MemoryRegistry | undefined;
+      let next: MemoryRegistry | undefined;
+      try {
+        const seen = readRegistry((await current()).record);
+        if (change(seen, clientSecretRef) === seen) return seen;
+        [next] = await opts.map.mutateMany([
+          {
+            id: RECORD_ID,
+            apply: (stored) => {
+              previous = readRegistry(stored);
+              return versioned(change(previous, clientSecretRef));
+            },
+          },
+        ]);
+        return next!;
+      } finally {
+        await deleteReplacedSecrets(
+          secrets,
+          next ? [clientSecretRef, ...(previous ? brainSecretRefs(previous) : [])] : [clientSecretRef],
+          next ? brainSecretRefs(next) : [],
+        );
+      }
     },
   };
 }

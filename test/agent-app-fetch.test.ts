@@ -9,6 +9,7 @@ import { scopeId } from "../src/types.ts";
 import { createPostgresReplayDedupe } from "../src/auth/replay-dedupe.ts";
 import { testDatabaseUrl } from "./support/test-database.ts";
 import { freePort } from "../scripts/dev/lib/proc.ts";
+import { testCore } from "./support/build-app.ts";
 
 const SECRET = "agent-app-fetch-secret".repeat(2);
 
@@ -66,7 +67,11 @@ describe("agent app fetch", () => {
         };
       },
     } as unknown as App;
-    server = createServer(app, { replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()), signingSecret: SECRET });
+    server = createServer(app, {
+      ...testCore(),
+      replayDedupe: createPostgresReplayDedupe(testDatabaseUrl()),
+      signingSecret: SECRET,
+    });
     await new Promise<void>((resolve) => server.listen(0, resolve));
     base = `http://localhost:${(server.address() as AddressInfo).port}`;
   });

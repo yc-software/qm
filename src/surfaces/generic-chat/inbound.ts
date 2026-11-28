@@ -17,6 +17,7 @@ import {
   chatContainer,
   findMessage,
   genericChatRef,
+  genericChatAccount,
   genericChatTs,
   parseGenericChatEvent,
   parseGenericChatRef,
@@ -34,13 +35,11 @@ function eventContainer(event: Pick<GenericChatEvent, "account" | "chat">): stri
   return chatContainer({ account: event.account, kind: event.chat.kind, chat: event.chat.id });
 }
 
-type InboundApp = Pick<
-  App,
-  "turn" | "ingestSurfaceEvents" | "onContextRequestCreated" | "fulfillContextRequest" | "tenantFor"
->;
+type InboundApp = Pick<App, "turn" | "ingestSurfaceEvents" | "onContextRequestCreated" | "fulfillContextRequest">;
 
 export function createGenericChatInbound(deps: {
   secret: string;
+  accountTenant: (account: string) => Promise<string | undefined>;
   client: GenericChatClient;
   stageBlob: (bytes: Uint8Array) => Promise<{ blobId: string }>;
   storageFetch?: AddressFetch;
@@ -106,11 +105,12 @@ export function createGenericChatInbound(deps: {
         body: { error: "bad_request", issues: result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) },
       };
     const event = result.data;
-    const tenant = await deps.app.tenantFor("partner_chat", event.account);
+    const tenant = await deps.accountTenant(event.account);
     if (!tenant) {
       console.log(`[generic-chat] ignoring an event for account ${event.account}: no serving workspace is bound to it`);
       return { status: 404, body: { error: "unknown_account" } };
     }
+    if (event.origin !== undefined) event.account = genericChatAccount(event.account, event.origin);
     return inTenant(tenant, (): Promise<{ status: number; body: Record<string, unknown> }> => {
       switch (event.type) {
         case "reaction.added":

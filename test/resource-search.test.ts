@@ -7,6 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { buildApp } from "./support/build-app.ts";
 import { testConfig } from "./support/test-config.ts";
+import { personalScope } from "../src/types.ts";
 
 function fresh() {
   return buildApp(testConfig({ dataDir: mkdtempSync(join(tmpdir(), "resource-search-")), seedSkills: false }));
@@ -15,7 +16,7 @@ function fresh() {
 test("resource search filters private data, includes owned drafts, and bounds snippets", async () => {
   const { app, skills } = fresh();
   const owned = await skills.create({
-    scopeId: "personal:U1",
+    scopeId: personalScope("U1"),
     createdBy: "U1",
     manifest: {
       name: "zanzibar-review",
@@ -25,7 +26,7 @@ test("resource search filters private data, includes owned drafts, and bounds sn
     },
   });
   await skills.create({
-    scopeId: "personal:U2",
+    scopeId: personalScope("U2"),
     createdBy: "U2",
     manifest: {
       name: "zanzibar-secret",
@@ -37,14 +38,14 @@ test("resource search filters private data, includes owned drafts, and bounds sn
   const cron = await app.createCron({
     owner: "U1",
     createdBy: "U1",
-    ownerScopeId: "personal:U1",
+    ownerScopeId: personalScope("U1"),
     action: "zanzibar ".repeat(200),
     schedule: { everyMs: 60000 },
   });
   await app.createCron({
     owner: "U2",
     createdBy: "U2",
-    ownerScopeId: "personal:U2",
+    ownerScopeId: personalScope("U2"),
     action: "zanzibar private",
     schedule: { everyMs: 60000 },
   });
@@ -91,7 +92,7 @@ test("private matches within the candidate cap are filtered and authorized hits 
     await app.createCron({
       owner: "U2",
       createdBy: "U2",
-      ownerScopeId: "personal:U2",
+      ownerScopeId: personalScope("U2"),
       title: `zanzibar private ${i}`,
       action: `zanzibar private ${i}`,
       schedule: { everyMs: 60000 },
@@ -103,7 +104,7 @@ test("private matches within the candidate cap are filtered and authorized hits 
         await app.createCron({
           owner: "U1",
           createdBy: "U1",
-          ownerScopeId: "personal:U1",
+          ownerScopeId: personalScope("U1"),
           title: `zanzibar own ${i}`,
           action: `zanzibar own ${i}`,
           schedule: { everyMs: 60000 },
@@ -132,7 +133,7 @@ test("private matches beyond the candidate cap reveal no search metadata", async
 
 test("published skill search resolves shadowing without calling the full visible-skills API", async () => {
   const { app, skills } = fresh();
-  for (const home of ["org:default-org", "personal:U1"] as const) {
+  for (const home of ["org:default-org", personalScope("U1")] as const) {
     const skill = await skills.create({
       scopeId: home,
       createdBy: "author",
@@ -152,7 +153,7 @@ test("published skill search resolves shadowing without calling the full visible
   const result = await app.searchResources(testTenant, "U1", "zanzibar");
   assert.deepEqual(result.failed, []);
   assert.equal(result.hits.length, 1);
-  assert.ok(result.hits[0]!.snippet.includes("personal:U1"));
+  assert.ok(result.hits[0]!.snippet.includes(personalScope("U1")));
 });
 
 test("webhook search uses the existing owner and project controls without exposing verification secrets", async () => {
@@ -160,14 +161,14 @@ test("webhook search uses the existing owner and project controls without exposi
   const own = await app.createWebhook({
     owner: "U1",
     createdBy: "U1",
-    ownerScopeId: "personal:U1",
+    ownerScopeId: personalScope("U1"),
     action: "zanzibar event",
     verification: { scheme: "github", secret: "private-signing-secret" },
   });
   await app.createWebhook({
     owner: "U2",
     createdBy: "U2",
-    ownerScopeId: "personal:U2",
+    ownerScopeId: personalScope("U2"),
     action: "zanzibar hidden",
     verification: { scheme: "github", secret: "another-secret" },
   });

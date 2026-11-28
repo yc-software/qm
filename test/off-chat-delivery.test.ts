@@ -10,7 +10,8 @@ function harness(chatMembers: string[]) {
   } as unknown as DeliveryStore;
   const deliveries = withOffChatRecipients(store, {
     directory: {
-      getMany: async (ids: string[]) => new Map(ids.filter((id) => chatMembers.includes(id)).map((id) => [id, {}])),
+      getMany: async (ids: string[]) =>
+        new Map(ids.filter((id) => chatMembers.includes(id)).map((id) => [id, { principalId: id }])),
     },
     sessions: {
       getOrCreateByThread: async (threadRef: string) => ({ id: threadRef, threadRef }),

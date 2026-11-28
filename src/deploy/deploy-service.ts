@@ -7,7 +7,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join, dirname, resolve, relative, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Grant, Permission, ScopeId } from "../types.ts";
-import { isManageableCreationScope, parseScopeId, scopeId } from "../types.ts";
+import { isManageableCreationScope, parseScopeId, scopeId, personalScope } from "../types.ts";
 import type { AclStore } from "../acl/acl-store.ts";
 import { deployRef, encodeRef } from "../acl/resource-ref.ts";
 import { bytes, normalizeRelPath } from "./deploy-fs.ts";
@@ -109,6 +109,8 @@ export interface AppActor {
   botActor?: boolean;
 }
 
+export type SigningAppActor = AppActor & { signOff: (summary: string) => Promise<boolean> };
+
 export interface ReachOptions {
   bypassAcl?: boolean;
 }
@@ -127,12 +129,8 @@ export interface DeployService {
   setAppDisplayName(id: string, displayName: string): Promise<PublishedApp>;
   setAppAlwaysOn(id: string, alwaysOn: boolean): Promise<PublishedApp>;
   setAppEmbedAncestors(id: string, embedAncestors: string[]): Promise<PublishedApp>;
-  setAppPublic(
-    idOrName: string,
-    isPublic: boolean,
-    actor: AppActor & { personAtKeyboard: boolean },
-  ): Promise<PublishedApp>;
-  setAppConnectors(idOrName: string, connectors: string[], actor: { createdBy: string }): Promise<PublishedApp>;
+  setAppPublic(idOrName: string, isPublic: boolean, actor: SigningAppActor): Promise<PublishedApp>;
+  setAppConnectors(idOrName: string, connectors: string[], actor: SigningAppActor): Promise<PublishedApp>;
 
   maintainApps(): Promise<number>;
   publishDueLiveEdits(): Promise<number>;
@@ -190,12 +188,7 @@ const PUBLIC_LINKS_UNAVAILABLE =
   "This instance serves apps at /d/<app>/ on its own domain, which always requires sign-in, so a public link would still ask visitors to sign in. Public links need an apps domain: set DEPLOY_APPS_DOMAIN to a domain with a wildcard DNS record routed to the portal, and AWS_DEPLOY_GATE_SECRET.";
 
 export type DeployAccessErrorCode =
-  | "not_found"
-  | "forbidden"
-  | "external_sharing_disabled"
-  | "public_links_unavailable"
-  | "unknown_connector"
-  | "human_consent_required";
+  "not_found" | "forbidden" | "external_sharing_disabled" | "public_links_unavailable" | "unknown_connector";
 
 export class DeployAccessError extends Error {
   readonly code: DeployAccessErrorCode;
@@ -474,11 +467,11 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
 
   async function canWriteScope(callerId: string, scope: ScopeId, actingScopeId?: ScopeId): Promise<boolean> {
     if (deps.canWriteScope) return deps.canWriteScope(callerId, scope);
-    return scope === `personal:${callerId}` || scope === actingScopeId;
+    return scope === personalScope(callerId) || scope === actingScopeId;
   }
 
   async function managesHome(d: PublishedApp, callerId: string, actingScopeId?: ScopeId): Promise<boolean> {
-    if (d.ownerScopeId === `personal:${callerId}`) return true;
+    if (d.ownerScopeId === personalScope(callerId)) return true;
     if (deps.managesArtifactHome && (await deps.managesArtifactHome(d.ownerScopeId, d.createdBy, callerId)))
       return true;
     if (
@@ -758,6 +751,8 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           "forbidden",
           "an app outside its publisher's own library cannot borrow connectors; move it back there first",
         );
+      const lend = `Lend app ${d.name ?? d.id} your connected apps: ${hosts.join(", ")}`;
+      if (hosts.length && !(await actor.signOff(lend))) return d;
       await deps.deployStore.setConnectors(d.id, hosts.length ? hosts : undefined);
       recordAudit({
         at: Date.now(),
@@ -774,11 +769,6 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
       const d = (await deps.deployStore.get(idOrName)) ?? (await deps.deployStore.getByName(idOrName));
       if (!d) throw new DeployAccessError("not_found", `no such app: ${idOrName}`);
       await this.assertAppOwner(d, actor);
-      if (!actor.personAtKeyboard)
-        throw new DeployAccessError(
-          "human_consent_required",
-          `Only the person can change who can open "${d.name ?? d.id}" by link. Ask them to do it themselves.`,
-        );
       if (isPublic && !(await externalSharingAllowed(d.ownerScopeId)))
         throw new DeployAccessError("external_sharing_disabled", EXTERNAL_APP_SHARING_OFF);
       if (isPublic && deps.publicLinksAvailable === false)
@@ -788,6 +778,7 @@ export function createDeployService(deps: DeployServiceDeps): DeployService {
           "forbidden",
           "an app that borrows connectors cannot be public; withdraw them first",
         );
+      if (isPublic && !(await actor.signOff(`Make app ${d.name ?? d.id} public`))) return d;
       await deps.deployStore.setPublic(d.id, isPublic);
       recordAudit({
         at: Date.now(),

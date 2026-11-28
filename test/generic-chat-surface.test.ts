@@ -23,7 +23,7 @@ import { NON_WEB_PATHS } from "../src/surfaces/contract.ts";
 import { createGenericChatApprovals, genericChatCard } from "../src/surfaces/generic-chat/approvals.ts";
 import type { KeychainApprovalView } from "../src/credentials/keychain-approval.ts";
 import { setGenericChatReaction } from "../src/surfaces/generic-chat/reactions.ts";
-import { signGenericChat, signGenericChatRequest } from "../src/surfaces/generic-chat/protocol.ts";
+import { genericChatAccount, signGenericChat, signGenericChatRequest } from "../src/surfaces/generic-chat/protocol.ts";
 import { createDeliveryRelay } from "../src/delivery/relay.ts";
 import type { DeliveryStore } from "../src/delivery/delivery-store.ts";
 import { buildApp } from "./support/build-app.ts";
@@ -36,9 +36,11 @@ import { runResultDelivery, wireRunResultDeliveries } from "../src/delivery/run-
 import type { Run } from "../src/runs/run-store.ts";
 import { withTenant } from "../src/tenants/context.ts";
 import { ownerUrl, TEST_TENANT } from "./support/test-tenant.ts";
+import { mockHeldTurns } from "./support/mock-agent.ts";
 
 const SECRET = "generic-chat-test-secret-0123456789abcdef";
-const tenantFor = async () => TEST_TENANT;
+const ISSUER = "https://idp.example";
+const accountTenant = async () => TEST_TENANT;
 const NO_BLOBS = { readBlob: async () => Buffer.alloc(0), readFileArtifact: async () => Buffer.alloc(0) };
 const PROVENANCE = { trigger: "cron", surface: "partner-chat", fireKey: "f", sourceScopeId: "s", sourceThreadRef: "t" };
 
@@ -158,11 +160,14 @@ async function genericChatApp() {
   const genericChat = await fakeGenericChat();
   const config = testConfig({
     dataDir: mkdtempSync(join(tmpdir(), "generic-chat-surface-")),
-    genericChat: { url: genericChat.url, secret: SECRET },
+    genericChat: { url: genericChat.url, secret: SECRET, issuer: ISSUER },
     emailAuthDomain: "example.com",
   });
   const owner = createPgPool(ownerUrl(config.databaseUrl!).toString());
-  await owner.q(`UPDATE tenants SET settings = '{"partnerChatAccount":"7001"}' WHERE id = $1`, [TEST_TENANT]);
+  await owner.q("INSERT INTO tenant_external_orgs(issuer, org_id, tenant) VALUES ($1, '7001', $2)", [
+    ISSUER,
+    TEST_TENANT,
+  ]);
   await owner.close();
   const built = buildApp(config);
   built.runtime.start();
@@ -422,10 +427,10 @@ test("generic-chat conversation reads are answered from the mirror", async () =>
 
 function outboundFor(url: string, deliveries = createDeliveryStore(), mirrored: IngestEvent[] = []) {
   const send = genericChatSender({
+    accountTenant,
     client: createGenericChatClient({ url, secret: SECRET }),
     blobs: NO_BLOBS,
     app: {
-      tenantFor,
       getApproval: async () => null,
       readSurfaceMessages: async () => [],
       ingestSurfaceEvents: async (events) => (mirrored.push(...events), { upserted: events.length }),
@@ -601,14 +606,18 @@ test("a chat with any member neither the deployment nor the host vouches for, or
   }
 });
 
-test("generic-chat config requires the url and secret together", () => {
-  assert.throws(() => loadConfig({ GENERIC_CHAT_URL: "https://chat.example" }), /must be set together/);
-  assert.deepEqual(
-    loadConfig({ GENERIC_CHAT_URL: "https://chat.example", GENERIC_CHAT_SECRET: "s", GENERIC_CHAT_LABEL: "Acme Chat" })
-      .genericChat,
-    { url: "https://chat.example", secret: "s", label: "Acme Chat" },
+test("generic-chat config requires the url, secret and issuer together", () => {
+  const base = { GENERIC_CHAT_URL: "https://chat.example", GENERIC_CHAT_SECRET: "s", GENERIC_CHAT_ISSUER: ISSUER };
+  assert.throws(
+    () => loadConfig({ GENERIC_CHAT_URL: "https://chat.example", GENERIC_CHAT_SECRET: "s" }),
+    /set together/,
   );
-  const base = { GENERIC_CHAT_URL: "https://chat.example", GENERIC_CHAT_SECRET: "s" };
+  assert.deepEqual(loadConfig({ ...base, GENERIC_CHAT_LABEL: "Acme Chat" }).genericChat, {
+    url: "https://chat.example",
+    secret: "s",
+    issuer: ISSUER,
+    label: "Acme Chat",
+  });
   assert.equal(loadConfig({ ...base, GENERIC_CHAT_MARK: "M2 2h20v20H2z" }).genericChat?.mark, "M2 2h20v20H2z");
   assert.throws(() => loadConfig({ ...base, GENERIC_CHAT_MARK: '<svg onload="x()"/>' }), /SVG path data/);
 });
@@ -1022,9 +1031,9 @@ test("a retryable failure holds back later posts to the same chat target only", 
   const deliveries = createDeliveryStore();
   const sent: string[] = [];
   const send = genericChatSender({
+    accountTenant,
     blobs: NO_BLOBS,
     app: {
-      tenantFor,
       getApproval: async () => null,
       readSurfaceMessages: async () => [],
       ingestSurfaceEvents: async () => ({ upserted: 0 }),
@@ -1066,54 +1075,62 @@ interface ShownAction {
   user_ids?: string[];
 }
 
-test("a pending approval arrives as a card with buttons that only the person who asked can settle", async () => {
-  const { built, genericChat, deliver } = await genericChatApp();
-  try {
-    const ask = { body: "!paused-approval git push", mentions: true, eventId: "ev-ask", messageId: "1002" };
-    await deliver(event({ ...ask, protocol: 2 }));
-    const card = () => genericChat.shown().find((m) => String(m.body).includes("git push") && Array.isArray(m.actions));
-    await settle(async () => card() !== undefined);
-    const posted = card()!;
-    const actions = posted.actions as ShownAction[];
-    assert.match(String(posted.body), /Approval needed[\s\S]*git push[\s\S]*Flagged as/);
-    assert.equal(posted.thread_id, "1002");
-    assert.deepEqual(
-      actions.map((a) => [a.label, a.style, a.user_ids]),
-      [
-        ["Allow once", "primary", ["5"]],
-        ["Allow session", "default", ["5"]],
-        ["Allow always", "default", ["5"]],
-        ["Deny", "danger", ["5"]],
-      ],
-    );
-    const click = (eventId: string, user: Record<string, string>) =>
-      deliver({
-        ...event({ bot: true, appPost: true, messageId: posted.id, thread: "1002", eventId }),
-        protocol: 2,
-        type: "action.invoked",
-        action: { id: actions.at(-1)!.id, user },
+for (const origin of [undefined, "https://one.dev.example.test", "https://two.dev.example.test"])
+  test(`only the requester settles an approval card (${origin ?? "originless"})`, async () => {
+    const { built, genericChat, deliver: send } = await genericChatApp();
+    const deliver = (body: Record<string, unknown>) => send({ ...body, origin });
+    const account = origin ? genericChatAccount("7001", origin) : "7001";
+    const actionNamespace = origin ? `${account}:` : "";
+    try {
+      const ask = { body: "!paused-approval git push", mentions: true, eventId: "ev-ask", messageId: "1002" };
+      await deliver(event({ ...ask, protocol: 2 }));
+      const card = () =>
+        genericChat.shown().find((m) => String(m.body).includes("git push") && Array.isArray(m.actions));
+      await settle(async () => card() !== undefined);
+      const posted = card()!;
+      const actions = posted.actions as ShownAction[];
+      assert.match(String(posted.body), /Approval needed[\s\S]*git push[\s\S]*Flagged as/);
+      assert.equal(posted.thread_id, "1002");
+      assert.deepEqual(
+        actions.map((a) => [a.label, a.style, a.user_ids]),
+        [
+          ["Allow once", "primary", ["5"]],
+          ["Allow session", "default", ["5"]],
+          ["Allow always", "default", ["5"]],
+          ["Deny", "danger", ["5"]],
+        ],
+      );
+      const click = (eventId: string, user: Record<string, string>) =>
+        deliver({
+          ...event({ bot: true, appPost: true, messageId: posted.id, thread: "1002", eventId }),
+          protocol: 2,
+          type: "action.invoked",
+          action: { id: actions.at(-1)!.id, user },
+        });
+      assert.equal(
+        (await click("ev-click-1", { id: "77", email: "eve@example.com" })).body.ignored,
+        "unvouched_participants",
+      );
+      await click("ev-click-2", { id: "6", email: "grace@example.com", name: "Grace Hopper" });
+      assert.ok(genericChat.shown().some((m) => m.to === "6" && /Only the person who requested/.test(String(m.body))));
+      assert.equal(genericChat.received.at(-1)?.body.client_message_id, `action:${actionNamespace}ev-click-2`);
+      assert.equal((card()!.actions as ShownAction[]).length, 4);
+      await click("ev-click-3", { id: "5", email: "ada@example.com", name: "Ada Lovelace" });
+      const [denial] = await built.runs.list({ threadRef: `partner-chat:${account}:group:88:1002` });
+      assert.ok(denial?.dedupKey?.startsWith(`partner-chat:action:${actionNamespace}ev-click-3:approval:`));
+      const settled = genericChat.shown().find((m) => m.id === posted.id)!;
+      assert.deepEqual([settled.body, settled.actions], ["Denied by Ada Lovelace · `git push`", []]);
+      await settle(async () => {
+        const session = await built.sessions.getByThread(`partner-chat:${account}:group:88:1002`);
+        const items = session ? await built.sessions.getItems(session.id) : [];
+        return items.some((i) => /declined this pending operation/.test((i as { text?: string }).text ?? ""));
       });
-    assert.equal(
-      (await click("ev-click-1", { id: "77", email: "eve@example.com" })).body.ignored,
-      "unvouched_participants",
-    );
-    await click("ev-click-2", { id: "6", email: "grace@example.com", name: "Grace Hopper" });
-    assert.ok(genericChat.shown().some((m) => m.to === "6" && /Only the person who requested/.test(String(m.body))));
-    assert.equal((card()!.actions as ShownAction[]).length, 4);
-    await click("ev-click-3", { id: "5", email: "ada@example.com", name: "Ada Lovelace" });
-    const settled = genericChat.shown().find((m) => m.id === posted.id)!;
-    assert.deepEqual([settled.body, settled.actions], ["Denied by Ada Lovelace · `git push`", []]);
-    await settle(async () => {
-      const session = await built.sessions.getByThread(`${CONTAINER}:1002`);
-      const items = session ? await built.sessions.getItems(session.id) : [];
-      return items.some((i) => /denied this pending operation/.test((i as { text?: string }).text ?? ""));
-    });
-    await new Promise((r) => setTimeout(r, 1_000));
-    assert.ok(!genericChat.shown().some((m) => /couldn't finish|waiting on a pending approval/.test(String(m.body))));
-  } finally {
-    await genericChat.close();
-  }
-});
+      await new Promise((r) => setTimeout(r, 1_000));
+      assert.ok(!genericChat.shown().some((m) => /couldn't finish|waiting on a pending approval/.test(String(m.body))));
+    } finally {
+      await genericChat.close();
+    }
+  });
 
 test("a credential request is a card its owner decides from the chat, and a decision made elsewhere clears the posted card", async () => {
   const genericChat = await fakeGenericChat();
@@ -1136,13 +1153,12 @@ test("a credential request is a card its owner decides from the chat, and a deci
   };
   const client = createGenericChatClient({ url: genericChat.url, secret: SECRET });
   const app = {
-    tenantFor,
     getApproval: async () => null,
     readSurfaceMessages: async () => [],
     ingestSurfaceEvents: async () => ({ upserted: 1 }),
   };
   const deliveries = createDeliveryStore();
-  const send = genericChatSender({ client, blobs: NO_BLOBS, app, keychainApprovals });
+  const send = genericChatSender({ client, blobs: NO_BLOBS, app, accountTenant, keychainApprovals });
   const destination = { type: "partner-chat", target: `${CONTAINER}:1002`, keychainAskId: "ask1" };
   try {
     await deliveries.enqueue({ destination, text: "notice", idempotencyKey: "ask:ask1:notice" });
@@ -1210,7 +1226,7 @@ test("a status post becomes the final reply in place, and the agent can revise o
     client: createGenericChatClient({ url: genericChat.url, secret: SECRET }),
     app: built.app,
   };
-  const send = genericChatSender({ ...ops, app: built.app, blobs: NO_BLOBS });
+  const send = genericChatSender({ ...ops, app: built.app, accountTenant, blobs: NO_BLOBS });
   const thread = { account: "7001", kind: "group" as const, chat: "88", thread: "1009" };
   const status = () =>
     withTenant(TEST_TENANT, () => postGenericChatMessage(ops, thread, { text: "On it", idempotencyKey: "status:r1" }));
@@ -1324,9 +1340,8 @@ test("a react delivery adds the agent's reaction under the chat's own emoji name
 test("a person's reaction to the agent's message starts one turn, while the agent's own and reactions it has no stake in start none", async () => {
   const { built, genericChat, deliver } = await genericChatApp();
   try {
-    await deliver(event({ body: "!post should the bot deploy", mentions: true, eventId: "ev-ask", messageId: "1002" }));
-    await settle(async () => genericChat.shown().length === 1);
-    const asked = genericChat.shown()[0]!.id;
+    await deliver(event({ body: "!hold live", mentions: true, eventId: "ev-ask", messageId: "1002" }));
+    await settle(async () => mockHeldTurns.get("live") !== undefined);
     const reaction = (eventId: string, reactor: "5" | "6" | "9", on: "agent" | "other") => {
       const base = event({ eventId, body: on === "agent" ? "should the bot deploy" : "is the bot around" });
       return {
@@ -1337,7 +1352,7 @@ test("a person's reaction to the agent's message starts one turn, while the agen
         reaction: { name: "white_check_mark", user: base.chat.members.find((m) => m.id === reactor) },
         message:
           on === "agent"
-            ? { ...base.message, id: asked, user: { id: "9", name: "QM", bot: true }, app_post: true }
+            ? { ...base.message, id: "1003", user: { id: "9", name: "QM", bot: true }, app_post: true }
             : { ...base.message, id: "1050" },
       };
     };
@@ -1352,12 +1367,11 @@ test("a person's reaction to the agent's message starts one turn, while the agen
       (await built.runs.list({ threadRef: `${CONTAINER}:1002` }))
         .map((run) => run.request.text)
         .filter((text) => text.startsWith("[Chat reaction]"));
-    await settle(async () => (await reactionTurns()).length > 0);
-    await new Promise((r) => setTimeout(r, 1_000));
     assert.deepEqual(await reactionTurns(), [
       '[Chat reaction] Ada Lovelace reacted with :white_check_mark: on your message: "should the bot deploy".',
     ]);
   } finally {
+    mockHeldTurns.release("live");
     await genericChat.close();
   }
 });

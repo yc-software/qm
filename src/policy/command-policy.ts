@@ -434,12 +434,31 @@ function executedPayloads(root: Node): Executed {
 
 function decodeAnsiC(value: string): string {
   const named: Record<string, string> = { a: "\x07", b: "\b", e: "\x1b", f: "\f", n: "\n", r: "\r", t: "\t", v: "\v" };
-  return value.replace(/\\(x[0-9a-fA-F]{1,2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8}|[0-7]{1,3}|.)/g, (_, escape: string) => {
-    const kind = escape.charAt(0);
-    if ("xuU".includes(kind) && escape.length > 1) return String.fromCodePoint(Number.parseInt(escape.slice(1), 16));
-    if ("01234567".includes(kind)) return String.fromCodePoint(Number.parseInt(escape, 8));
-    return named[escape] ?? ("\\'\"".includes(escape) ? escape : `\\${escape}`);
-  });
+  let out = "";
+  for (let i = 0; i < value.length; i++) {
+    if (value[i] !== "\\" || i + 1 >= value.length) {
+      out += value[i];
+      continue;
+    }
+    const kind = value[++i]!;
+    const hexMax = { x: 2, u: 4, U: 8 }[kind] ?? 0;
+    const isOct = !hexMax && kind >= "0" && kind <= "7";
+    const start = isOct && kind !== "0" ? i : i + 1;
+    let end = start;
+    if (hexMax || isOct) {
+      const digits = hexMax ? "0123456789abcdefABCDEF" : "01234567";
+      while (end < value.length && end - start < (hexMax || 3) && digits.includes(value[end]!)) end++;
+    }
+    if (hexMax && end > start) {
+      const code = Number.parseInt(value.slice(start, end), 16);
+      out += code <= 0x10ffff ? String.fromCodePoint(code) : value.slice(i - 1, end);
+      i = end - 1;
+    } else if (isOct) {
+      out += String.fromCodePoint(Number.parseInt(value.slice(start, end) || "0", 8));
+      i = end - 1;
+    } else out += named[kind] ?? ("\\'\"".includes(kind) ? kind : `\\${kind}`);
+  }
+  return out;
 }
 
 const SQL_CLIENT_SPECS: Record<string, { options: string[]; sqlPositionalsAfter?: number }> = {

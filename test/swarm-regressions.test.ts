@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { swarmFixture } from "./support/swarm-fixture.ts";
 import { testTenant } from "./support/test-tenant.ts";
 import { testMap } from "./support/test-database.ts";
+import { personalScope } from "../src/types.ts";
 
 test("explicit self-recipient remains in shared history without waking itself", async () => {
   const f = await swarmFixture();
@@ -119,13 +120,13 @@ test("selected scope computer determines new worker provider, but its private di
     lock: f.serviceOptions.lock,
     canUseScope: async () => true,
   });
-  const selected = await sandboxes.create("alice", "personal:alice", "aws", "selected");
-  await sandboxes.setDefault("alice", "personal:alice", selected.id);
+  const selected = await sandboxes.create("alice", personalScope("alice"), "aws", "selected");
+  await sandboxes.setDefault("alice", personalScope("alice"), selected.id);
   const service = createSwarmService({ ...f.serviceOptions, sandboxes });
   const [peer] = await service.spawn(f.caller, { requestId: "initial", text: "work" });
   await service.sweep();
   const record = (await f.records.get(peer!.id))!;
   assert.equal(record.backend, "aws");
   assert.notEqual(record.backingScopeId, selected.backingScopeId);
-  assert.equal((await sandboxes.resolve("personal:alice"))!.id, selected.id);
+  assert.equal((await sandboxes.resolve(personalScope("alice")))!.id, selected.id);
 });

@@ -48,19 +48,18 @@ test(
     const upstream = await verificationUpstream();
     t.after(() => upstream.close());
     const pool = new pg.Pool({ connectionString: databaseUrl });
-    const schema = `model_overlay_${randomUUID().replaceAll("-", "")}`;
+    const database = `model_overlay_${randomUUID().replaceAll("-", "")}`;
     t.after(async () => {
       try {
-        await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+        await pool.query(`DROP DATABASE IF EXISTS ${database} WITH (FORCE)`);
       } finally {
         await pool.end();
       }
     });
-    await pool.query(`CREATE SCHEMA ${schema}`);
+    await pool.query(`CREATE DATABASE ${database}`);
     const url = new URL(databaseUrl);
-    url.searchParams.set("options", `${url.searchParams.get("options") ?? ""} -c search_path=${schema}`.trim());
+    url.pathname = `/${database}`;
     const isolatedDatabaseUrl = url.toString();
-    await seedTestTenant(databaseUrl);
     await seedTestTenant(isolatedDatabaseUrl);
     const factory = createPostgresMapFactory(isolatedDatabaseUrl);
     const processes: ChildProcess[] = [];

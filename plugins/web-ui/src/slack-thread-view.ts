@@ -1,11 +1,14 @@
-import { splitLinks } from "./linkify";
 import { html, nothing, type TemplateResult } from "lit";
 import { ExternalLink } from "lucide";
 import { charForName } from "./emoji-picker";
 import { icon } from "./icons";
 import { projectIconTpl } from "./project-icon";
 import { slackMark } from "./slack-mark";
-import { FORWARD_PREFIX, splitOnce, splitSlackWire, withEmoji } from "./slack-text";
+import { FORWARD_PREFIX, slackWireToMarkdown, splitOnce } from "./slack-text";
+import { escapeHtml } from "./html-escape";
+import { marked } from "marked";
+import { markdown } from "./message-markdown";
+import { appState } from "./shell";
 import { tip } from "./tooltip";
 
 export function appTag(): TemplateResult {
@@ -42,32 +45,46 @@ export function openInSurface(href: string | null, surface: string | undefined):
   >`;
 }
 
-export function slackWireBubble(text: string, self: string): TemplateResult {
+export function slackWireBubble(text: string): TemplateResult {
   const at = text.indexOf(FORWARD_PREFIX);
-  if (at < 0) return slackWireText(text, self);
+  if (at < 0)
+    return html`<div class="slack-wire-text" dir="auto">${markdown(slackWireToMarkdown(text, charForName))}</div>`;
   const rest = text.slice(at + FORWARD_PREFIX.length);
   const close = rest.indexOf("] ");
   const [author, where] = splitOnce(close < 0 ? rest : rest.slice(0, close), " in ");
   const lead = text.slice(0, at).trim();
-  return html`${lead ? slackWireText(lead, self) : nothing}
+  return html`${lead ? slackWireBubble(lead) : nothing}
     <div class="slack-forward">
       <div class="slack-forward-head"><b>${author}</b>${where ? html`<span>${where}</span>` : nothing}</div>
-      ${slackWireBubble(close < 0 ? "" : rest.slice(close + 2), self)}
+      ${slackWireBubble(close < 0 ? "" : rest.slice(close + 2))}
     </div>`;
 }
 
-function textLink(href: string, label: string): TemplateResult {
-  return html`<a class="inbox-text-link" href=${href} target="_blank" rel="noreferrer noopener">${label}</a>`;
+function viewerHandle(): string {
+  const me = appState.me?.user ?? "";
+  return (me.split("@")[0] || me).trim().toLowerCase();
 }
 
-function slackWireText(text: string, self: string): TemplateResult {
-  const segments = splitSlackWire(text).map((seg) => {
-    if (seg.kind === "mention")
-      return html`<span class="slack-mention ${seg.handle.toLowerCase() === self ? "self" : ""}">@${seg.handle}</span>`;
-    if (seg.kind === "link") return textLink(seg.href, seg.label);
-    return splitLinks(seg.text).map((part) =>
-      part.kind === "link" ? textLink(part.href, part.href) : withEmoji(part.text, charForName),
-    );
-  });
-  return html`<div class="slack-wire-text" dir="auto">${segments}</div>`;
-}
+marked.use({
+  extensions: [
+    {
+      name: "slackMention",
+      level: "inline",
+      start: (src: string) => {
+        const at = src.indexOf("<@");
+        return at < 0 ? undefined : at;
+      },
+      tokenizer(src: string) {
+        if (!src.startsWith("<@")) return undefined;
+        const end = src.indexOf(">");
+        const handle = end < 0 ? "" : src.slice(2, end);
+        if (!handle || handle.includes("<") || handle.includes("\n")) return undefined;
+        return { type: "slackMention", raw: src.slice(0, end + 1), handle };
+      },
+      renderer(token) {
+        const handle = String(token.handle);
+        return `<span class="slack-mention${handle.toLowerCase() === viewerHandle() ? " self" : ""}">@${escapeHtml(handle)}</span>`;
+      },
+    },
+  ],
+});

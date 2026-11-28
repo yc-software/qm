@@ -24,12 +24,31 @@ function quoted(name: string): string {
 interface Request {
   template?: string;
   bare?: boolean;
+  database?: string;
+  sql?: string;
 }
 
-async function createDatabase({ template = "", bare = false }: Request): Promise<string> {
+async function runSql(database: string, sql: string): Promise<string> {
+  const url = new URL(baseUrl);
+  url.pathname = `/${database}`;
+  const connected = new pg.Client({ connectionString: url.toString() });
+  await connected.connect();
+  try {
+    await connected.query(sql);
+  } finally {
+    await connected.end();
+  }
+  return database;
+}
+
+async function createDatabase({
+  template = process.env.QM_TEST_TEMPLATE_DATABASE ?? "",
+  bare = false,
+}: Request): Promise<string> {
   const name = `${prefix}_${randomBytes(6).toString("hex")}`;
-  await (await admin()).query(`CREATE DATABASE ${quoted(name)}${template ? ` TEMPLATE ${quoted(template)}` : ""}`);
-  if (!template && !bare) {
+  const from = bare ? "" : template;
+  await (await admin()).query(`CREATE DATABASE ${quoted(name)}${from ? ` TEMPLATE ${quoted(from)}` : ""}`);
+  if (!from && !bare) {
     const url = new URL(baseUrl);
     url.pathname = `/${name}`;
     await seedTestTenant(url.toString());
@@ -51,7 +70,7 @@ async function take(request: Request): Promise<string> {
 
 parentPort!.on("message", async (request: Request) => {
   try {
-    const name = await take(request);
+    const name = request.database && request.sql ? await runSql(request.database, request.sql) : await take(request);
     port.postMessage({ ok: true, name });
   } catch (error) {
     port.postMessage({ ok: false, message: error instanceof Error ? error.message : String(error) });

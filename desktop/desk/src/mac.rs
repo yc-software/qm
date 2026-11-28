@@ -1,7 +1,10 @@
 use crate::cancellation;
+use crate::outcome;
 
+mod expect;
 mod input;
 mod markers;
+mod windows;
 use crate::protocol::*;
 use crate::text::{self, Key as TextKey, Stroke};
 use crate::tree::{self, Item, Key, Locator, Props, ROOT};
@@ -21,7 +24,9 @@ use core_graphics::geometry::{CGPoint, CGSize};
 use core_graphics::window::{copy_window_info, kCGWindowListOptionOnScreenOnly, kCGWindowNumber};
 use foreign_types::ForeignType;
 use objc2_app_kit::{NSApplicationActivationPolicy, NSFont, NSFontDescriptorSymbolicTraits, NSRunningApplication, NSWorkspace};
-use objc2_core_graphics::{CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess};
+use objc2_core_graphics::{
+    CGPreflightListenEventAccess, CGPreflightScreenCaptureAccess, CGRequestListenEventAccess, CGRequestScreenCaptureAccess,
+};
 use objc2_foundation::{NSBundle, NSString};
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
@@ -95,14 +100,13 @@ const TRANSIENT: &[&str] = &["AXDialog", "AXSystemDialog", "AXFloatingWindow", "
 const POPUPS: &[&str] = &["AXSheet", "AXPopover", "AXDrawer", "AXMenu"];
 const INVALID_ELEMENT: i32 = -25202;
 const NO_VALUE: i32 = -25212;
+const ATTRIBUTE_UNSUPPORTED: i32 = -25205;
 const FETCH: &[&str] = &[
     "AXRole",
     "AXSubrole",
     "AXTitle",
     "AXDescription",
     "AXHelp",
-    "AXValue",
-    "AXVisibleCharacterRange",
     "AXPlaceholderValue",
     "AXURL",
     "AXIdentifier",
@@ -288,9 +292,26 @@ struct Snapshot {
     ancestry: HashMap<u32, Vec<El>>,
     lines: HashMap<Key, String>,
     ids: tree::Ids<El>,
+    selected: Option<u32>,
 }
 
 impl Snapshot {
+    fn unseen(window: u32, window_element: El, frame: Rect, selected: Option<u32>) -> Snapshot {
+        Snapshot {
+            window,
+            window_element,
+            frame,
+            elements: vec![],
+            popups: vec![],
+            text: HashMap::new(),
+            markers: HashMap::new(),
+            ancestry: HashMap::new(),
+            lines: HashMap::new(),
+            ids: tree::Ids::default(),
+            selected,
+        }
+    }
+
     fn matches_window(&self, element: &El, id: u32, frame: Option<Rect>) -> bool {
         self.window == id && &self.window_element == element && frame == Some(self.frame)
     }
@@ -713,8 +734,32 @@ struct Field {
     selection: Option<(usize, usize)>,
 }
 
+fn held(v: &CFType) -> Option<text::Held> {
+    if let Some(b) = v.downcast::<CFBoolean>() {
+        return Some(text::Held::Flag(bool::from(b)));
+    }
+    if let Some(n) = v.downcast::<CFNumber>() {
+        return n.to_f64().map(text::Held::Number);
+    }
+    if let Some(d) = v.downcast::<core_foundation::date::CFDate>() {
+        return Some(text::Held::Date(d.abs_time()));
+    }
+    text_of(v).map(text::Held::Text)
+}
+
+pub(crate) fn secure_element(e: &El) -> bool {
+    let role = str_attr(e, "AXRole").unwrap_or_default();
+    tree::secure(&role, str_attr(e, "AXSubrole").as_deref())
+}
+
+const PASSWORD_PASTE: &str =
+    "The focused field is a password field. paste never reads password fields, so it cannot confirm the paste; click the field and use typeText instead";
+
 fn field(ax: &El) -> Option<Field> {
     let element = attr(ax, "AXFocusedUIElement")?;
+    if secure_element(&element) {
+        return None;
+    }
     let value = attr(&element, "AXValue")?.downcast::<CFString>()?.to_string();
     let selection = ax_value::<[isize; 2]>(&element, "AXSelectedTextRange", 4)
         .filter(|[start, len]| *start >= 0 && *len >= 0)
@@ -727,6 +772,9 @@ fn paste(pid: i32, ax: &El, s: &str, format: PasteFormat) -> Result<(), Failure>
         Some(k) => k.code,
         None => chord("v")?.0,
     };
+    if attr(ax, "AXFocusedUIElement").is_some_and(|focused| secure_element(&focused)) {
+        return Err(fail(ErrorCode::ActionFailed, PASSWORD_PASTE));
+    }
     let before = field(ax);
     let pasted = text::expected(s, format);
     let mut check = || {
@@ -814,17 +862,10 @@ fn exact_window(pid: i32, id: u32) -> Option<El> {
     if id == 0 {
         return None;
     }
-    let app = app_element(pid);
-    let windows: Vec<_> = [attr(&app, "AXFocusedWindow"), attr(&app, "AXMainWindow")]
+    windows::all(&app_element(pid))
         .into_iter()
-        .flatten()
-        .chain(attr(&app, "AXWindows").into_iter().flat_map(list))
-        .collect();
-    windows
-        .iter()
-        .cloned()
-        .chain(windows.iter().flat_map(|w| attr(w, "AXSheets").into_iter().flat_map(list)))
-        .find(|w| window_id(w) == id && bool_attr(w, "AXMinimized") != Some(true))
+        .find(|(w, seen, _)| *seen == id && bool_attr(w, "AXMinimized") != Some(true))
+        .map(|(w, _, _)| w)
 }
 
 pub(crate) fn focused_window(pid: i32) -> Option<(u32, CFType)> {
@@ -878,6 +919,7 @@ struct Node {
 thread_local! {
     static FETCH_NAMES: CFArray<CFString> = CFArray::from_CFTypes(&FETCH.iter().map(|n| cfs(n)).collect::<Vec<_>>());
     static READINESS_NAMES: CFArray<CFString> = CFArray::from_CFTypes(&[cfs("AXRole"), cfs("AXChildren")]);
+    static VALUE_NAMES: CFArray<CFString> = CFArray::from_CFTypes(&[cfs("AXValue"), cfs("AXVisibleCharacterRange")]);
 }
 
 fn fetch_attributes(e: &El, names: &CFArray<CFString>) -> Vec<Option<CFType>> {
@@ -909,24 +951,34 @@ fn fetch(e: &El) -> Node {
     } else {
         None
     };
-    let has_value = get("AXValue").is_some();
     let role = s("AXRole").unwrap_or_else(|| "AXUnknown".into());
-    let visible_text = matches!(role.as_str(), "AXTextArea" | "AXTextField")
-        .then(|| {
-            let value = get("AXValue").and_then(text_of)?;
-            let range = get("AXVisibleCharacterRange").and_then(|v| point_of::<[isize; 2]>(v, 4))?;
-            crate::text::visible_text(&value, range, tree::MAX_TEXT)
+    let subrole = s("AXSubrole");
+    let secure = tree::secure(&role, subrole.as_deref());
+    let text_field = matches!(role.as_str(), "AXTextArea" | "AXTextField");
+    let (value, range) = if secure {
+        (None, None)
+    } else if text_field {
+        let mut values = VALUE_NAMES.with(|names| fetch_attributes(e, names)).into_iter();
+        (values.next().flatten(), values.next().flatten())
+    } else {
+        (attr(e, "AXValue"), None)
+    };
+    let has_value = value.is_some();
+    let visible_text = range
+        .and_then(|range| {
+            let value = value.as_ref().and_then(text_of)?;
+            crate::text::visible_text(&value, point_of::<[isize; 2]>(&range, 4)?, tree::MAX_TEXT)
         })
-        .flatten();
+        .filter(|_| text_field);
     let props = Props {
         role,
         visible_text,
         rich_text: None,
-        subrole: s("AXSubrole"),
+        subrole,
         title,
         description: s("AXDescription").or_else(|| s("AXHelp")),
         label,
-        value: s("AXValue"),
+        value: value.as_ref().and_then(text_of).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
         placeholder: s("AXPlaceholderValue"),
         url: s("AXURL"),
         identifier: s("AXIdentifier"),
@@ -937,19 +989,21 @@ fn fetch(e: &El) -> Node {
         settable: has_value,
         actions: vec![],
         list_item: false,
+        secure,
     };
     let frame = match (get("AXPosition").and_then(|p| point_of::<CGPoint>(p, 1)), get("AXSize").and_then(|p| point_of::<CGSize>(p, 2))) {
         (Some(p), Some(z)) => Some(Rect { x: p.x, y: p.y, w: z.width, h: z.height }),
         _ => None,
     };
     let children = get("AXChildren").cloned().map(list).unwrap_or_default();
-    let raw = get("AXValue").or(get("AXTitle")).and_then(text_of);
+    let raw = value.as_ref().or(get("AXTitle")).and_then(text_of);
     Node { props, has_value, raw, rendered: None, frame, children }
 }
 
 impl Node {
     fn marker_candidate(&self, clip: Rect) -> bool {
         !self.has_value
+            && !self.props.secure
             && self.children.is_empty()
             && matches!(self.props.role.as_str(), "AXStaticText" | "AXTextArea" | "AXTextField")
             && self.frame.is_some_and(|frame| frame.w > 0.0 && frame.h > 0.0 && tree::intersect(frame, clip) == Some(frame))
@@ -1103,7 +1157,7 @@ fn attributed_text(e: &El, n: &Node) -> Option<text::RenderedText> {
 
 fn complete(e: &El, mut n: Node, cache: Option<&mut Cache>) -> Node {
     let hash = unsafe { CFHash(e.as_CFTypeRef()) };
-    let text_role = matches!(n.props.role.as_str(), "AXTextArea" | "AXTextField" | "AXStaticText");
+    let text_role = !n.props.secure && matches!(n.props.role.as_str(), "AXTextArea" | "AXTextField" | "AXStaticText");
     let rich_candidate = text_role && (n.props.role != "AXStaticText" || n.children.is_empty());
     let cached = cache.as_ref().and_then(|c| c.get(e, hash));
     let uncached = cached.is_none();
@@ -1458,6 +1512,9 @@ fn select(
     suffix: &str,
     selection: Selection,
 ) -> Result<(), Failure> {
+    if secure_element(e) {
+        return Err(fail(ErrorCode::ActionFailed, "The element is a password field; its text is never read, so selectText is unavailable"));
+    }
     if !settable(e, "AXSelectedTextRange") {
         return Err(fail(ErrorCode::ActionFailed, "The element does not support setting its text selection"));
     }
@@ -1515,12 +1572,13 @@ fn permissions(prompt: bool) -> Reply {
         unsafe { AXIsProcessTrusted() }
     };
     let screen_recording = if prompt { CGRequestScreenCaptureAccess() } else { CGPreflightScreenCaptureAccess() };
+    let input_monitoring = if prompt { CGRequestListenEventAccess() } else { CGPreflightListenEventAccess() };
     let binary = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
-    let help = "System Settings > Privacy & Security > Accessibility and > Screen Recording: add the app that launches desk \
-(QM, or your terminal when run alone) with +, switch it on, then quit and reopen that app. \
+    let help = "System Settings > Privacy & Security > Accessibility, > Screen Recording and > Input Monitoring: \
+add the app that launches desk (QM, or your terminal when run alone) with +, switch it on, then quit and reopen that app. \
 `desk permissions --prompt` raises the system prompts."
         .to_string();
-    Reply::Permissions { accessibility, screen_recording, binary, help }
+    Reply::Permissions { accessibility, screen_recording, input_monitoring, binary, help }
 }
 
 impl Desk {
@@ -1551,12 +1609,13 @@ impl Desk {
         let r = match cmd {
             Command::Permissions { prompt } => Ok(permissions(prompt)),
             Command::Apps => apps(),
-            Command::Observe { app, screenshot, diff } => {
-                resolve(&app).and_then(|a| self.observe(&a, screenshot, diff)).map(Reply::Observation)
-            }
-            Command::Act { app, actions, observe, screenshot, pace: paced, diff } => {
+            Command::Windows { app } => windows::reply(&app),
+            Command::Observe { app, screenshot, diff, tree, window: selected } => resolve(&app, |a| window(a, selected).map(drop))
+                .and_then(|a| self.observe(&a, screenshot, diff, tree, selected))
+                .map(Reply::Observation),
+            Command::Act { app, actions, observe, screenshot, pace: paced, diff, window: selected, expect } => {
                 let pace = if paced { Some(pace) } else { None };
-                self.act(&app, &actions, observe.then_some((screenshot, diff)), pace)
+                self.act(&app, &actions, observe.then_some((screenshot, diff)), pace, selected, expect.as_ref())
             }
             Command::Arrived => Err(fail(ErrorCode::BadRequest, "arrived outside a paced act")),
         };
@@ -1621,16 +1680,22 @@ impl Desk {
         }
     }
 
-    fn observe(&mut self, app: &App, shot: bool, diff: bool) -> Result<Observation, Failure> {
+    fn observe(&mut self, app: &App, shot: bool, diff: bool, with_tree: bool, selected: Option<u32>) -> Result<Observation, Failure> {
+        if !with_tree && !shot {
+            return Err(fail(ErrorCode::BadRequest, "observe needs the tree, a screenshot or both"));
+        }
         self.sync_app(app);
         self.activity.session(app.pid, true);
         self.wait_for_user(app, true)?;
         let observed_at = Instant::now();
         if let Some(at) = self.touched.remove(&app.pid) {
-            let (_, w) = window(app)?;
+            let (_, w) = window(app, selected)?;
             settle(&w, at, self.observers.get(&app.pid).map(|o| &*o.notices));
         }
-        let (ax, w) = window(app)?;
+        let (ax, w) = window(app, selected)?;
+        if !with_tree {
+            return self.glance(app, &ax, &w, selected, observed_at);
+        }
         self.enable(app, &ax, &w)?;
         if let std::collections::hash_map::Entry::Vacant(slot) = self.observers.entry(app.pid) {
             if let Some(o) = Observer::new(app.pid, &ax) {
@@ -1695,15 +1760,18 @@ impl Desk {
                 _ => format!("{} (not in the tree above)", complete(&focus, fetch(&focus), None).props.describe().0),
             };
             lines.push((Key::Info(0), format!("Focus: {what}")));
-            if let Some(sel) = str_attr(&focus, "AXSelectedText") {
+            if let Some(sel) = (!secure_element(&focus)).then(|| str_attr(&focus, "AXSelectedText")).flatten() {
                 lines.push((Key::Info(1), format!("Selected text: \"{}\"", tree::clip(&sel, tree::MAX_TEXT))));
             }
         }
-        let screenshot = if shot {
+        let (screenshot, screenshot_error) = if shot {
             let related = input::related_windows(app.pid, &w, f, &others);
-            Some(capture(&w, f, &related)?)
+            match capture(&w, f, &related) {
+                Ok(shot) => (Some(shot), None),
+                Err(error) => (None, Some(error.message)),
+            }
         } else {
-            None
+            (None, None)
         };
         let moved: HashSet<u32> = moved.into_values().collect();
         let rendered = tree::render(&lines, prev.as_ref().filter(|_| diff).map(|p| &p.lines), &moved);
@@ -1720,6 +1788,7 @@ impl Desk {
             tree: rendered.tree,
             removed: rendered.removed,
             screenshot,
+            screenshot_error,
         };
         let lines: HashMap<_, _> = lines.into_iter().collect();
         self.cache.insert(
@@ -1735,10 +1804,43 @@ impl Desk {
                 ancestry: walk.ancestry.into_iter().filter(|(id, _)| lines.contains_key(&Key::Element(*id))).collect(),
                 lines,
                 ids: walk.ids.carry(),
+                selected,
             },
         );
         self.activity.clear(app.pid, observed_at);
         Ok(obs)
+    }
+
+    fn glance(&mut self, app: &App, ax: &El, w: &El, selected: Option<u32>, observed_at: Instant) -> Result<Observation, Failure> {
+        let win = window_id(w);
+        let f = frame(w).unwrap_or(Rect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 });
+        let related = input::related_windows(app.pid, w, f, &extras(ax, w));
+        let screenshot = capture(w, f, &related)?;
+        match self.cache.get_mut(&app.pid) {
+            Some(snapshot) if snapshot.window == win && snapshot.selected == selected => {
+                snapshot.window_element = w.clone();
+                snapshot.frame = f;
+            }
+            _ => {
+                self.cache.insert(app.pid, Snapshot::unseen(win, w.clone(), f, selected));
+            }
+        }
+        self.activity.clear(app.pid, observed_at);
+        Ok(Observation {
+            app: app.name.clone(),
+            bundle_id: app.bundle.clone(),
+            pid: app.pid,
+            window: str_attr(w, "AXTitle").unwrap_or_default(),
+            window_id: win,
+            frame: f,
+            elements: 0,
+            truncated: false,
+            diffed: false,
+            tree: String::new(),
+            removed: vec![],
+            screenshot: Some(screenshot),
+            screenshot_error: None,
+        })
     }
 
     fn wait_for_user(&self, app: &App, observing: bool) -> Result<(), Failure> {
@@ -1780,18 +1882,28 @@ impl Desk {
         actions: &[Action],
         observe: Option<(bool, bool)>,
         mut pace: Option<&mut dyn FnMut(u32, Point) -> Result<(), Failure>>,
+        selected: Option<u32>,
+        expect: Option<&Expect>,
     ) -> Result<Reply, Failure> {
-        let app = resolve(query)?;
+        let app = resolve(query, |a| window(a, selected).map(drop))?;
         self.sync_app(&app);
-        if !self.cache.contains_key(&app.pid) {
+        let Some(snapshot) = self.cache.get(&app.pid) else {
             return Err(fail(ErrorCode::BadIndex, "Observe this app before acting; its previous observation is no longer available"));
+        };
+        if snapshot.selected != selected {
+            return Err(fail(ErrorCode::BadIndex, "The latest observation was of a different window; observe this window before acting"));
         }
-        let (ax, w) = window(&app)?;
+        let (ax, w) = window(&app, selected)?;
         let win = window_id(&w);
         if !on_current_space(win) {
             return Err(fail(ErrorCode::NoWindow, "Window is not visible on the current Space; switch Spaces and observe again"));
         }
         self.validate_window(&app)?;
+        let already = match expect {
+            Some(expect) => outcome::before(self.condition(&app, &expect.condition)?),
+            None => None,
+        };
+        let actions = if already.is_some() { &actions[..0] } else { actions };
         let mut focus = if actions.iter().any(|a| !matches!(a, Action::Wait { .. } | Action::Raise)) {
             Some(crate::focus::Focus::begin(app.pid, win, std::rc::Rc::clone(&self.enforcers))?)
         } else {
@@ -1861,6 +1973,25 @@ impl Desk {
                 }
             }
         }
+        let outcome = match (already, expect) {
+            (Some(already), _) => Some(already),
+            (None, Some(expect)) if failure.is_none() => {
+                match outcome::after(
+                    || self.condition(&app, &expect.condition),
+                    expect.timeout_ms.unwrap_or(outcome::DEFAULT_TIMEOUT_MS),
+                    cancellation::wait,
+                    cancellation::cancelled,
+                ) {
+                    Ok(outcome) => Some(outcome),
+                    Err(mut error) => {
+                        error.message = format!("The actions were sent, but checking the expected outcome failed: {}", error.message);
+                        failure = Some(error);
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
         let attempted = (completed as usize + 1).min(actions.len());
         if actions[..attempted].iter().any(|a| !matches!(a, Action::Wait { .. })) {
             self.touched.insert(app.pid, Instant::now());
@@ -1875,19 +2006,19 @@ impl Desk {
             }
         }
         let (observation, observation_failure) = match observe {
-            Some((shot, diff)) => match self.observe(&app, shot, diff) {
+            Some((shot, diff)) => match self.observe(&app, shot, diff, true, selected) {
                 Ok(observation) => (Some(observation), None),
                 Err(error) => (None, Some(error)),
             },
             None => (None, None),
         };
-        Ok(Reply::Acted { completed, failure, observation, observation_failure })
+        Ok(Reply::Acted { completed, failure, observation, observation_failure, outcome })
     }
 
     fn validate_window(&self, app: &App) -> Result<(), Failure> {
         active()?;
-        let (_, current) = window(app)?;
         let snapshot = self.cache.get(&app.pid).ok_or_else(|| fail(ErrorCode::BadIndex, "Observe before acting"))?;
+        let (_, current) = window(app, snapshot.selected)?;
         let current_id = window_id(&current);
         if !snapshot.matches_window(&current, current_id, frame(&current)) || !on_current_space(current_id) {
             return Err(fail(ErrorCode::BadIndex, "The window changed or moved; observe again before acting"));
@@ -2180,7 +2311,7 @@ fn apps() -> Result<Reply, Failure> {
     Ok(Reply::Apps { apps })
 }
 
-fn resolve(query: &str) -> Result<App, Failure> {
+fn resolve(query: &str, ready: impl Fn(&App) -> Result<(), Failure>) -> Result<App, Failure> {
     if !unsafe { AXIsProcessTrusted() } {
         return Err(fail(ErrorCode::PermissionMissing, "Accessibility not granted; run `desk permissions --prompt`"));
     }
@@ -2208,8 +2339,8 @@ fn resolve(query: &str) -> Result<App, Failure> {
                 let launched =
                     NSRunningApplication::runningApplicationWithProcessIdentifier(app.pid).is_some_and(|app| app.isFinishedLaunching());
                 if launched {
-                    match window(&app) {
-                        Ok(_) => return Ok(app),
+                    match ready(&app) {
+                        Ok(()) => return Ok(app),
                         Err(error) => error,
                     }
                 } else {
@@ -2258,10 +2389,17 @@ fn select_app(apps: Vec<App>, query: &str, path: Option<&std::path::Path>) -> Re
     Ok(matches.pop())
 }
 
-fn window(app: &App) -> Result<(El, El), Failure> {
+fn window(app: &App, selected: Option<u32>) -> Result<(El, El), Failure> {
     let ax = unsafe { CFType::wrap_under_create_rule(AXUIElementCreateApplication(app.pid)) };
     unsafe { AXUIElementSetMessagingTimeout(ax.as_CFTypeRef(), 1.5) };
-    let w = window_of(&ax).ok_or_else(|| fail(ErrorCode::NoWindow, format!("{} has no open window", app.name)))?;
+    let w = match selected {
+        Some(id) => windows::all(&ax)
+            .into_iter()
+            .find(|(_, seen, _)| *seen == id)
+            .map(|(w, _, _)| w)
+            .ok_or_else(|| fail(ErrorCode::NoWindow, format!("{} has no open window {id}; list its windows again", app.name)))?,
+        None => window_of(&ax).ok_or_else(|| fail(ErrorCode::NoWindow, format!("{} has no open window", app.name)))?,
+    };
     if bool_attr(&ax, "AXHidden") == Some(true) || bool_attr(&w, "AXMinimized") == Some(true) {
         return Err(fail(ErrorCode::NoWindow, "App is hidden or window is minimized; show it and observe again"));
     }
@@ -2361,6 +2499,7 @@ mod tests {
             ancestry: HashMap::new(),
             lines: HashMap::new(),
             ids: tree::Ids::default(),
+            selected: None,
         };
         assert!(snapshot.matches_window(&element, 42, Some(frame)));
         assert!(!snapshot.matches_window(&element, 43, Some(frame)));

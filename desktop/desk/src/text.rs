@@ -75,6 +75,49 @@ pub fn number(s: &str) -> Option<f64> {
     s.trim().parse::<f64>().ok().filter(|n| n.is_finite()).or_else(|| flag(s).map(|b| if b { 1.0 } else { 0.0 }))
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum Held {
+    Text(String),
+    Number(f64),
+    Flag(bool),
+    Date(f64),
+}
+
+impl Held {
+    pub fn shown(&self) -> String {
+        match self {
+            Held::Text(s) => s.clone(),
+            Held::Number(n) => n.to_string(),
+            Held::Flag(b) => b.to_string(),
+            Held::Date(_) => "a date".into(),
+        }
+    }
+}
+
+fn same_number(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0)
+}
+
+pub fn holds(want: &Held, got: &Held) -> bool {
+    match (want, got) {
+        (Held::Text(a), Held::Text(b)) => norm(&a.encode_utf16().collect::<Vec<_>>()) == norm(&b.encode_utf16().collect::<Vec<_>>()),
+        (Held::Number(a), Held::Number(b)) => same_number(*a, *b),
+        (Held::Flag(a), Held::Flag(b)) => a == b,
+        (Held::Flag(a), Held::Number(n)) | (Held::Number(n), Held::Flag(a)) => same_number(*n, if *a { 1.0 } else { 0.0 }),
+        (Held::Date(a), Held::Date(b)) => (a - b).abs() < 1.0,
+        _ => false,
+    }
+}
+
+pub fn reads(got: &Held, equals: &str) -> bool {
+    match got {
+        Held::Text(_) => holds(&Held::Text(equals.to_string()), got),
+        Held::Number(_) => number(equals).is_some_and(|n| holds(&Held::Number(n), got)),
+        Held::Flag(_) => flag(equals).is_some_and(|b| holds(&Held::Flag(b), got)),
+        Held::Date(_) => false,
+    }
+}
+
 pub fn expected(text: &str, format: PasteFormat) -> Vec<String> {
     let (plain, html) = payload(text, format);
     let rendered = html.map(|h| strip_html(&h)).filter(|r| *r != plain);
@@ -373,6 +416,33 @@ fn strip_html(html: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn written_values_must_match_not_merely_change() {
+        let text = |s: &str| Held::Text(s.into());
+        assert!(holds(&text("a\nb"), &text("a\r\nb")));
+        assert!(holds(&text("a b"), &text("a\u{a0}b")));
+        assert!(!holds(&text("hello"), &text("hello world")));
+        assert!(!holds(&text("hello"), &text("")));
+        assert!(holds(&Held::Number(0.1 + 0.2), &Held::Number(0.3)));
+        assert!(!holds(&Held::Number(52.0), &Held::Number(50.0)));
+        assert!(holds(&Held::Flag(true), &Held::Number(1.0)));
+        assert!(!holds(&Held::Flag(true), &Held::Flag(false)));
+        assert!(holds(&Held::Date(100.0), &Held::Date(100.4)));
+        assert!(!holds(&Held::Date(100.0), &Held::Date(160.0)));
+        assert!(!holds(&text("1"), &Held::Number(1.0)));
+    }
+
+    #[test]
+    fn expected_values_compare_by_the_type_the_element_holds() {
+        assert!(reads(&Held::Text("Saved".into()), "Saved"));
+        assert!(!reads(&Held::Text("Saved".into()), "saved"));
+        assert!(reads(&Held::Number(1.0), "true"));
+        assert!(reads(&Held::Number(42.0), "42.0"));
+        assert!(reads(&Held::Flag(false), "unchecked"));
+        assert!(!reads(&Held::Flag(false), "maybe"));
+        assert!(!reads(&Held::Date(0.0), "today"));
+    }
+
     fn observed(runs: Vec<(String, TextStyle)>) -> (String, ObservedText) {
         let value: String = runs.iter().map(|(text, _)| text.as_str()).collect();
         let observed = ObservedText::new(&value, attributed_text(&runs, true).unwrap());

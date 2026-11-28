@@ -20,6 +20,7 @@ import { createPostgresDirectoryStore } from "../src/directory/postgres-director
 import { createPostgresSessionStore } from "../src/sessions/postgres-session-store.ts";
 import { testDatabaseUrl, testDeployBackings, testMap } from "./support/test-database.ts";
 import { createPostgresGrantStore } from "../src/acl/postgres-grant-store.ts";
+import { testCore } from "./support/build-app.ts";
 
 const SESSION_SECRET = "portal-session-secret";
 const LOGIN_URL = "https://portal.example.com";
@@ -87,6 +88,7 @@ async function agent(log: Pick<AppPageViewLog, "record">) {
     name: "mysite",
   });
   const server = createInsecureTestServer(app, {
+    ...testCore(),
     featureFlags: { enabled: async () => true } as unknown as FeatureFlagStore,
     deployAppsDomain: "apps.example.com",
     deployGateSecret: "gate-secret",
@@ -149,7 +151,7 @@ test("page loads of a published app are recorded with viewer, auth mode and requ
     await settle();
     assert.equal(views.length, 1, "denied and signed-out requests that never reach the app are not recorded");
 
-    await h.app.setAppPublic("mysite", true, { createdBy: "alice@example.com", personAtKeyboard: true });
+    await h.app.setAppPublic("mysite", true, { createdBy: "alice@example.com", signOff: async () => true });
     await get(h.port, "/", { Accept: "text/html", "x-qm-client-ip": "198.51.100.9" });
     await get(h.port, "/", { Accept: "text/html", Cookie: session("mallory@example.com") });
     await get(h.port, "/", { Accept: "text/html", Cookie: session("guest@example.org", true) });

@@ -25,6 +25,7 @@ export interface SlackPluginConfig {
   receiverFactory?: (staging?: EnvelopeStaging) => Receiver;
   botToken: string;
   accountId?: string;
+  personaId?: string;
   allowFrom?: string[];
   denyMessage?: string;
   coreSingleton?: boolean;

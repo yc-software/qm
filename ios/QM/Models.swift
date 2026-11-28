@@ -8,6 +8,7 @@ struct Identity: Decodable {
   var suggestedActivitiesGeneration: Bool? = nil
   var permissions: [String]? = nil
   var slackWorkspaceUrl: String? = nil
+  var slackAppIconUrl: String? = nil
 }
 
 struct Conversation: Codable, Identifiable, Hashable {
@@ -133,9 +134,8 @@ enum ConversationFilter: String, CaseIterable {
   func includes(_ conversation: Conversation) -> Bool {
     if self == .archived { return conversation.archived == true }
     guard conversation.archived != true else { return false }
-    if self == .waiting { return conversation.awaitingInput == true }
-    // Pinned conversations always show in Active, waiting or not.
-    return conversation.pinned == true || conversation.awaitingInput != true
+    // Active is every open conversation; the list leads with the ones waiting on you.
+    return self == .active || conversation.awaitingInput == true
   }
 }
 
@@ -433,6 +433,7 @@ struct ChatMessage: Identifiable {
   var referencedFiles: [DeliveredFile] = []
   var playgrounds: [NativePlayground] = []
   var speaker: String?
+  var speakerID: String?
   var runID: String?
   var sequence: Int?
   var createdAt: Double?
@@ -528,8 +529,8 @@ private struct ChatMessageBuilder {
       messages.append(
         ChatMessage(
           id: entry.id, role: "user", text: text, files: entry.body?.attachments ?? [],
-          speaker: entry.body?.name, steered: entry.steered == true,
-          slackTimestamp: entry.messageTs))
+          speaker: entry.body?.name, speakerID: entry.details?["speakerId"]?.string,
+          steered: entry.steered == true, slackTimestamp: entry.messageTs))
     }
   }
 

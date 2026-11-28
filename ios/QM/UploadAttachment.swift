@@ -313,21 +313,18 @@ struct AttachmentPicker: View {
   let uploading: Bool
   @Binding var error: String?
   let onSelect: ([AttachmentSource]) -> Void
+  @State private var showingOptions = false
+  @State private var pending: Option?
   @State private var showingImporter = false
   @State private var showingPhotos = false
   @State private var showingCamera = false
   @State private var photoSelection: [PhotosPickerItem] = []
 
+  private enum Option { case camera, photos, files }
+
   var body: some View {
-    Menu {
-      Button("Photo library", systemImage: "photo.on.rectangle") { showingPhotos = true }
-      if UIImagePickerController.isSourceTypeAvailable(.camera) {
-        Button("Take photo", systemImage: "camera") { showingCamera = true }
-      }
-      Button("Choose files", systemImage: "doc") { showingImporter = true }
-      PasteButton(supportedContentTypes: [.image]) { providers in
-        onSelect(providers.map(AttachmentSource.image))
-      }
+    Button {
+      showingOptions = true
     } label: {
       Image(systemName: "plus")
         .font(.system(size: 15, weight: .medium))
@@ -336,6 +333,15 @@ struct AttachmentPicker: View {
         .background(QMTheme.ink.opacity(0.08), in: Circle())
         .frame(width: 44, height: 44)
         .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .sensoryFeedback(.impact(weight: .light), trigger: showingOptions) { _, new in new }
+    .popover(isPresented: $showingOptions, arrowEdge: .bottom) {
+      options
+        .presentationCompactAdaptation(.popover)
+        // Open the chosen picker only once the popover is gone, so the two presentations never
+        // overlap (UIKit drops a presentation requested while another is still on screen).
+        .onDisappear(perform: openPending)
     }
     .accessibilityLabel(uploading ? "Uploading attachments" : "Attach files")
     .disabled(uploading)
@@ -368,6 +374,66 @@ struct AttachmentPicker: View {
         }
       }
     }
+  }
+}
+
+extension AttachmentPicker {
+  fileprivate var options: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      if UIImagePickerController.isSourceTypeAvailable(.camera) {
+        row("Camera", systemImage: "camera") { choose(.camera) }
+      }
+      row("Photos", systemImage: "photo") { choose(.photos) }
+      row("Files", systemImage: "paperclip") { choose(.files) }
+    }
+    .padding(.vertical, 12)
+    .frame(minWidth: 240, alignment: .leading)
+  }
+
+  private func openPending() {
+    guard let option = pending else { return }
+    pending = nil
+    switch option {
+    case .camera: showingCamera = true
+    case .photos: showingPhotos = true
+    case .files: showingImporter = true
+    }
+  }
+
+  private func choose(_ option: Option) {
+    pending = option
+    showingOptions = false
+  }
+
+  private func row(_ title: String, systemImage: String, action: @escaping () -> Void)
+    -> some View
+  {
+    Button(action: action) {
+      HStack(spacing: 16) {
+        Image(systemName: systemImage)
+          .font(.title3)
+          .frame(width: 48, height: 48)
+          .background(QMTheme.ink.opacity(0.08), in: Circle())
+        Text(title)
+          .font(.title3)
+        Spacer(minLength: 0)
+      }
+      .foregroundStyle(QMTheme.ink)
+      .padding(.horizontal, 16)
+      .padding(.vertical, 6)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(AttachmentRowStyle())
+  }
+}
+
+/// Dims and presses a row down a touch so each option feels like a physical key.
+private struct AttachmentRowStyle: ButtonStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label
+      .scaleEffect(configuration.isPressed ? 0.97 : 1)
+      .opacity(configuration.isPressed ? 0.75 : 1)
+      .animation(.spring(duration: 0.2), value: configuration.isPressed)
   }
 }
 

@@ -10,7 +10,7 @@ protocol SpeechToTextProvider {
   func recognizeLive(
     request: SFSpeechAudioBufferRecognitionRequest,
     onResult: @escaping @Sendable (String?, Bool, String?) -> Void
-  ) throws -> SFSpeechRecognitionTask?
+  ) async throws -> SFSpeechRecognitionTask?
 }
 
 struct OnDeviceSpeechToTextProvider: SpeechToTextProvider {
@@ -27,7 +27,8 @@ struct OnDeviceSpeechToTextProvider: SpeechToTextProvider {
       throw QMError.message("Speech Recognition permission could not be checked. Please try again.")
     }
     try Task.checkCancellation()
-    _ = try onDeviceRecognizer()
+    // Creating a recognizer loads the on-device speech model, which can block for a while.
+    try await Task.detached(priority: .userInitiated) { _ = try onDeviceRecognizer() }.value
   }
 
   func transcribe(file: URL) async throws -> String {
@@ -38,13 +39,25 @@ struct OnDeviceSpeechToTextProvider: SpeechToTextProvider {
   func recognizeLive(
     request: SFSpeechAudioBufferRecognitionRequest,
     onResult: @escaping @Sendable (String?, Bool, String?) -> Void
-  ) throws -> SFSpeechRecognitionTask? {
-    let recognizer = try onDeviceRecognizer()
-    request.requiresOnDeviceRecognition = true
-    request.shouldReportPartialResults = true
-    request.addsPunctuation = true
-    return startSpeechRecognition(recognizer: recognizer, request: request, onResult: onResult)
+  ) async throws -> SFSpeechRecognitionTask? {
+    // Off the main thread for the same reason as `availability()`, so opening the panel
+    // never waits on the speech model.
+    let shared = DictationAudioRequest(request: request)
+    return try await Task.detached(priority: .userInitiated) {
+      let recognizer = try onDeviceRecognizer()
+      let request = shared.request
+      request.requiresOnDeviceRecognition = true
+      request.shouldReportPartialResults = true
+      request.addsPunctuation = true
+      return SpeechRecognitionTaskBox(
+        task: startSpeechRecognition(recognizer: recognizer, request: request, onResult: onResult))
+    }.value.task
   }
+}
+
+/// Hands a recognition task started off the main thread back to the main actor.
+private struct SpeechRecognitionTaskBox: @unchecked Sendable {
+  let task: SFSpeechRecognitionTask
 }
 
 private func onDeviceRecognizer() throws -> SFSpeechRecognizer {
@@ -150,6 +163,62 @@ final class DictationLevel: @unchecked Sendable {
   func read() -> Double { lock.withLock { value } }
 }
 
+/// Carries the recognition request to the audio start-up off the main thread; the main
+/// actor only ends it after the engine, which feeds it, has stopped.
+struct DictationAudioRequest: @unchecked Sendable {
+  let request: SFSpeechAudioBufferRecognitionRequest
+}
+
+/// The running microphone, built off the main thread and handed to the main actor once.
+struct DictationAudio: @unchecked Sendable {
+  let engine: AVAudioEngine
+  let recording: AVAudioFile
+
+  /// Tears down audio that started after dictation was already cancelled.
+  func stop() {
+    engine.stop()
+    engine.inputNode.removeTap(onBus: 0)
+    try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+  }
+}
+
+/// Activates the audio session and starts recording into `url` and the recognition request.
+/// Blocking; run it off the main thread.
+nonisolated func startDictationAudio(
+  url: URL, request: DictationAudioRequest, meter: DictationLevel,
+  onError: @escaping @Sendable (String) -> Void
+) throws -> DictationAudio {
+  let session = AVAudioSession.sharedInstance()
+  try session.setCategory(
+    .playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
+  try session.setActive(true)
+  do {
+    let engine = AVAudioEngine()
+    let input = engine.inputNode
+    let format = input.outputFormat(forBus: 0)
+    guard format.sampleRate > 0, format.channelCount > 0 else {
+      throw QMError.message("Could not prepare the microphone.")
+    }
+    let recording = try AVAudioFile(forWriting: url, settings: format.settings)
+    try FileManager.default.setAttributes(
+      [.protectionKey: FileProtectionType.complete], ofItemAtPath: url.path)
+    let tap = dictationAudioTap(
+      request: request.request, recording: recording, meter: meter, onError: onError)
+    input.installTap(onBus: 0, bufferSize: 4096, format: format, block: tap)
+    engine.prepare()
+    do {
+      try engine.start()
+    } catch {
+      input.removeTap(onBus: 0)
+      throw error
+    }
+    return DictationAudio(engine: engine, recording: recording)
+  } catch {
+    try? session.setActive(false, options: .notifyOthersOnDeactivation)
+    throw error
+  }
+}
+
 func dictationAudioTap(
   request: SFSpeechAudioBufferRecognitionRequest, recording: AVAudioFile,
   meter: DictationLevel, onError: @escaping @Sendable (String) -> Void
@@ -227,47 +296,44 @@ final class NativeDictationModel {
           throw NativeAudioPermissionError.microphoneDenied
         }
         guard current == revision, !Task.isCancelled else { return }
-        let session = AVAudioSession.sharedInstance()
-        try session.setCategory(
-          .playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
-        try session.setActive(true)
-        ownsAudioSession = true
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(
           "qm-dictation-\(UUID().uuidString).caf")
         file = url
-        let engine = AVAudioEngine()
-        let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else {
-          throw QMError.message("Could not prepare the microphone.")
-        }
-        let recording = try AVAudioFile(forWriting: url, settings: format.settings)
-        try FileManager.default.setAttributes(
-          [.protectionKey: FileProtectionType.complete], ofItemAtPath: url.path)
         let request = SFSpeechAudioBufferRecognitionRequest()
-        let liveTask = try provider.recognizeLive(request: request) {
+        let liveTask = try await provider.recognizeLive(request: request) {
           [weak self] text, isFinal, errorMessage in
           Task { @MainActor [weak self] in
             self?.receiveLiveResult(
               text: text, isFinal: isFinal, errorMessage: errorMessage, revision: current)
           }
         }
+        guard current == revision, !Task.isCancelled else {
+          liveTask?.cancel()
+          return
+        }
+        liveRequest = request
+        self.liveTask = liveTask
         let meter = DictationLevel()
-        let tap = dictationAudioTap(request: request, recording: recording, meter: meter) {
-          [weak self] message in
+        let onError: @Sendable (String) -> Void = { [weak self] message in
           Task { @MainActor [weak self] in
             guard let self, current == self.revision else { return }
             self.cancel()
             self.error = message
           }
         }
-        input.installTap(onBus: 0, bufferSize: 4096, format: format, block: tap)
-        audioEngine = engine
-        audioFile = recording
-        liveRequest = request
-        self.liveTask = liveTask
-        engine.prepare()
-        try engine.start()
+        // Activating the audio session and starting the engine can block for a second or
+        // more; on the main thread that froze the panel's opening animation mid-flight.
+        let shared = DictationAudioRequest(request: request)
+        let audio = try await Task.detached(priority: .userInitiated) {
+          try startDictationAudio(url: url, request: shared, meter: meter, onError: onError)
+        }.value
+        guard current == revision, !Task.isCancelled else {
+          audio.stop()
+          return
+        }
+        ownsAudioSession = true
+        audioEngine = audio.engine
+        audioFile = audio.recording
         state = .recording
         let startedAt = ProcessInfo.processInfo.systemUptime
         timer = Task {

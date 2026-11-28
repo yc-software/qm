@@ -18,7 +18,8 @@ export function deepLinkPath(
     return `${b}/contexts?scope=${encodeURIComponent(contextScope)}`;
   }
   if (view !== "chats") {
-    return `${b}/${encodeURIComponent(view)}${itemId ? `/${encodeURIComponent(itemId)}` : ""}`;
+    const segment = view === "personas" ? "bots" : view;
+    return `${b}/${encodeURIComponent(segment)}${itemId ? `/${encodeURIComponent(itemId)}` : ""}`;
   }
   if (itemId) throw new Error("the chats view is addressed by session, not by item id");
   return sessionId ? `${b}/s/${encodeURIComponent(sessionId)}` : `${b}/`;
@@ -52,6 +53,7 @@ export function parseDeepLink(
   const sessionSeg = sessionRoute ? decodeSegment(segments[1] ?? "") : null;
   const viewFor = (): string | null => {
     if (pathView === "projects") return "contexts";
+    if (pathView === "bots") return "personas";
     if (sessionRoute) return "chats";
     return pathView;
   };
@@ -75,11 +77,11 @@ export function sessionLink(origin: string, base: string, sessionId: string, seq
   return `${origin}${deepLinkPath(base, "chats", sessionId)}${suffix}`;
 }
 
-export function sessionLinkTarget(
+function inAppLink(
   href: string,
   origin: string,
   base: string,
-): { session: string; seq: number | null } | null {
+): { url: URL; view: string | null; session: string | null } | null {
   let url: URL;
   try {
     url = new URL(href, origin);
@@ -88,9 +90,22 @@ export function sessionLinkTarget(
   }
   const b = base.replace(/\/$/, "");
   if (url.origin !== origin || (b && url.pathname !== b && !url.pathname.startsWith(`${b}/`))) return null;
-  const linked = parseDeepLink(b, url.pathname, url.search);
-  if (linked.view !== "chats" || !linked.session) return null;
-  return { session: linked.session, seq: messageLinkSeq(url.search) };
+  return { url, ...parseDeepLink(b, url.pathname, url.search) };
+}
+
+export function sessionLinkTarget(
+  href: string,
+  origin: string,
+  base: string,
+): { session: string; seq: number | null } | null {
+  const link = inAppLink(href, origin, base);
+  if (link?.view !== "chats" || !link.session) return null;
+  return { session: link.session, seq: messageLinkSeq(link.url.search) };
+}
+
+export function fileLinkTarget(href: string, origin: string, base: string): string | null {
+  const link = inAppLink(href, origin, base);
+  return link?.view === "files" ? link.url.searchParams.get("file") : null;
 }
 
 export function isPlainLeftClick(e: MouseEvent): boolean {

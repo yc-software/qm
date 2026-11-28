@@ -1,7 +1,15 @@
 import { personaPrompt, routedPersonaTurn } from "../personas/persona-service.ts";
 import { recordErrorInBinding } from "../admin/error-log.ts";
 import { personLabel } from "../identity/person-names.ts";
-import { isAgentReply, isOverheard, isUserItem, type Item, type NewItem, stepMessage } from "../sessions/items.ts";
+import {
+  isAgentReply,
+  isOverheard,
+  isShownReply,
+  isUserItem,
+  type Item,
+  type NewItem,
+  stepMessage,
+} from "../sessions/items.ts";
 import type { ItemKind } from "../sessions/items-schema.ts";
 import { countTokens } from "../util/tokens.ts";
 import { DEFAULT_CRON_TIMEZONE } from "../cron/schedule.ts";
@@ -13,7 +21,12 @@ import { externalSlackRequestAllowed, currentExternalSlackRun } from "../resolut
 import { appEditSlug } from "../../plugins/chassis/src/app-edit.ts";
 import { desktopComputerTool } from "../../plugins/chassis/src/desktop-computer.ts";
 import { DESKTOP_PERSON_ONLY_TEXT, desktopCallFor } from "../surfaces/desktop-calls.ts";
-import { startDispatchTrace, tracePhase, type DispatchTrace } from "../../plugins/chassis/src/error-reporting.ts";
+import {
+  startDispatchTrace,
+  setRunAttribute,
+  tracePhase,
+  type DispatchTrace,
+} from "../../plugins/chassis/src/error-reporting.ts";
 import { externalTools, GUEST_CHAT_DENIAL } from "./orchestrator/external-tools.ts";
 import { RECALL_CHECKED } from "../memory/cross-scope.ts";
 import type { MemoryProviderOutcome } from "../memory/memory-service.ts";
@@ -40,7 +53,7 @@ import {
   isDocumentAttachment,
 } from "./documents.ts";
 import { recoveredRuntime } from "../agent/runtime-recovery.ts";
-import { withLiveTurnMembership } from "../resolution/scope-membership.ts";
+import { withSpeakerMembership } from "../resolution/scope-membership.ts";
 import { openGoal } from "../agent/goal.ts";
 import { connectorToolsNote, deferredMcpTools } from "../agent/deferred-tools.ts";
 import { openSwarmMailbox } from "../swarms/swarm-goal-inbox.ts";
@@ -56,13 +69,14 @@ import type {
   PendingApproval,
   PendingApprovalRecord,
 } from "../types.ts";
-import { actsAsScope, isSystemActor, scopeId as toScopeId, personalScope } from "../types.ts";
+import { actsAsScope, isSystemActor, scopeId as toScopeId, personalScope, scopeLabel } from "../types.ts";
 import {
   desktopClientForTurn,
   introducesUser,
   isPersonAuthored,
   isSessionTurn,
   mayDriveDesktop,
+  runStarter,
 } from "./turn-origin.ts";
 import { resolveTurnFastMode, turnRuntimePurpose } from "./turn-options.ts";
 import { orgId } from "../config.ts";
@@ -156,7 +170,7 @@ import {
   turnFailureItem,
 } from "./turn-error.ts";
 import { ownPrivateConversation, personKey, rosterIds, samePerson } from "../directory/person.ts";
-import { personAtKeyboard } from "../api/artifact-share.ts";
+import { carriesPersonAuthority } from "../api/artifact-share.ts";
 import { sleep } from "../util/async.ts";
 import { hashId } from "../util/crypto.ts";
 import { canonicalJson } from "../../cli/src/canonical-json.ts";
@@ -209,6 +223,8 @@ import {
   finishSystemPrompt,
   replacesReply,
   replyToRewrite,
+  rewriteTargets,
+  supersedeMarker,
   wakeTurnEvent,
 } from "./orchestrator/turn-prompt.ts";
 import { createArtifactAccess, createFileRegistration, createTurnBrokers } from "./orchestrator/turn-tools.ts";
@@ -240,6 +256,7 @@ import { type ProviderKeys } from "../model/model-runtime.ts";
 import { surfaceToolPrompt, turnCapabilities } from "../surfaces/registry.ts";
 import { postedWith, spineReplies, wakeTurnNote, webDmSpine } from "../surfaces/web-spine.ts";
 import { BOT_REQUESTER_APPROVAL_NOTE, unavailableApprovalRefusal } from "./approval-requester.ts";
+import { handleModelBudgetCap } from "./orchestrator/model-budget.ts";
 
 export { egressClaimAllowingControlPlane, filterConnectorSkills } from "./orchestrator/turn-helpers.ts";
 export type { Orchestrator, OrchestratorDeps, OrchestratorInput, SurfaceContextPuller } from "./orchestrator/types.ts";
@@ -546,15 +563,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           : undefined;
       const delegatedOrigin = delegated?.origin;
       const authorizationOrigin = sessionTurn ? (delegatedOrigin ?? { kind: "automation" as const }) : input.origin;
-      const triggeredTurn = automatedTurn || authorizationOrigin.kind === "automation";
-      const personFireTurn =
-        (!sessionTurn || delegatedOrigin !== undefined) &&
-        isPersonFire({ origin: authorizationOrigin, botActor: input.botActor, actor, swarm: input.swarm });
       const internalAudience = allInternal && !external;
-      const liveTurn = (authorizationOrigin.kind === "human" || personFireTurn) && internalAudience;
-      const liveAuthorTurn =
-        ((!sessionTurn && (humanTurn || authoredDetection)) || (delegatedOrigin !== undefined && !personFireTurn)) &&
-        internalAudience;
       const messageTs = humanInput && input.origin.kind === "human" ? input.origin.messageTs : undefined;
       const entryTs =
         !sessionTurn && (input.origin.kind === "human" || input.origin.kind === "ambient")
@@ -576,6 +585,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       const botRequest = input.botActor;
       if (doesBotWork(delegatedSession, input) || (await forkOfBotWork(tenant, storedSession, deps)))
         input = { ...input, botActor: true };
+      const personFireTurn =
+        (!sessionTurn || delegatedOrigin !== undefined) &&
+        isPersonFire({ origin: authorizationOrigin, botActor: input.botActor, actor, swarm: input.swarm });
+      const personSpoke = !sessionTurn && (humanTurn || authoredDetection);
+      const speakerTurn = personSpoke || (!!delegatedOrigin && delegatedOrigin.kind !== "automation");
+      const personAuthorityTurn = internalAudience && input.botActor !== true && (speakerTurn || personFireTurn);
       const spineDm = await webDmSpine(deps.featureFlags, input, storedSession);
       const spineWake = spineDm === true && sessionTurn && input.envelopeWrapped === true;
       if (spineDm !== undefined && spineDm !== (input.surfaceTools === true))
@@ -666,10 +681,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         return approvalView(requestId, record);
       };
       Object.assign(currentModelRequestContext(), { actorId: actor.id, scopeId });
-      const isCurrentSharedScopeMember = withLiveTurnMembership(deps.isCurrentSharedScopeMember, {
+      const isCurrentSharedScopeMember = withSpeakerMembership(deps.isCurrentSharedScopeMember, {
         actorId: actor.id,
         scopeId,
-        verified: liveAuthorTurn && internalAudience && conversation.kind !== "dm",
+        verified: speakerTurn && personAuthorityTurn && conversation.kind !== "dm",
       });
       const filterHistory = (items: Item[]): Item[] => (conversation.audience.length ? items : []);
       const reconcileSessionParticipants = async (sessionId: string): Promise<void> => {
@@ -785,6 +800,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             const approval = await issueApproval(inputApprovalId(session.id, replayableRequest(input)), {
               sessionId: session.id,
               command: "security-screen",
+              summary: "Let through a message held by the security screen",
               reason: heldReason,
               blocksInput: true,
               kind: "input",
@@ -818,7 +834,6 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         !external && !appEdit && deps.mcp
           ? deps.mcp.toolDefsFor(actor.id, audienceScopeId, { actAsActor, botActor: input.botActor })
           : undefined;
-      const livePersonTurn = liveAuthorTurn && input.botActor !== true;
       const useMemory = !external && input.skipMemory !== true && !ownScopeBotWork;
       const environmentId = external ? scopeId : await resolveEnvironmentId(deps.environments, scopeId);
       resolution.writableScopeId = environmentId;
@@ -833,7 +848,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               input: input.text,
               surfaceName,
               runtimePurpose: turnRuntimePurpose(
-                { surface: input.surface, triggered: automatedTurn, infrequentCron: input.infrequentCron },
+                { surface: input.surface, automated: automatedTurn, infrequentCron: input.infrequentCron },
                 !!storedSession?.parentSessionId || !!swarmBinding?.member.parentId,
               ),
               ...(input.model ? { runtime: { modelId: input.model } } : {}),
@@ -868,7 +883,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           : await routedPersonaTurn(
               deps.personas,
               routed,
-              storedSession?.personaId ?? input.personaId,
+              input.personaId ?? storedSession?.personaId,
               actor.id,
               scopeId,
             );
@@ -896,8 +911,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         actor,
         audience: conversation.audience,
         acl: deps.acl,
-        origin: authorizationOrigin,
-        trustedLiveHuman: livePersonTurn && internalAudience,
+        personAuthority: personAuthorityTurn,
         targetScope: scopeId,
         ...(audienceScopeId ? { audienceScopeId } : {}),
         config: deps.config,
@@ -1015,7 +1029,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
 
       await deps.skillsReady?.();
       const skillSources = tracePhase("turn.skills", () => context.listSkills([scopeId, resolution.orgScopeId]), {
-        counts: countSkills,
+        attributes: countSkills,
       });
       void skillSources.catch(() => undefined);
       const configuredProviders =
@@ -1059,7 +1073,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         .filter((source) => source !== scopeId && source !== resolution.orgScopeId)
         .sort();
       if (otherSkillSources.length)
-        systemPrompt += `\n\nAdditional skill sources: ${otherSkillSources.join(", ")}. Use skills list/search with source to discover their authorized skills; read with the same source.`;
+        systemPrompt += `\n\nAdditional skill sources: ${otherSkillSources.map(scopeLabel).join(", ")}. Use skills list/search with source to discover their authorized skills; read with the same source.`;
       const nativeSkills = filterConnectorSkills(skillSourceContext.skills, configuredProviders, appConnections);
       turnContextBlocks["Skills"] = skillsIndex(nativeSkills);
       const transferId = turnFileId(input.runId, input.attempt);
@@ -1104,9 +1118,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           ...(input.ephemeral ? { ephemeral: true as const } : {}),
         },
       );
+      const adoptPersona =
+        persona &&
+        (persona.routedBy ||
+          (input.surface === "slack" && input.personaId === persona.persona.id && !threadSession.personaId));
       const session =
         persona && deps.personas
-          ? await (persona.routedBy ? deps.personas.adopt : deps.personas.startOnDefaultModel)(
+          ? await (adoptPersona ? deps.personas.adopt : deps.personas.startOnDefaultModel)(
               threadSession,
               persona.persona.id,
             )
@@ -1135,6 +1153,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
       if (introducesUser(input.origin, input)) await recordUser(deps.users, actor.id, botRequest);
 
       const delegatedTask = !!input.sessionSenderId && session.parentSessionId === input.sessionSenderId;
+      setRunAttribute("qm.started_by", runStarter(input, delegatedTask));
       const wakingChild =
         input.sessionSenderId && !input.approval && !input.surfaceTools && !isSubagentThreadRef(conversation.threadRef)
           ? await deps.sessions.get(input.sessionSenderId)
@@ -1159,6 +1178,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           sourceScopeId: scopeId as ScopeId,
           sourceThreadRef: session.threadRef,
           sourceSessionId: session.id,
+          ...(input.runId ? { sourceRunId: input.runId } : {}),
         });
 
       const isRetry = (input.attempt ?? 1) > 1;
@@ -1238,7 +1258,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         external,
         strictReadOnly,
         internalAudience,
-        ownerAuthorityTurn: livePersonTurn || personFireTurn,
+        ownerAuthorityTurn: personAuthorityTurn || personFireTurn,
         scopeId,
         environmentId,
         resolution,
@@ -1314,9 +1334,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         strictReadOnly,
         allInternal,
         internalAudience,
-        liveTurn,
-        liveAuthorTurn: livePersonTurn,
-        triggeredTurn,
+        personAuthorityTurn,
         actAsActor,
         useMemory,
         memoryPolicy,
@@ -1418,7 +1436,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         connectorEnv,
         egressTokenForTurn,
         egressTokenForPolicy,
-        openResourceAccess: !external && ((livePersonTurn && internalAudience) || openOwnerKeychain),
+        openResourceAccess: !external && (personAuthorityTurn || openOwnerKeychain),
         visibleSkillsForTurn,
       });
       if (input.shutdown?.aborted)
@@ -1464,6 +1482,23 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           await Promise.all(pendingScreenRequests.splice(0).map((rec) => recordScreenRequest(rec)));
           return true;
         });
+        const runtimeClaims: CapabilityClaims = controlClaims ?? {
+          ...scopeAttestation,
+          exp: Date.now() + CAPABILITY_TTL_MS,
+          ...(personAuthorityTurn ? { personAuthority: true } : {}),
+        };
+        const personAuthority = carriesPersonAuthority(runtimeClaims);
+        const cardsFor = async (history: Item[]) =>
+          appEdit
+            ? []
+            : context.recallCards(
+                isPersonAuthored(input.origin.kind) && !sessionTurn ? titleText : undefined,
+                personAuthority,
+                history,
+              );
+        const earlyCards =
+          earlyRecall && contextWindow.then((window) => cardsFor(filterHistory(forModelContext(window.items))));
+        void earlyCards?.catch(() => undefined);
         const [memoryWindow, memoryView] = await Promise.all([contextWindow, snapshot]);
         let historyAppended = input.approval !== undefined;
         const historyWindow = () => deps.sessions.getContextWindow(session.id);
@@ -1731,18 +1766,12 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           session,
           scopeId: scopeId as ScopeId,
           orgScopeId: resolution.orgScopeId,
-          liveTurn: liveTurn && internalAudience && !triggeredTurn,
           request: { ...input, readOnly: strictReadOnly, memoryNotebookOnly: notebookOnly, cancel: turnAbort.signal },
           switchedRuntime: () => switchedRuntime,
         });
         const liveNote = async () =>
           (await turnSessionSyscalls?.liveSubagents?.().catch(swallowAs("live note", ""))) ?? "";
-        const runtimeClaims: CapabilityClaims = controlClaims ?? {
-          ...scopeAttestation,
-          exp: Date.now() + CAPABILITY_TTL_MS,
-          ...(livePersonTurn ? { liveAuthor: true } : {}),
-          ...(triggeredTurn ? { triggered: true } : {}),
-        };
+        const turnMcpTools = appEdit ? undefined : context.mcpTools(personAuthority, mcpToolsReady);
         const baseTools = createToolContext({
           tenant,
           desktopCall: mayDriveDesktop(input)
@@ -1798,9 +1827,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               identities.set(credential.handle, identity);
               refreshed.set(credential.handle, placeCredential(credential));
             };
-            await registerKeychainCredentials(credentialCatalog, add);
+            const brokerToken = await registerServiceCredentials(
+              credentialCatalog,
+              { scopeAttestation, sandboxTokenExpiry },
+              add,
+              handles,
+            );
+            await registerKeychainCredentials(credentialCatalog, add, brokerToken);
             await registerConnectorCredentials(credentialCatalog, add);
-            await registerServiceCredentials(credentialCatalog, { scopeAttestation, sandboxTokenExpiry }, add, handles);
             for (const credential of commandCredentials.filter((candidate) => candidate.handle.startsWith("broker_")))
               add(credential, "");
             return [...refreshed.values()];
@@ -1829,7 +1863,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             : {}),
           ...(deps.webhookPublicUrl ? { webhookPublicUrl: deps.webhookPublicUrl } : {}),
           ...(humanInput && !external && !input.botActor ? { humanTurn: true } : {}),
-          ...(personAtKeyboard(runtimeClaims) && internalAudience && !sessionTurn ? { personTurn: true } : {}),
+          ...(personAuthority ? { personAuthority: true } : {}),
           toolOutput: deps.toolOutput,
           sessionId: session.id,
           ...(surfaceToolDeps ? { surface: surfaceToolDeps } : {}),
@@ -1962,7 +1996,10 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
         const rawEntries = (await turnWindow()).items;
         const priorTurns = input.priorTurns;
         let visibleHistory = filterHistory(forModelContext(rawEntries));
-        const recalled = await (earlyRecall ?? recallFor(visibleHistory));
+        const [recalled, cards] = await Promise.all([
+          earlyRecall ?? recallFor(visibleHistory),
+          earlyCards ?? cardsFor(visibleHistory),
+        ]);
         const partial = isRetry ? (recordedTurn ?? findTrailingPartialTurn(visibleHistory, input.runId)) : null;
         const reconciled = partial ? reconcile(visibleHistory, partial, input.resumeCause) : null;
         if (reconciled?.settleItems.length) {
@@ -2006,10 +2043,13 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             );
         contextRecovered = history !== visibleHistory && history.some((item) => item.body.mode === "recent");
         const rewrites =
-          wakeTurn && isWeb && !spineDm ? await replyToRewrite(deps, tenant, actor.id, history) : undefined;
+          (wakeTurn || humanInput) && isWeb && !spineDm
+            ? await rewriteTargets(deps, tenant, actor.id, wakeTurn ? history : [])
+            : undefined;
         if (spineWake)
           turnEvents.push(wakeTurnNote(await replyToRewrite(deps, tenant, actor.id, history, "web_dm_spine"), history));
-        else if (childWake || rewrites) turnEvents.push(wakeTurnEvent(childWake, rewrites));
+        else if (childWake || rewrites?.some(isShownReply))
+          turnEvents.push(wakeTurnEvent(childWake, rewrites?.filter(isShownReply) ?? []));
         const screenDocuments = createDocumentScreen(fileScreenTurn);
         const documentRoom = {
           maxBytes: MAX_DOCUMENT_BYTES,
@@ -2083,7 +2123,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           deps.swarms && input.runId && !partial && !input.approval
             ? await openSwarmMailbox({ swarms: deps.swarms, input, screen: screenSwarmMessage })
             : undefined;
-        const mcpTools = await mcpToolsReady;
+        const mcpTools = await turnMcpTools;
         const freshBody = appEdit
           ? appEdit.body(basePrompt)
           : [systemPrompt, connectorToolsNote(deferredMcpTools(mcpTools, strictReadOnly))]
@@ -2181,7 +2221,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                 externalId: messageTs ?? entryTs ?? null,
                 body: {
                   ...(inboundIssues.length ? { environment: environmentNote(inboundIssuesNote(inboundIssues)) } : {}),
-                  ...(humanInput ? { speakerId: actor.id } : {}),
+                  ...(personSpoke ? { speakerId: actor.id } : {}),
                   ...(actor.displayName?.trim() ? { name: actor.displayName.trim() } : {}),
                   ...(input.displayText?.trim() ? { display: input.displayText } : {}),
                   ...(recallOutcomes.length ? { memoryRecallOutcomes: recallOutcomes } : {}),
@@ -2283,6 +2323,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           const appSource = await appSourceShown(baseTools.appFiles, continuation?.history ?? history);
           const { recall, snapshot, guidance, environment, silentResume } = segmentEnvironment({
             recalled,
+            cards,
             continuation,
             history,
             memoryView,
@@ -2310,7 +2351,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               if (typeof body.workStartedAt !== "number") body.workStartedAt = input.runStartedAt ?? coreReceivedAt;
               if (typeof body.workFinishedAt !== "number") body.workFinishedAt = Date.now();
               if (wornPersona && isAgentReply(entry)) body.personaId = wornPersona.id;
-              if (rewrites && replacesReply(entry)) body.supersedes = rewrites.seq;
+              if (rewrites && replacesReply(entry)) Object.assign(body, supersedeMarker(rewrites, emittedEntries));
               return { ...entry, body };
             };
             const stored = ((): NewItem => {
@@ -2335,7 +2376,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               }
               Object.assign(body, swarmEntryProvenance);
               if (!steered) delete body.speakerId;
-              if (humanInput && !syntheticPrompt && !continuation && !steered && !overheard) body.speakerId = actor.id;
+              if (personSpoke && !syntheticPrompt && !continuation && !steered && !overheard) body.speakerId = actor.id;
               const ownWords = !steered || !entry.author || samePerson(entry.author, actor.id);
               if (ownWords && actor.displayName?.trim() && typeof body.name !== "string")
                 body.name = actor.displayName.trim();
@@ -2399,7 +2440,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
             swarmGoalTurn,
             screenSwarmMessage,
           });
-          const mcpTools = await mcpToolsReady;
+          const mcpTools = await turnMcpTools;
 
           dispatchTrace ??= startDispatchTrace();
           const turnRun = deps.agent.runTurn({
@@ -2468,7 +2509,7 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
                   ) =>
                     deps.runtime!(
                       sessionTurn && request.lifetime === "scope"
-                        ? { ...runtimeClaims, liveActor: false, liveAuthor: false }
+                        ? { ...runtimeClaims, personAuthority: false }
                         : runtimeClaims,
                       active,
                       request,
@@ -2827,6 +2868,9 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
           },
           err,
         );
+        const failureText = budget
+          ? await handleModelBudgetCap(deps, tenant, conversation, actor, external)
+          : turnFailureMessage(err);
         if ((isNonRetryable(err) || input.finalAttempt) && !input.cancel?.aborted) {
           if (failureUserItem) {
             await deps.sessions
@@ -2834,14 +2878,14 @@ export function createOrchestrator(deps: OrchestratorDeps): Orchestrator {
               .catch(swallowAs("orchestrator: turn failure user back-fill", undefined));
           }
           await deps.sessions
-            .append(writer, turnFailureItem(turnFailureMessage(err), input.runId))
+            .append(writer, turnFailureItem(failureText, input.runId))
             .catch(swallowAs("orchestrator: terminal turn failure record", undefined));
         }
         if (budget)
           return {
             status: "refused",
             sessionId: session.id,
-            reason: turnFailureMessage(err),
+            reason: failureText,
             refusalKind: "model_budget",
           };
         throw err;

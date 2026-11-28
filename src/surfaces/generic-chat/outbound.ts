@@ -7,7 +7,12 @@ import { genericChatCard } from "./approvals.ts";
 import { GenericChatHttpError } from "./client.ts";
 import { uploadGenericChatFiles, type GenericChatUploads } from "./files.ts";
 import { deleteGenericChatMessage, editGenericChatMessage, postGenericChatMessage } from "./messages.ts";
-import { genericChatMessageId, genericChatMessageIdSchema, parseGenericChatRef } from "./protocol.ts";
+import {
+  genericChatMessageId,
+  genericChatMessageIdSchema,
+  parseGenericChatAccount,
+  parseGenericChatRef,
+} from "./protocol.ts";
 import { UnknownGenericChatReaction, setGenericChatReaction } from "./reactions.ts";
 
 class UnsupportedDelivery extends Error {}
@@ -22,7 +27,8 @@ function badId(id: string | undefined): id is string {
 
 export function genericChatSender(
   deps: GenericChatUploads & {
-    app: Pick<App, "ingestSurfaceEvents" | "readSurfaceMessages" | "tenantFor" | "getApproval">;
+    app: Pick<App, "ingestSurfaceEvents" | "readSurfaceMessages" | "getApproval">;
+    accountTenant: (account: string) => Promise<string | undefined>;
     keychainApprovals?: Pick<KeychainApprovals, "card">;
     now?: () => number;
   },
@@ -30,7 +36,7 @@ export function genericChatSender(
   async function deliver(d: Delivery, tenant: Tenant): Promise<void> {
     const ref = parseGenericChatRef(d.destination.target);
     if (!ref) throw new UnsupportedDelivery(`generic-chat: unroutable target ${d.destination.target}`);
-    if ((await deps.app.tenantFor("partner_chat", ref.account)) !== tenant.id)
+    if ((await deps.accountTenant(parseGenericChatAccount(ref.account)!.id)) !== tenant.id)
       throw new UnsupportedDelivery(`generic-chat: account ${ref.account} is not bound to this workspace`);
     const card = await genericChatCard(deps, d);
     if (card === null) return;

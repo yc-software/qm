@@ -7,6 +7,7 @@ import { createSlackInstallationStore } from "../src/surfaces/slack-installation
 import { createManagedSlack } from "../src/surfaces/slack-managed.ts";
 import { testMap } from "./support/test-database.ts";
 import { testTenant as tenant } from "./support/test-tenant.ts";
+import { testCore } from "./support/build-app.ts";
 
 type SlackSetupStatus = {
   configured: boolean;
@@ -43,6 +44,7 @@ async function fixture(t: test.TestContext, withToken = true) {
     }) as typeof fetch,
   });
   const deps = {
+    ...testCore(),
     slackInstallation: store,
     managedSlack,
     portalUrl: "https://agent.example",

@@ -1,7 +1,7 @@
 import type { DeliveryStore } from "./delivery-store.ts";
 import type { DirectoryMember, DirectoryStore } from "../directory/directory-store.ts";
 import type { SessionStore } from "../sessions/session-store.ts";
-import { personIds, personKey } from "../directory/person.ts";
+import { isTrustedSubject, personIds, personKey } from "../directory/person.ts";
 import { scopeId } from "../types.ts";
 
 export function withOffChatRecipients<T extends DeliveryStore>(
@@ -12,9 +12,11 @@ export function withOffChatRecipients<T extends DeliveryStore>(
     signInMembers: () => Promise<DirectoryMember[]>;
   },
 ): T {
-  const chatMember = async (id: string) => (await deps.directory.getMany([id, ...personIds(id)])).size > 0;
+  const chatMember = async (id: string) => [...(await deps.directory.getMany([id, ...personIds(id)])).values()][0];
   const signsIn = async (id: string) => {
-    const keys = new Set([id, ...personIds(id)].map(personKey));
+    const ids = [id, ...personIds(id)];
+    if (ids.some(isTrustedSubject)) return true;
+    const keys = new Set(ids.map(personKey));
     return (await deps.signInMembers()).some((member) => keys.has(personKey(member.principalId)));
   };
   const toWebHome = async (
@@ -42,8 +44,12 @@ export function withOffChatRecipients<T extends DeliveryStore>(
       const { destination } = input;
       if (destination.type !== "principal") return store.enqueue(input);
       const card = destination.webHome === true;
-      if (await chatMember(destination.target)) {
-        const delivered = await store.enqueue(input);
+      const member = await chatMember(destination.target);
+      if (member) {
+        const delivered = await store.enqueue({
+          ...input,
+          destination: { ...destination, target: member.principalId },
+        });
         if (card) await toWebHome(input, destination.target, `web-home:${input.idempotencyKey}`);
         return delivered;
       }

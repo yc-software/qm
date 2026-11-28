@@ -11,6 +11,7 @@ import type { ApiCtx, Route } from "../src/api/routes/route.ts";
 import { deriveKey, seal } from "../plugins/portal/src/session.ts";
 import { signedHeaders, withSourceAuthNonce } from "../plugins/chassis/src/core-client.ts";
 import { mintPortalIdentity, PORTAL_IDENTITY_HEADER, type PortalIdentity } from "../src/auth/portal-identity.ts";
+import { testCore } from "./support/build-app.ts";
 
 const SIGNING = "browser-session-signing-secret-0123456789";
 const PORTAL_IDENTITY = "browser-session-identity-secret-0123456789";
@@ -75,6 +76,7 @@ async function withServer(
   overrides: Partial<Pick<ServerDeps, "portalSession" | "portalUrl" | "production" | "identity">> = {},
 ): Promise<void> {
   const server = createServer({} as App, {
+    ...testCore(),
     production: true,
     signingSecret: SIGNING,
     capabilitySecret: CAPABILITY,

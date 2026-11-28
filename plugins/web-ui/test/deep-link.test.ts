@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { deepLinkPath, parseDeepLink, sessionLink, sessionLinkTarget } from "../src/deep-link.ts";
+import { deepLinkPath, fileLinkTarget, parseDeepLink, sessionLink, sessionLinkTarget } from "../src/deep-link.ts";
 
 test("chats view with an active session is addressed by /s/<id>", () => {
   assert.equal(deepLinkPath("", "chats", "abc-123"), "/s/abc-123");
@@ -74,6 +74,13 @@ test("project paths open the contexts view with a resolvable project identifier"
     session: null,
     item: "group:G9ABC",
   });
+});
+
+test("bot paths open the personas view, and personas links are written as bot paths", () => {
+  assert.equal(deepLinkPath("", "personas", null), "/bots");
+  assert.equal(deepLinkPath("/web-ui", "personas", null, null, "p-ada"), "/web-ui/bots/p-ada");
+  assert.deepEqual(parseDeepLink("", "/bots/p-ada", ""), { view: "personas", session: null, item: "p-ada" });
+  assert.deepEqual(parseDeepLink("", "/personas/p-ada", ""), { view: "personas", session: null, item: "p-ada" });
 });
 
 test("parseDeepLink degrades a malformed percent-escape to no view instead of throwing", () => {
@@ -156,6 +163,15 @@ test("other links are not treated as session links", () => {
   assert.equal(sessionLinkTarget(`${origin}/apps`, origin, ""), null);
   assert.equal(sessionLinkTarget(`${origin}/s/abc`, origin, "/ui"), null);
   assert.equal(sessionLinkTarget("not a url", "null", ""), null);
+});
+
+test("in-app file links resolve to the file id", () => {
+  const origin = "https://qm.example.com";
+  assert.equal(fileLinkTarget(`${origin}/files?file=doc1`, origin, ""), "doc1");
+  assert.equal(fileLinkTarget("/ui/files?file=doc1", origin, "/ui"), "doc1");
+  assert.equal(fileLinkTarget(`${origin}/files`, origin, ""), null);
+  assert.equal(fileLinkTarget(`${origin}/s/abc?file=doc1`, origin, ""), null);
+  assert.equal(fileLinkTarget("https://elsewhere.example.com/files?file=doc1", origin, ""), null);
 });
 
 test("legacy /sessions/<id> links resolve to the session", () => {

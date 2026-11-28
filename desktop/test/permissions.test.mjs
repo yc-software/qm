@@ -14,7 +14,9 @@ mock.module("../runtime.mjs", {
   },
 });
 let allowed = false;
+let listening = false;
 let failure = false;
+let moved = 0;
 class Window extends EventEmitter {
   constructor() {
     super();
@@ -40,6 +42,11 @@ mock.module("electron", {
   namedExports: {
     app: {
       isPackaged: false,
+      getPath: () => "/Users/a/Downloads",
+      moveToApplicationsFolder: () => {
+        moved++;
+        return true;
+      },
       getName: () => "QM-cu",
       getFileIcon: async () => ({ toDataURL: () => "data:image/png;base64,AA==" }),
     },
@@ -61,13 +68,19 @@ mock.module("node:child_process", {
       if (failure) callback(new Error("Native helper unavailable"));
       else
         callback(null, {
-          stdout: JSON.stringify({ type: "permissions", accessibility: allowed, screen_recording: allowed }),
+          stdout: JSON.stringify({
+            type: "permissions",
+            accessibility: allowed,
+            screen_recording: allowed,
+            input_monitoring: listening,
+          }),
         });
     },
   },
 });
-const { registerComputerPermissions, showComputerPermissions, focusComputerPermissions } =
+const { registerComputerPermissions, showComputerPermissions, focusComputerPermissions, misplaced } =
   await import("../permissions.mjs");
+const { app } = await import("electron");
 registerComputerPermissions();
 
 test("permission setup validates sender, checks grants before continuing, and can reopen", async (t) => {
@@ -93,6 +106,8 @@ test("permission setup validates sender, checks grants before continuing, and ca
   await assert.rejects(call("status"), /Native helper unavailable/);
   failure = false;
   allowed = true;
+  assert.equal(await call("close", true), false, "Input Monitoring is still missing");
+  listening = true;
   assert.equal(await call("close", true), true);
   await pending;
   assert.equal(stopped, 1);
@@ -104,4 +119,34 @@ test("permission setup validates sender, checks grants before continuing, and ca
   assert.equal(windows.length, 2);
   windows.at(-1).close();
   await reopened;
+});
+
+test("a packaged app outside Applications is flagged and can be moved there", async (t) => {
+  const platform = process.platform;
+  Object.defineProperty(process, "platform", { value: "darwin" });
+  const execPath = process.execPath;
+  process.env.QM_DESK_BIN = "desk";
+  process.execPath = "/Users/a/Downloads/QM.app/Contents/MacOS/QM";
+  t.after(() => {
+    process.execPath = execPath;
+    Object.defineProperty(process, "platform", { value: platform });
+    delete process.env.QM_DESK_BIN;
+  });
+  app.isPackaged = true;
+  try {
+    assert.equal(misplaced("/private/var/folders/x/AppTranslocation/1/d/QM.app"), true);
+    assert.equal(misplaced("/Applications/QM.app"), false);
+    assert.equal(misplaced("/Users/a/src/qm/desktop/dist/QM.app"), false);
+    const pending = showComputerPermissions();
+    await new Promise((resolve) => setImmediate(resolve));
+    const window = windows.at(-1);
+    const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
+    assert.equal((await handlers.get("qm:permissions-status")(event)).misplaced, true);
+    assert.equal(await handlers.get("qm:permissions-move")(event), true);
+    assert.equal(moved, 1);
+    window.close();
+    await pending;
+  } finally {
+    app.isPackaged = false;
+  }
 });

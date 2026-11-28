@@ -60,6 +60,13 @@ function streamFile(ctx: ApiCtx, stream: NodeJS.ReadableStream): void {
   });
 }
 
+async function getFile(ctx: ApiCtx): Promise<void> {
+  const viewer = viewerOf(ctx);
+  if (!viewer) return;
+  const file = await ctx.app.fileForViewer(tenantOf(ctx), ctx.params.id!, viewer, isOwnScopeBotWork(ctx.capability));
+  return file ? sendJson(ctx.res, 200, file) : sendJson(ctx.res, 404, { error: "not_found" });
+}
+
 async function getFileContent(ctx: ApiCtx): Promise<void> {
   const opened = await openForViewer(ctx, ctx.req.headers.range);
   if (!opened) return;
@@ -123,6 +130,7 @@ async function getFileByName(ctx: ApiCtx): Promise<void> {
 
 export const fileContentRoutes: Route[] = withActor("query.viewer", [
   { method: "GET", path: "/v1/files/by-name/content", browser: true, auth: "source", handle: getFileByName },
+  { method: "GET", path: "/v1/files/:id", browser: true, auth: "either", handle: getFile },
   { method: "GET", path: "/v1/files/:id/content", browser: true, auth: "either", handle: getFileContent },
   { method: "GET", path: "/v1/playgrounds/:id", browser: true, auth: "source", handle: getPlayground },
 ]);

@@ -1,20 +1,9 @@
-import { test, before } from "node:test";
+import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createPostgresDirectoryStore } from "../src/directory/postgres-directory-store.ts";
 
 const URL = process.env.DATABASE_URL;
 const skip = URL ? false : "set DATABASE_URL (a Postgres) to run the Postgres directory-store tests";
-
-before(async () => {
-  if (!URL) return;
-  const pg = (await import("pg")).default;
-  const p = new pg.Pool({ connectionString: URL });
-  await p.query("DROP TABLE IF EXISTS qm_schema_migrations CASCADE");
-  await p.query(
-    "DROP TABLE IF EXISTS directory_members, directory_channels, directory_channel_members, directory_groups, directory_group_members, directory_sync, directory_meta CASCADE",
-  );
-  await p.end();
-});
 
 const seed = async (store: ReturnType<typeof createPostgresDirectoryStore>) => {
   await store.replace([
@@ -527,6 +516,8 @@ test("pg directory: room membership follows a person's linked identities", { ski
   installPrincipalLinks({
     canonical: (key) => (key === "slack-person@example.com" ? "web-person" : undefined),
     aliases: (key) => (key === "web-person" ? ["Slack-Person@Example.com"] : []),
+    userId: () => undefined,
+    claim: () => {},
   });
   try {
     assert.equal(await store.channelMembership("C-linked", "web-person"), true);

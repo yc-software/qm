@@ -8,12 +8,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { createInsecureTestServer } from "../src/api/server.ts";
-import { buildApp } from "./support/build-app.ts";
+import { buildApp, testCore } from "./support/build-app.ts";
 import type { Config } from "../src/config.ts";
 import type { TurnRequest } from "../src/types.ts";
 import { testConfig } from "./support/test-config.ts";
 import { selectDefaultSandbox } from "./support/default-sandbox.ts";
 import { createMockAgent } from "./support/mock-agent.ts";
+import { personalScope } from "../src/types.ts";
 
 function freshApp() {
   const dataDir = mkdtempSync(join(tmpdir(), "ap-title-"));
@@ -36,7 +37,7 @@ test("names a conversation from its first completed turn (auto-title)", async ()
 
 test("the title and its sidebar refresh land before the turn's computer is ready", async () => {
   const built = freshApp();
-  await selectDefaultSandbox(built, "U1", "personal:U1");
+  await selectDefaultSandbox(built, "U1", personalScope("U1"));
   const computerReady = Promise.withResolvers<void>();
   const provision = built.sandbox.provision.bind(built.sandbox);
   built.sandbox.provision = async (owner, opts) => {
@@ -106,7 +107,7 @@ test("a rejected title answer is recorded with the rule that rejected it before 
 
 test("POST /v1/sessions/:id/title answers 200 with the fallback title and records why the answer was rejected", async () => {
   const { app, errors, config, admin, auditLog } = freshApp();
-  const server = createInsecureTestServer(app, { config, admin, auditLog });
+  const server = createInsecureTestServer(app, { ...testCore(), config, admin, auditLog });
   server.listen(0);
   try {
     const turn = await app.turn(dm("Simulate reply-shaped title", "web:U1:title-route"));

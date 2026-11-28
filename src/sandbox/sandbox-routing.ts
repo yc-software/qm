@@ -1,5 +1,6 @@
 import type { SandboxResource, SandboxResources } from "./sandbox-resources.ts";
 import { takeLoadSample, withLoadProbe, type LoadSample } from "./load-probe.ts";
+import { traceElapsed } from "../../plugins/chassis/src/error-reporting.ts";
 import { bootTenant, tenancyBooted } from "../tenants/boot.ts";
 import { boundTenant } from "../tenants/context.ts";
 import type { ScopeId } from "../types.ts";
@@ -63,7 +64,7 @@ export interface RoutingSandboxOptions {
   onError?: (e: { category: string; code: string; message: string; scopeLabel?: string }) => void;
 }
 
-const TENANT_SEPARATED: ReadonlySet<SandboxBackendName> = new Set(["sprites", "modal", "superserve"]);
+const TENANT_SEPARATED: ReadonlySet<SandboxBackendName> = new Set(["sprites", "modal", "superserve", "local"]);
 
 function requireTenantSeparation(name: SandboxBackendName): void {
   if (TENANT_SEPARATED.has(name) || !tenancyBooted()) return;
@@ -96,8 +97,8 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
     return sandbox;
   };
 
-  const useHandle = <T>(handle: SandboxHandle, action: () => Promise<T>): Promise<T> =>
-    handle.resourceId ? resources.use(handle.resourceId, action) : action();
+  const useHandle = <T>(handle: SandboxHandle, action: () => Promise<T>, lock?: "shared"): Promise<T> =>
+    handle.resourceId ? resources.use(handle.resourceId, action, lock) : action();
 
   const resourceFor = (scopeId: string, sandboxId: string | undefined) =>
     sandboxId !== undefined ? resources.get(sandboxId) : resources.resolve(scopeId);
@@ -194,7 +195,8 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
       const result = await resources.use(resourceId, () =>
         forHandle(handle).run(handle, withLoadProbe(command), execOpts),
       );
-      const { stdout, sample } = takeLoadSample(result.stdout, Date.now());
+      const { stdout, sample, commandMs } = takeLoadSample(result.stdout, Date.now());
+      if (commandMs !== undefined) traceElapsed("exec.command", commandMs);
       if (!sample) return { ...result, stdout };
       notePressure(resourceId, handle, sample);
       if (sample.sampledAt - (loadWrites.get(resourceId) ?? 0) >= LOAD_WRITE_INTERVAL_MS) {
@@ -243,34 +245,38 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
           const held = parks && !!(await resources.get(resourceId)).holders?.length;
           return forHandle(handle).teardown(handle, held ? { ...tdOpts, keepWarm: true } : tdOpts);
         },
-        !!tdOpts?.destroy || parks,
+        tdOpts?.destroy || parks ? "exclusive" : undefined,
       );
     },
 
     ...(some(supportsProcessSessions)
       ? {
           startRegisteredProcess: (handle: SandboxHandle, command: string, register, o?) =>
-            useHandle(handle, async () => {
-              const sandbox = requireCap(forHandle(handle), "startProcess", handle.scopeId);
-              const started = await sandbox.startProcess(handle, command, o);
-              try {
-                await register(started.processId);
-              } catch (error) {
+            useHandle(
+              handle,
+              async () => {
+                const sandbox = requireCap(forHandle(handle), "startProcess", handle.scopeId);
+                const started = await sandbox.startProcess(handle, command, o);
                 try {
-                  await requireCap(sandbox, "signalProcess", handle.scopeId).signalProcess(
-                    handle,
-                    started.processId,
-                    "KILL",
-                  );
-                } catch (cleanupError) {
-                  throw new AggregateError([error, cleanupError], "process registration failed and cleanup failed", {
-                    cause: cleanupError,
-                  });
+                  await register(started.processId);
+                } catch (error) {
+                  try {
+                    await requireCap(sandbox, "signalProcess", handle.scopeId).signalProcess(
+                      handle,
+                      started.processId,
+                      "KILL",
+                    );
+                  } catch (cleanupError) {
+                    throw new AggregateError([error, cleanupError], "process registration failed and cleanup failed", {
+                      cause: cleanupError,
+                    });
+                  }
+                  throw error;
                 }
-                throw error;
-              }
-              return started;
-            }),
+                return started;
+              },
+              "shared",
+            ),
           startProcess: (handle: SandboxHandle, command: string, o?) => {
             const start = () =>
               requireCap(forHandle(handle), "startProcess", handle.scopeId).startProcess(handle, command, o);
@@ -317,7 +323,7 @@ export function createSandboxRouter(opts: RoutingSandboxOptions): Sandbox {
             const target = await computerTarget(scopeId, sandboxId);
             const action = () =>
               requireCap(target.sandbox, "restartComputer", scopeId).restartComputer(target.scopeId, target.memoryGb);
-            return resources.use(target.resourceId, action, true);
+            return resources.use(target.resourceId, action, "exclusive");
           },
         }
       : {}),

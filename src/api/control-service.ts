@@ -26,12 +26,12 @@ import {
   type ArtifactHome,
   type ArtifactType,
   isMultiMemberSkillScope,
-  internalPerson,
+  carriesPersonAuthority,
   resolveShareTarget,
   type ShareAccessResult,
   type ShareArtifactRequest,
   type ShareArtifactResult,
-  SHARED_SKILL_TRIGGER_REFUSAL,
+  SHARED_SKILL_REFUSAL,
   shareOffers,
 } from "./artifact-share.ts";
 import { actsAsScope, parseScopeId, scopeId, type Permission, type ScopeId } from "../types.ts";
@@ -40,7 +40,6 @@ import { deliversToOwner, withSharing } from "./app-cron-share.ts";
 import type { App, VisibleCron } from "./app.ts";
 import { ambientTenant, type Tenant } from "../tenants/context.ts";
 import { isOwnScopeBotWork, loadsScopeContext } from "../resolution/context-filter.ts";
-import { PERSON_REQUIRED } from "./http.ts";
 
 export interface CronCreateRequest {
   runtime?: Cron["runtime"];
@@ -95,7 +94,16 @@ export interface WebhookCreateRequest {
 
 export type WebhookCreateResult =
   | { ok: true; webhook: Webhook; url: string; secret?: string }
-  | { ok: false; code: "bad_request" | "forbidden" | "unknown_destination" | "webhook_create_failed"; message: string };
+  | {
+      ok: false;
+      code: "bad_request" | "forbidden" | "unknown_destination" | "webhook_create_failed" | "approval_required";
+      message: string;
+    };
+
+type SignOff = (step: { summary: string; key: string; shown?: unknown }) => Promise<boolean>;
+
+const SIGN_OFF_PENDING = "this step waits on the approval card sent to the person";
+const unsigned: SignOff = async () => false;
 
 export interface CronPatchRequest {
   runtime?: Cron["runtime"];
@@ -175,6 +183,7 @@ export interface ControlService {
     req: WebhookCreateRequest,
     claims: CapabilityClaims,
     publicBase: string | undefined,
+    signOff?: SignOff,
   ): Promise<WebhookCreateResult>;
   listWebhooks(claims: CapabilityClaims): Promise<Webhook[]>;
   disableWebhook(
@@ -192,7 +201,7 @@ export interface ControlService {
     claims: CapabilityClaims,
     expectedVersion?: number,
   ): Promise<ControlOk<{ version: number }> | ControlErr<SoulWriteFailureCode>>;
-  shareArtifact(req: ShareArtifactRequest, claims: CapabilityClaims): Promise<ShareArtifactResult>;
+  shareArtifact(req: ShareArtifactRequest, claims: CapabilityClaims, signOff?: SignOff): Promise<ShareArtifactResult>;
   shareAccess(type: ArtifactType, id: string, claims: CapabilityClaims, tenant: Tenant): Promise<ShareAccessResult>;
 }
 
@@ -337,11 +346,12 @@ async function personaHome(app: App, actorId: string, ref: string): Promise<Scop
   };
 }
 
-function liveSessionRef(
-  capability: Pick<CapabilityClaims, "threadRef" | "triggered" | "scopeId">,
+function conversationSessionRef(
+  capability: Pick<CapabilityClaims, "threadRef" | "origin" | "scopeId">,
   cronScopeId: string,
 ): string | undefined {
-  return capability.triggered || capability.scopeId !== cronScopeId ? undefined : capability.threadRef;
+  const background = capability.origin !== undefined && capability.origin !== "conversation";
+  return background || capability.scopeId !== cronScopeId ? undefined : capability.threadRef;
 }
 
 function cronPatchChanges(before: Cron, patch: CronPatch): boolean {
@@ -362,6 +372,9 @@ function patchFromCronPatchRequest(
       message: CRON_PATCH_NOTHING_TO_CHANGE,
     };
   }
+  if (req.action !== undefined && req.text !== undefined) {
+    return { ok: false, code: "bad_request", message: "provide either task or text, not both" };
+  }
   if (req.unfurlLinks !== undefined && !before.destination) {
     return {
       ok: false,
@@ -369,7 +382,7 @@ function patchFromCronPatchRequest(
       message: "unfurlLinks can only be set on a cron with a delivery destination",
     };
   }
-  const sessionRef = req.session ? liveSessionRef(capability, before.ownerScopeId) : undefined;
+  const sessionRef = req.session ? conversationSessionRef(capability, before.ownerScopeId) : undefined;
   if (req.session && !sessionRef) {
     return {
       ok: false,
@@ -377,12 +390,16 @@ function patchFromCronPatchRequest(
       message: "session:true needs a live conversation in the cron's own scope to tie it to",
     };
   }
+  let runtime = req.runtime;
+  if (runtime === undefined && req.text !== undefined && before.runtime) runtime = null;
   return {
     ...(req.session !== undefined && sessionRef !== before.sessionRef ? { sessionRef: sessionRef ?? null } : {}),
-    ...(req.runtime !== undefined ? { runtime: req.runtime } : {}),
+    ...(runtime !== undefined ? { runtime } : {}),
     ...(req.title !== undefined ? { title: req.title } : {}),
-    ...(req.action !== undefined ? { action: req.action } : {}),
-    ...(req.text !== undefined ? { message: req.text } : {}),
+    ...(req.action !== undefined
+      ? { action: req.action, ...(before.message !== undefined ? { message: null } : {}) }
+      : {}),
+    ...(req.text !== undefined ? { message: req.text, ...(before.action !== undefined ? { action: null } : {}) } : {}),
     ...(req.schedule !== undefined ? { schedule: withDefaultTimezone(req.schedule, capability) } : {}),
     ...(req.enabled !== undefined ? { enabled: req.enabled } : {}),
     ...(req.archived !== undefined ? { archived: req.archived } : {}),
@@ -421,6 +438,9 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     async createCron(req, capability): Promise<CronCreateResult> {
       if (req.action === undefined && req.text === undefined) {
         return { ok: false, code: "bad_request", message: "task (what to do) or text (exact text to send) required" };
+      }
+      if (req.action !== undefined && req.text !== undefined) {
+        return { ok: false, code: "bad_request", message: "provide either task or text, not both" };
       }
       const script = req.script ? cronScriptFrom(req.script, req) : undefined;
       if (typeof script === "string") return { ok: false, code: "bad_request", message: script };
@@ -565,7 +585,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         ...(destination ? { destination } : {}),
         ...(script ? { script } : {}),
       };
-      const sessionRef = req.session === false ? undefined : liveSessionRef(capability, ownerScopeId);
+      const sessionRef = req.session === false ? undefined : conversationSessionRef(capability, ownerScopeId);
       if (sessionRef) input.sessionRef = sessionRef;
       try {
         const cron = await app.createCron(input, trialIn(input, capability));
@@ -774,14 +794,9 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       return { ok: true, cron: updated ?? cron };
     },
 
-    async createWebhook(req, capability, publicBase): Promise<WebhookCreateResult> {
-      if (!internalPerson(capability)) {
-        return {
-          ok: false,
-          code: "forbidden",
-          message: "webhook registration requires a live turn started by its owner",
-        };
-      }
+    async createWebhook(req, capability, publicBase, signOff = unsigned): Promise<WebhookCreateResult> {
+      if (!carriesPersonAuthority(capability))
+        return { ok: false, code: "forbidden", message: "registering a webhook needs its owner's own authority" };
       const resolved = resolveCapabilityDestination(capability, req.destinationKey);
       if (!resolved.ok) {
         return {
@@ -790,6 +805,11 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           message: "destinationKey is not one of the destinations available for this conversation",
         };
       }
+      const shown = { ...req, verification: { ...req.verification, secret: "***" } };
+      if (
+        !(await signOff({ summary: `Register webhook "${req.title}"`, key: `webhook:${JSON.stringify(req)}`, shown }))
+      )
+        return { ok: false, code: "approval_required", message: SIGN_OFF_PENDING };
       const input: CreateWebhookInput = {
         ...(req.title !== undefined ? { title: req.title } : {}),
         action: req.action,
@@ -832,8 +852,6 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
     },
 
     async updateWebhook(id, patch, capability) {
-      if (!internalPerson(capability))
-        return { ok: false, code: "forbidden", message: "editing a webhook requires a live turn started by its owner" };
       return editWebhook(app, id, patch, capability);
     },
 
@@ -892,10 +910,10 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
       };
     },
 
-    async shareArtifact(req, capability): Promise<ShareArtifactResult> {
-      const personHere = internalPerson(capability);
-      if (req.type === "deploy" && !personHere)
-        return { ok: false, code: "human_consent_required", message: PERSON_REQUIRED };
+    async shareArtifact(req, capability, signOff = unsigned): Promise<ShareArtifactResult> {
+      const personAuthority = carriesPersonAuthority(capability);
+      if (req.type === "deploy" && !personAuthority)
+        return { ok: false, code: "forbidden", message: "changing who can reach an app needs its owner's authority" };
       const permission: Permission = req.permission === "write" ? "write" : "read";
       const remove = req.permission === "none";
       const notify = { notify: req.notify };
@@ -952,10 +970,12 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           code: "bad_request",
           message: "a personal cron runs with your whole keychain, so it can't be shared for editing",
         };
-      if (!orgSkillCede && !(await mayShare(app, home, cron, capability))) {
+      const ceding = orgSkillCede && personAuthority && (await app.isOrgAdmin(capability.actorId));
+      if (orgSkillCede ? !ceding : !(await mayShare(app, home, cron, capability))) {
         const who = {
           cron: "only the cron's owner can share it",
           deploy: "only the owner can change who can reach this app",
+          skill: orgSkillCede ? "only an org admin can promote a skill org-wide" : undefined,
         }[req.type as string];
         return {
           ok: false,
@@ -977,6 +997,10 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
               : `you can't ${req.move ? "move" : "share"} into ${target.label} — you're not a member of that context`,
         };
       }
+      const summary = `${req.move ? "Move" : "Share"} ${req.type} ${req.id} to ${target.label}`;
+      const needsCard = (req.type === "deploy" && !remove) || orgSkillCede;
+      if (needsCard && !(await signOff({ summary, key: `share:${JSON.stringify(req)}` })))
+        return { ok: false, code: "approval_required", message: SIGN_OFF_PENDING };
 
       const tenant = ambientTenant();
       const shared = { type: req.type, id: home.id, target: { scope: toScope, label: target.label }, permission };
@@ -1004,12 +1028,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           };
         }
         if (orgSkillCede) {
-          const promoted = await app.promoteSkill(
-            home.id,
-            toScope,
-            capability.actorId,
-            capability.liveActor === true && personHere,
-          );
+          const promoted = await app.promoteSkill(home.id, toScope, capability.actorId, personAuthority);
           return {
             ok: true,
             verb: "promote",
@@ -1021,8 +1040,7 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
         }
 
         if (req.move) {
-          const deployPersonTransfer =
-            req.type === "deploy" && toKind === "personal" && capability.liveActor === true && personHere;
+          const deployPersonTransfer = req.type === "deploy" && toKind === "personal" && personAuthority;
           if (toKind === "persona" && req.type !== "skill" && req.type !== "file") {
             return {
               ok: false,
@@ -1039,10 +1057,10 @@ export function createControlService(app: App, scheduler?: Scheduler): ControlSe
           }
           if (
             req.type === "skill" &&
-            !personHere &&
+            !personAuthority &&
             (isMultiMemberSkillScope(home.ownerScopeId) || isMultiMemberSkillScope(toScope))
           ) {
-            return { ok: false, code: "forbidden", message: SHARED_SKILL_TRIGGER_REFUSAL };
+            return { ok: false, code: "forbidden", message: SHARED_SKILL_REFUSAL };
           }
           await app.moveArtifactHome(req.type, home.id, toScope, capability.actorId);
           return { ok: true, verb: "move", ...shared };

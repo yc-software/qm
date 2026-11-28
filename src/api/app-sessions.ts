@@ -86,6 +86,7 @@ export function createSessionMethods(
   | "unpinConversationItem"
   | "listFilesForViewer"
   | "uploadFileForViewer"
+  | "fileForViewer"
   | "openFileForViewer"
   | "listSessions"
   | "listSessionPage"
@@ -161,6 +162,14 @@ export function createSessionMethods(
   } = h;
   const transcripts = createTranscriptSource(deps.sessions);
   const fireOrigins: ReadonlySet<SessionOrigin> = new Set(["cron", "webhook", "monitor", "loop"]);
+  const fileArtifactForViewer = async (tenant: Tenant, id: string, principalId: string, ownScopeBotWork: boolean) => {
+    const art = await deps.files.get(id);
+    if (!art) return null;
+    const myScopes = await currentResourceScopesForViewer(principalId, ownScopeBotWork);
+    if (myScopes.includes(art.ownerScopeId)) return art;
+    const grants = await deps.acl.grantsFor(tenant, art.ownerScopeId, art.id);
+    return grants.some((g) => myScopes.includes(g.granteeScopeId)) ? art : null;
+  };
   const accessibleFireSession = async (
     sessionId: string,
     principalId: string,
@@ -614,16 +623,14 @@ export function createSessionMethods(
       return toFileItem(artifact);
     },
 
+    async fileForViewer(tenant, id, principalId, ownScopeBotWork) {
+      const art = await fileArtifactForViewer(tenant, id, principalId, ownScopeBotWork);
+      return art ? toFileItem(art) : null;
+    },
+
     async openFileForViewer(tenant, id, principalId, ownScopeBotWork, pickRange) {
-      const art = await deps.files.get(id);
+      const art = await fileArtifactForViewer(tenant, id, principalId, ownScopeBotWork);
       if (!art) return null;
-      const myScopes = await currentResourceScopesForViewer(principalId, ownScopeBotWork);
-      let allowed = myScopes.includes(art.ownerScopeId);
-      if (!allowed) {
-        const grants = await deps.acl.grantsFor(tenant, art.ownerScopeId, art.id);
-        allowed = grants.some((g) => myScopes.includes(g.granteeScopeId));
-      }
-      if (!allowed) return null;
       const range = pickRange?.(art.sizeBytes);
       const opened = await deps.files.open(id, range);
       if (!opened) return null;
@@ -1373,11 +1380,11 @@ export function createSessionMethods(
         scopeLabel: granteeScopeId,
       });
     },
-    async promoteSkill(id, targetScopeId, actorId, liveActor) {
+    async promoteSkill(id, targetScopeId, actorId, personAuthority) {
       if (parseScopeId(targetScopeId).kind !== "org")
         throw new Error("promote targets the org scope — use share or move for anything narrower");
-      if (liveActor !== true)
-        throw new AdminError(403, "promoting a skill org-wide takes a live person, never an autonomous trigger");
+      if (personAuthority !== true)
+        throw new AdminError(403, "promoting a skill org-wide takes a person's own authority");
       if (!deps.admin) throw new Error("org promotion requires an admin service");
       const status = await deps.admin.adminStatusOf(ambientTenant(), { id: actorId, type: "internal" });
       if (!status.isAdmin) throw new AdminError(403, "only an org admin can promote a skill org-wide");

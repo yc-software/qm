@@ -279,3 +279,25 @@ test("scratch bodies never share across egress modes", async () => {
   await proxied.teardown(locked);
   assert.equal(fake.bodies().filter((b) => b.phase === "running").length, 0);
 });
+
+test("a computer's chosen image is used for its bodies, including after a restart", async () => {
+  const images: unknown[] = [];
+  const s = make({
+    image: "qm-base:1",
+    imageFor: async (id: string) => (id === scope ? "toolchain:1" : undefined),
+    client: {
+      ...fake.client,
+      sandboxes: {
+        ...fake.client.sandboxes,
+        create: (spec: Parameters<typeof fake.client.sandboxes.create>[0]) => {
+          images.push(spec.image);
+          return fake.client.sandboxes.create(spec);
+        },
+      },
+    },
+  });
+  await s.provision(scope);
+  await s.restartComputer!(scope);
+  await s.provision(scopeId("personal", "other"));
+  assert.deepEqual(images, ["toolchain:1", "toolchain:1", "qm-base:1"]);
+});

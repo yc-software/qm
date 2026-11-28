@@ -39,7 +39,7 @@ async function denied(ctx: ApiCtx): Promise<boolean> {
     return true;
   }
   const [posture, budget] = await Promise.all([
-    deps.config?.getSecurityPostureDurable(capability.scopeId),
+    deps.config.getSecurityPostureDurable(capability.scopeId),
     deps.budget?.check(tenantOf(ctx), capability.actorId),
   ]);
   if (posture === "strict") {
@@ -76,8 +76,8 @@ async function listModels(ctx: ApiCtx, gateway: ModelGatewayTransportConfig | un
 async function complete(ctx: ApiCtx, modelId: string, input: Record<string, unknown>): Promise<void> {
   const { deps, pathname, res, capability } = ctx;
   const error = (message: string) => ({ error: { message } });
-  const route = await deps.modelRoutes!.route(modelId);
-  if (!deps.modelRoutes!.servable(route)) return sendJson(res, 503, error(`${routeLabel(route)} has no credential`));
+  const route = await deps.modelRoutes.route(modelId);
+  if (!deps.modelRoutes.servable(route)) return sendJson(res, 503, error(`${routeLabel(route)} has no credential`));
   if (pathname !== `${SANDBOX_MODEL_PREFIX}/v1/chat/completions` || input.stream === true)
     return sendJson(
       res,
