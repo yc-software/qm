@@ -753,7 +753,9 @@ struct VoiceView: View {
           } else {
             startVoice()
           }
-        }.buttonStyle(.borderedProminent).controlSize(.large).disabled(!model.available)
+        }.buttonStyle(.borderedProminent)
+          .foregroundStyle(model.available ? QMTheme.paper : Color.secondary).controlSize(.large)
+          .disabled(!model.available)
       }
       Text("Audio is sent to OpenAI while connected. Tasks and approvals stay in QM.").font(
         .caption
